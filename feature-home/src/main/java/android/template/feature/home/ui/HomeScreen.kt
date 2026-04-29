@@ -18,32 +18,36 @@ package android.template.feature.home.ui
 
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ScrollableTabRow
 import androidx.compose.material3.Tab
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import android.template.core.ui.MyApplicationTheme
 import android.template.feature.home.ui.album.AlbumScreen
 import android.template.feature.home.ui.recommend.RecommendScreen
+import androidx.compose.material3.SecondaryScrollableTabRow
+import kotlinx.coroutines.launch
 
 /**
  * 首页 Tab 定义（可扩展）
  */
 enum class HomeTab(val title: String) {
+    RECOMMEND("推荐"),
     ALBUM("相册"),
-    RECOMMEND("推荐")
 }
 
 /**
- * 首页主界面 - 顶部 Tab 切换 + 内容区域
+ * 首页主界面 - 顶部 Tab 切换 + 左右滑动切换
+ *
+ * 交互方式：
+ * - 点击 Tab 切换页面（带动画滚动）
+ * - 左右滑动切换页面（Tab 自动跟随选中）
  *
  * 包含两个 Tab：
  * - 相册：展示系统用户相册中的照片网格
@@ -53,24 +57,29 @@ enum class HomeTab(val title: String) {
 fun HomeScreen(
     modifier: Modifier = Modifier
 ) {
-    var selectedTabIndex by remember { mutableIntStateOf(0) }
+    val pagerState = rememberPagerState(pageCount = { HomeTab.entries.size })
+    val scope = rememberCoroutineScope()
 
     Column(modifier = modifier.fillMaxSize()) {
-        // 顶部 Tab 栏
-        ScrollableTabRow(
-            selectedTabIndex = selectedTabIndex,
+        // 顶部 Tab 栏 - 与 Pager 联动
+        SecondaryScrollableTabRow(
+            selectedTabIndex = pagerState.currentPage,
             containerColor = MaterialTheme.colorScheme.surface,
             contentColor = MaterialTheme.colorScheme.onSurface,
             edgePadding = 16.dp
         ) {
             HomeTab.entries.forEachIndexed { index, tab ->
                 Tab(
-                    selected = selectedTabIndex == index,
-                    onClick = { selectedTabIndex = index },
+                    selected = pagerState.currentPage == index,
+                    onClick = {
+                        scope.launch {
+                            pagerState.animateScrollToPage(index)
+                        }
+                    },
                     text = {
                         Text(
                             text = tab.title,
-                            style = if (selectedTabIndex == index)
+                            style = if (pagerState.currentPage == index)
                                 MaterialTheme.typography.titleMedium
                             else
                                 MaterialTheme.typography.titleMedium.copy(
@@ -82,10 +91,15 @@ fun HomeScreen(
             }
         }
 
-        // 内容区域 - 根据 Tab 切换页面
-        when (HomeTab.entries[selectedTabIndex]) {
-            HomeTab.ALBUM -> AlbumScreen()
-            HomeTab.RECOMMEND -> RecommendScreen()
+        // 内容区域 - HorizontalPager 支持左右滑动
+        HorizontalPager(
+            state = pagerState,
+            modifier = Modifier.fillMaxSize()
+        ) { page ->
+            when (HomeTab.entries[page]) {
+                HomeTab.ALBUM -> AlbumScreen()
+                HomeTab.RECOMMEND -> RecommendScreen()
+            }
         }
     }
 }

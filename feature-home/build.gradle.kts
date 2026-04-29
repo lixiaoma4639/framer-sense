@@ -65,6 +65,7 @@ dependencies {
 
     // Coil - 图片加载（相册图片 + 网络图片）
     implementation(libs.coil.compose)
+    implementation(libs.coil.network.okhttp)
 
     // Hilt Dependency Injection
     implementation(libs.hilt.android)

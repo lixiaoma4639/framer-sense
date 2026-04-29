@@ -77,7 +77,7 @@ fun rememberFakeRecommendItems(): List<RecommendItem> = remember {
         RecommendItem(13, "美食制作 自制提拉米苏详细教程", "https://picsum.photos/id/312/400/500", "甜品控", 2567),
         RecommendItem(14, "护肤分享 油皮亲妈水乳测评", "https://picsum.photos/id/250/400/440", "护肤达人", 1933),
         RecommendItem(15, "户外徒步 周末登山路线推荐", "https://picsum.photos/id/1036/400/580", "户外探险家", 2789),
-        RecommendItem(16, "学习干货 效率工具合集推荐", "https://picsum.photos/id/366/400/420", "效率提升官", 1456),
+        RecommendItem(16, "学习干货 效率工具合集推荐", "https://img1.baidu.com/it/u=123060855,2001333173&fm=253&fmt=auto&app=138&f=JPEG?w=500&h=653", "效率提升官", 1456),
     )
 }
 
