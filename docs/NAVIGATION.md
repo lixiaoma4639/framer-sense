@@ -13,6 +13,7 @@ Framer Sense 是一个采用 **多模块架构** 的 Android 应用，使用 Jet
 | Material3 | - |
 | Navigation 3 | 1.0.1 |
 | Hilt | 2.59.2 |
+| Coil3 | 3.0.0 |
 | compileSdk / targetSdk / minSdk | 36 / 36 / 23 |
 
 ## 项目结构
@@ -25,7 +26,12 @@ framer-sense/
 │       └── Navigation.kt         # 底部导航实现 ★
 ├── feature-home/                 # 首页功能模块 ★
 │   └── src/main/.../home/ui/
-│       └── HomeScreen.kt         # 首页页面
+│       ├── HomeScreen.kt         # 首页入口 + 顶部Tab栏 ★
+│       ├── album/
+│       │   ├── AlbumScreen.kt     # 相册页面（系统相册3列网格）★
+│       │   └── AlbumViewModel.kt  # 相册ViewModel（权限+查询）★
+│       └── recommend/
+│           └── RecommendScreen.kt # 推荐页面（两列瀑布流）★
 ├── feature-camera/               # 拍照功能模块 ★
 │   └── src/main/.../camera/ui/
 │       └── CameraScreen.kt       # 拍照页面
@@ -107,8 +113,11 @@ Scaffold(bottomBar = { /* NavigationBar */ }) { innerPadding ->
 
 - **包名**: `android.template.feature.home.ui`
 - **入口**: `HomeScreen()`
-- **展示内容**: 居中显示标题 "首页" + 模块标识 "当前模块：Home"
-- **依赖**: `:core-ui`, Compose UI/Material3
+- **子页面**:
+  - `AlbumScreen` - 相册（读取系统相册，3列网格展示）
+  - `RecommendScreen` - 推荐（两列瀑布流，16条假数据）
+- **顶部Tab**: `ScrollableTabRow`（可扩展为多个Tab），默认选中"相册"
+- **依赖**: `:core-ui`, Coil, Hilt, Compose UI/Material3, Lifecycle
 
 ### 2. feature-camera（拍照）
 

@@ -35,7 +35,6 @@ android {
     buildFeatures {
         aidl = false
         buildConfig = false
-        renderScript = false
         shaders = false
     }
 
