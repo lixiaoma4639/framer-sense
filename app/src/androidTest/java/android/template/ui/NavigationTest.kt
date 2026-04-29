@@ -13,15 +13,16 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 package android.template.ui
 
 import androidx.compose.ui.test.assertIsDisplayed
-import androidx.compose.ui.test.assertIsEnabled
+import androidx.compose.ui.test.assertIsNotSelected
+import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
-import androidx.compose.ui.test.onAllNodesWithText
+import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
-import androidx.compose.ui.test.performTextInput
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import dagger.hilt.android.testing.HiltAndroidRule
 import dagger.hilt.android.testing.HiltAndroidTest
@@ -30,6 +31,15 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 
+/**
+ * 底部导航集成测试
+ *
+ * 验证：
+ * - 默认显示首页模块
+ * - 底部导航栏有3个Tab：首页/拍照/我的
+ * - 点击导航按钮可以切换模块
+ * - 切换后显示对应模块内容
+ */
 @RunWith(AndroidJUnit4::class)
 @HiltAndroidTest
 class NavigationTest {
@@ -45,53 +55,100 @@ class NavigationTest {
         hiltRule.inject()
     }
 
+    // ========== 首页 Tab 测试 ==========
+
     @Test
-    fun mainActivity_showsMainScreen() {
-        // 验证主界面显示 Save 按钮
-        composeTestRule.onNodeWithText("Save").assertExists().assertIsDisplayed()
+    fun defaultScreen_showsHome() {
+        // 默认选中首页 Tab，应显示首页内容
+        composeTestRule.onNodeWithText("首页").assertIsDisplayed()
+        composeTestRule.onNodeWithText("当前模块：Home").assertIsDisplayed()
     }
 
     @Test
-    fun mainActivity_saveButtonIsEnabled() {
-        // 验证 Save 按钮可点击
-        composeTestRule.onNodeWithText("Save").assertIsEnabled()
+    fun homeTab_isSelectedByDefault() {
+        // 默认情况下首页 Tab 应处于选中状态
+        composeTestRule.onNodeWithContentDescription("首页")
+            .assertIsSelected()
+    }
+
+    // ========== 拍照 Tab 测试 ==========
+
+    @Test
+    fun clickCameraTab_showsCameraScreen() {
+        // 点击拍照 Tab
+        composeTestRule.onNodeWithContentDescription("拍照").performClick()
+
+        // 应显示拍照模块内容
+        composeTestRule.onNodeWithText("拍照").assertIsDisplayed()
+        composeTestRule.onNodeWithText("当前模块：Camera").assertIsDisplayed()
     }
 
     @Test
-    fun mainActivity_showsDefaultTextFieldValue() {
-        // 验证 TextField 默认值为 "Compose"
-        composeTestRule.onNodeWithText("Compose").assertExists()
+    fun clickCameraTab_cameraTabBecomesSelected() {
+        // 点击拍照 Tab 后，该 Tab 应被选中，首页不再被选中
+        composeTestRule.onNodeWithContentDescription("拍照").performClick()
+
+        composeTestRule.onNodeWithContentDescription("拍照")
+            .assertIsSelected()
+        composeTestRule.onNodeWithContentDescription("首页")
+            .assertIsNotSelected()
     }
 
     @Test
-    fun mainActivity_showsFakeDataItems() {
-        // FakeDataModule 提供 ["One", "Two", "Three"]，验证初始数据加载
-        composeTestRule.onNodeWithText("Saved item: One", substring = true).assertExists()
-        composeTestRule.onNodeWithText("Saved item: Two", substring = true).assertExists()
-        composeTestRule.onNodeWithText("Saved item: Three", substring = true).assertExists()
+    fun clickCameraTab_homeContentNoLongerVisible() {
+        // 点击拍照后，首页内容不应再显示
+        composeTestRule.onNodeWithContentDescription("拍照").performClick()
+
+        composeTestRule.onNodeWithText("当前模块：Home").assertDoesNotExist()
+    }
+
+    // ========== 我的 Tab 测试 ==========
+
+    @Test
+    fun clickMyModelTab_showsMyModelScreen() {
+        // 点击我的 Tab
+        composeTestRule.onNodeWithContentDescription("我的").performClick()
+
+        // 应显示我的模块内容
+        composeTestRule.onNodeWithText("我的").assertIsDisplayed()
+        composeTestRule.onNodeWithText("当前模块：MyModel").assertIsDisplayed()
     }
 
     @Test
-    fun mainActivity_saveNewItem_displaysInList() {
-        // 输入新内容并点击 Save
-        composeTestRule.onNodeWithText("Compose").performTextInput("NewTest")
-        composeTestRule.onNodeWithText("Save").performClick()
+    fun clickMyModelTab_myModelTabBecomesSelected() {
+        composeTestRule.onNodeWithContentDescription("我的").performClick()
 
-        // 验证新保存的项出现在列表中
-        composeTestRule.onNodeWithText("Saved item: NewTest", substring = true)
-            .assertExists()
+        composeTestRule.onNodeWithContentDescription("我的")
+            .assertIsSelected()
+        composeTestRule.onNodeWithContentDescription("首页")
+            .assertIsNotSelected()
+    }
+
+    // ========== Tab 切换流程测试 ==========
+
+    @Test
+    fun switchBetweenAllTabs_displaysCorrectContentEachTime() {
+        // 默认 -> 首页
+        composeTestRule.onNodeWithText("当前模块：Home").assertIsDisplayed()
+
+        // 首页 -> 拍照
+        composeTestRule.onNodeWithContentDescription("拍照").performClick()
+        composeTestRule.onNodeWithText("当前模块：Camera").assertIsDisplayed()
+
+        // 拍照 -> 我的
+        composeTestRule.onNodeWithContentDescription("我的").performClick()
+        composeTestRule.onNodeWithText("当前模块：MyModel").assertIsDisplayed()
+
+        // 我的 -> 回到首页
+        composeTestRule.onNodeWithContentDescription("首页").performClick()
+        composeTestRule.onNodeWithText("当前模块：Home").assertIsDisplayed()
     }
 
     @Test
-    fun mainActivity_clickSave_multipleTimesAddsMultipleItems() {
-        // 连续点击 Save 两次，验证多条记录显示
-        composeTestRule.onNodeWithText("Save").performClick()
-        composeTestRule.onNodeWithText("Save").performClick()
-
-        // 列表中应包含默认 "Compose" 保存的项（至少出现两次）
-        val savedItems = composeTestRule.onAllNodesWithText("Saved item:", substring = true)
-        assert(savedItems.fetchSemanticsNodes().size >= 5) {
-            "Expected at least 5 saved items (3 fake + 2 new), but found ${savedItems.fetchSemanticsNodes().size}"
-        }
+    fun allThreeTabs_areAlwaysVisibleInNavigationBar() {
+        // 底部导航栏始终显示3个Tab
+        composeTestRule.onNodeWithText("首页").assertIsDisplayed()
+        composeTestRule.onNodeWithText("拍照").assertIsDisplayed()
+        composeTestRule.onNodeWithText("我的").assertIsDisplayed()
     }
 }
