@@ -52,16 +52,28 @@ kotlin {
 
 dependencies {
     val composeBom = platform(libs.androidx.compose.bom)
-    implementation(composeBom)
+    api(composeBom)
     androidTestImplementation(composeBom)
 
     // Core Android dependencies
-    implementation(libs.androidx.core.ktx)
+    api(libs.androidx.core.ktx)
 
     // Compose
-    implementation(libs.androidx.compose.ui)
-    implementation(libs.androidx.compose.ui.tooling.preview)
-    implementation(libs.androidx.compose.material3)
+    api(libs.androidx.compose.ui)
+    api(libs.androidx.compose.ui.tooling.preview)
+    api(libs.androidx.compose.material3)
+    api(libs.androidx.compose.material.icons.extended)
+
+    // Coil - 图片加载
+    api(libs.coil.compose)
+    api(libs.coil.network.okhttp)
+
+    // Arch Components
+    api(libs.androidx.activity.compose)
+    api(libs.androidx.lifecycle.runtime.compose)
+    api(libs.androidx.lifecycle.viewmodel.compose)
+    api(libs.androidx.hilt.lifecycle.viewmodel.compose)
+
     // Tooling
     debugImplementation(libs.androidx.compose.ui.tooling)
 }

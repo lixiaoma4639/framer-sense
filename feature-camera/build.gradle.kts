@@ -52,16 +52,6 @@ kotlin {
 
 dependencies {
     implementation(project(":core-ui"))
-    val composeBom = platform(libs.androidx.compose.bom)
-    implementation(composeBom)
-
-    // Compose
-    implementation(libs.androidx.compose.ui)
-    implementation(libs.androidx.compose.ui.tooling.preview)
-    implementation(libs.androidx.compose.material3)
-
-    // Tooling
-    debugImplementation(libs.androidx.compose.ui.tooling)
 
     // Tests
     testImplementation(libs.junit)

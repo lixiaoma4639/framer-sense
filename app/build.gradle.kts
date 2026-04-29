@@ -85,11 +85,8 @@ dependencies {
     implementation(project(":feature-camera"))
     implementation(project(":feature-mymodel"))
 
-
-    // Core Android dependencies
-    implementation(libs.androidx.core.ktx)
+    // Core Android dependencies (non-UI)
     implementation(libs.androidx.lifecycle.runtime.ktx)
-    implementation(libs.androidx.activity.compose)
 
     // Hilt Dependency Injection
     implementation(libs.hilt.android)
@@ -97,27 +94,11 @@ dependencies {
     kspAndroidTest(libs.hilt.compiler)
     kspTest(libs.hilt.compiler)
 
-    // Arch Components
-    implementation(libs.androidx.lifecycle.runtime.compose)
-    implementation(libs.androidx.lifecycle.viewmodel.compose)
-
-    // Compose
-    val composeBom = platform(libs.androidx.compose.bom)
-    implementation(composeBom)
-    implementation(libs.androidx.compose.ui)
-    implementation(libs.androidx.compose.ui.tooling.preview)
-    implementation(libs.androidx.compose.material3)
-    implementation(libs.androidx.compose.material.icons.extended)
-
-    // Tooling
-    debugImplementation(libs.androidx.compose.ui.tooling)
-
     // Navigation
     implementation(libs.androidx.navigation3.ui)
     implementation(libs.androidx.lifecycle.viewmodel.navigation3)
 
     // Instrumented tests
-    androidTestImplementation(composeBom)
     androidTestImplementation(project(":core-data"))
     androidTestImplementation(project(":core-testing"))
     androidTestImplementation(libs.androidx.test.runner)

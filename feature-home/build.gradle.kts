@@ -54,31 +54,10 @@ kotlin {
 
 dependencies {
     implementation(project(":core-ui"))
-    val composeBom = platform(libs.androidx.compose.bom)
-    implementation(composeBom)
-
-    // Compose
-    implementation(libs.androidx.compose.ui)
-    implementation(libs.androidx.compose.ui.tooling.preview)
-    implementation(libs.androidx.compose.material3)
-    implementation(libs.androidx.compose.material.icons.extended)
-
-    // Coil - 图片加载（相册图片 + 网络图片）
-    implementation(libs.coil.compose)
-    implementation(libs.coil.network.okhttp)
 
     // Hilt Dependency Injection
     implementation(libs.hilt.android)
     ksp(libs.hilt.compiler)
-
-    // Arch Components
-    implementation(libs.androidx.lifecycle.runtime.compose)
-    implementation(libs.androidx.lifecycle.viewmodel.compose)
-    implementation(libs.androidx.activity.compose)
-    implementation(libs.androidx.hilt.lifecycle.viewmodel.compose)
-
-    // Tooling
-    debugImplementation(libs.androidx.compose.ui.tooling)
 
     // Tests
     testImplementation(libs.junit)

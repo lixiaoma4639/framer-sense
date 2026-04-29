@@ -55,32 +55,16 @@ kotlin {
 dependencies {
     implementation(project(":core-data"))
     implementation(project(":core-ui"))
-    val composeBom = platform(libs.androidx.compose.bom)
-    implementation(composeBom)
-    androidTestImplementation(composeBom)
     implementation(project(":feature-mymodel-navigation"))
 
     androidTestImplementation(project(":core-testing"))
 
-    // Core Android dependencies
-    implementation(libs.androidx.activity.compose)
-
-    // Arch Components
-    implementation(libs.androidx.lifecycle.runtime.compose)
+    // Arch Components (non-UI)
     implementation(libs.androidx.lifecycle.runtime.ktx)
-    implementation(libs.androidx.lifecycle.viewmodel.compose)
-    implementation(libs.androidx.hilt.lifecycle.viewmodel.compose)
-
-    // Compose
-    implementation(libs.androidx.compose.ui)
-    implementation(libs.androidx.compose.ui.tooling.preview)
-    implementation(libs.androidx.compose.material3)
 
     // Navigation
     implementation(libs.androidx.navigation3.runtime)
 
-    // Tooling
-    debugImplementation(libs.androidx.compose.ui.tooling)
     // Instrumented tests
     androidTestImplementation(libs.androidx.compose.ui.test.junit4)
     debugImplementation(libs.androidx.compose.ui.test.manifest)
