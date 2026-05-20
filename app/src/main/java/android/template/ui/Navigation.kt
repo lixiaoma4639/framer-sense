@@ -45,6 +45,7 @@ import android.template.feature.mymodel.ui.SettingsScreen
 import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Person
+import androidx.compose.ui.tooling.preview.Preview
 
 /**
  * 底部导航栏 Tab 定义
@@ -71,6 +72,7 @@ enum class MyModelRoute {
  *
  * 仅支持点击导航按钮切换模块，不支持左右滑动切换。
  */
+@Preview(showBackground = true)
 @Composable
 fun MainNavigation() {
     var selectedTab by remember { mutableIntStateOf(0) }
