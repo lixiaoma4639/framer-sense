@@ -18,6 +18,7 @@ package android.template.feature.mymodel.ui
 
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import org.junit.Rule
 import org.junit.Test
@@ -28,18 +29,27 @@ class MyModelMainScreenTest {
     val composeTestRule = createComposeRule()
 
     @Test
-    fun myModelMainScreen_displaysTitle() {
+    fun myModelMainScreen_displaysProfile() {
         composeTestRule.setContent {
             MyModelMainScreen()
         }
-        composeTestRule.onNodeWithText("我的").assertIsDisplayed()
+
+        composeTestRule.onNodeWithText("用户名称").assertIsDisplayed()
+        composeTestRule.onNodeWithText("这是一段个人简介，记录生活中的美好瞬间").assertIsDisplayed()
     }
 
     @Test
-    fun myModelMainScreen_displaysModuleName() {
+    fun myModelMainScreen_displaysActionsAndTabs() {
         composeTestRule.setContent {
             MyModelMainScreen()
         }
-        composeTestRule.onNodeWithText("当前模块：MyModel").assertIsDisplayed()
+
+        composeTestRule.onNodeWithContentDescription("扫一扫").assertIsDisplayed()
+        composeTestRule.onNodeWithContentDescription("消息").assertIsDisplayed()
+        composeTestRule.onNodeWithContentDescription("设置").assertIsDisplayed()
+        composeTestRule.onNodeWithText("作品").assertIsDisplayed()
+        composeTestRule.onNodeWithText("点赞").assertIsDisplayed()
+        composeTestRule.onNodeWithText("收藏").assertIsDisplayed()
+        composeTestRule.onNodeWithText("评论").assertIsDisplayed()
     }
 }

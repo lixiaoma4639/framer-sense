@@ -95,7 +95,7 @@ MyApplication
 | 拍照 | `CameraScreen()` |
 | 我的 | `MyModelMainScreen()` |
 
-底部导航只在“我的”模块主页面显示。当用户进入“我的 -> 设置”页面时，底部导航隐藏；物理返回键会从设置页返回我的主页。
+底部导航只在“我的”模块主页面显示。当用户进入“我的 -> 设置”页面时，底部导航隐藏；物理返回键会从设置页返回我的主页。主导航使用可保存状态记录当前底部 Tab 和“我的”模块内部路由，重复点击已选中的底部 Tab 会被忽略，以减少无意义重组并保留页面状态。
 
 ### 首页模块
 
@@ -109,6 +109,7 @@ MyApplication
 - 点击顶部 Tab 切换页面。
 - 左右滑动 `HorizontalPager` 切换页面。
 - Tab 选中状态跟随 Pager 当前页变化。
+- 点击当前已选中的 Tab 不会重复触发滚动动画。
 
 ### 推荐页面
 
@@ -118,16 +119,18 @@ MyApplication
 - 布局：`LazyVerticalGrid` 固定 2 列。
 - 图片：Coil `AsyncImage` 加载网络图片。
 - 视觉效果：不同 `aspectRatio` 模拟瀑布流高低错落。
+- 图片区域有固定比例和占位背景，降低网络图片加载导致的布局跳动。
 - 点赞数：通过 `formatLikes` 格式化为 `k` 或 `w`。
 
 ### 相册页面
 
 `AlbumScreen` 和 `AlbumViewModel` 负责读取系统相册图片：
 
-- Android 13 及以上请求 `READ_MEDIA_IMAGES`。
-- Android 12 及以下请求 `READ_EXTERNAL_STORAGE`。
-- 通过 `MediaStore.Images.Media.EXTERNAL_CONTENT_URI` 查询图片。
+- Android 13 及以上使用 `READ_MEDIA_IMAGES`，Android 12 及以下使用 `READ_EXTERNAL_STORAGE`。
+- 进入页面时先检查权限，已授权则直接加载，未授权才触发系统权限请求。
+- 通过 `MediaStore.Images.Media.EXTERNAL_CONTENT_URI` 查询图片，查询运行在 `Dispatchers.IO`，避免阻塞主线程。
 - 成功后以 3 列 `LazyVerticalGrid` 展示系统图片 URI。
+- 网格图片项使用稳定 key/contentType 和固定占位背景。
 - UI 状态包括 `Loading`、`Success`、`PermissionDenied`、`Error`。
 
 注意：相册读取依赖运行时权限，真机或模拟器环境会影响展示结果。
@@ -149,9 +152,10 @@ MyApplication
 - 个人信息区：头像、用户名、简介。
 - 内容 Tab：作品、点赞、收藏、评论。
 - Tab 使用 `PrimaryTabRow` 与 `HorizontalPager` 联动。
+- 点击当前已选中的内容 Tab 不会重复触发滚动动画。
 - 设置按钮通过 `MainNavigation` 切换到 `SettingsScreen`。
 
-`SettingsScreen` 是“我的”模块内部设置页，不通过底部导航直接暴露。
+`SettingsScreen` 是“我的”模块内部设置页，不通过底部导航直接暴露；设置项保持 56dp 以上触控高度。
 
 ### MyModel 模板数据功能
 
@@ -232,9 +236,9 @@ feature-mymodel
 当前仓库包含多类测试：
 
 - `core-data`：Repository 单元测试。
-- `feature-home`：首页 Compose 单元测试。
 - `feature-camera`：拍照页 Compose 单元测试。
-- `feature-mymodel`：我的主页、MyModel ViewModel、MyModel UI 相关测试。
+- `feature-home`：首页页面级 Compose 测试位于 `androidTest`，本地单元测试命令不依赖 Compose UI Test 运行环境。
+- `feature-mymodel`：我的主页页面级 Compose 测试位于 `androidTest`，本地单元测试覆盖 MyModel ViewModel 等非页面级逻辑。
 - `app`：主导航相关 Android Instrumented Test。
 - 多个模块仍保留模板生成的 `ExampleUnitTest` 或 `ExampleInstrumentedTest`。
 

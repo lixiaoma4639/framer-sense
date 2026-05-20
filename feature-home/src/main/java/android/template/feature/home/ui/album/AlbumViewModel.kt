@@ -21,15 +21,19 @@ import android.content.Context
 import android.net.Uri
 import android.os.Build
 import android.provider.MediaStore
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import javax.inject.Inject
+import android.content.pm.PackageManager
 
 /**
  * 相册页面 ViewModel
@@ -38,7 +42,7 @@ import javax.inject.Inject
  */
 @HiltViewModel
 class AlbumViewModel @Inject constructor(
-    @ApplicationContext private val context: Context
+    @param:ApplicationContext private val context: Context
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow<AlbumUiState>(AlbumUiState.Loading)
@@ -48,12 +52,16 @@ class AlbumViewModel @Inject constructor(
      * 检查所需权限，通过回调触发权限请求
      */
     fun checkAndRequestPermission(onRequestPermissions: (List<String>) -> Unit) {
-        val permissions = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            listOf(Manifest.permission.READ_MEDIA_IMAGES)
+        val permissions = requiredPermissions()
+        if (hasAlbumPermission(permissions)) {
+            loadAlbumPhotos()
         } else {
-            listOf(Manifest.permission.READ_EXTERNAL_STORAGE)
+            onRequestPermissions(permissions)
         }
-        onRequestPermissions(permissions)
+    }
+
+    fun onAlbumPermissionDenied() {
+        _uiState.value = AlbumUiState.PermissionDenied
     }
 
     /**
@@ -63,7 +71,9 @@ class AlbumViewModel @Inject constructor(
         viewModelScope.launch {
             _uiState.value = AlbumUiState.Loading
             try {
-                val photos = queryAlbumPhotos()
+                val photos = withContext(Dispatchers.IO) {
+                    queryAlbumPhotos()
+                }
                 _uiState.value = AlbumUiState.Success(photos)
             } catch (e: SecurityException) {
                 _uiState.value = AlbumUiState.PermissionDenied
@@ -100,6 +110,18 @@ class AlbumViewModel @Inject constructor(
         }
         return uris
     }
+
+    private fun requiredPermissions(): List<String> =
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            listOf(Manifest.permission.READ_MEDIA_IMAGES)
+        } else {
+            listOf(Manifest.permission.READ_EXTERNAL_STORAGE)
+        }
+
+    private fun hasAlbumPermission(permissions: List<String>): Boolean =
+        permissions.all { permission ->
+            ContextCompat.checkSelfPermission(context, permission) == PackageManager.PERMISSION_GRANTED
+        }
 }
 
 sealed interface AlbumUiState {

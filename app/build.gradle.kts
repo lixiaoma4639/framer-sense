@@ -80,6 +80,8 @@ kotlin {
 }
 
 dependencies {
+    val composeBom = platform(libs.androidx.compose.bom)
+
     implementation(project(":core-ui"))
     implementation(project(":feature-home"))
     implementation(project(":feature-camera"))
@@ -101,6 +103,7 @@ dependencies {
     // Instrumented tests
     androidTestImplementation(project(":core-data"))
     androidTestImplementation(project(":core-testing"))
+    androidTestImplementation(composeBom)
     androidTestImplementation(libs.androidx.test.runner)
     androidTestImplementation(libs.hilt.android.testing)
     androidTestImplementation(libs.androidx.test.ext.junit)

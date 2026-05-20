@@ -18,6 +18,7 @@ package android.template.feature.home.ui.recommend
 
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -34,7 +35,6 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
-import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
@@ -100,7 +100,11 @@ fun RecommendScreen(
         verticalArrangement = Arrangement.spacedBy(8.dp),
         modifier = modifier.fillMaxSize()
     ) {
-        items(items, key = { it.id }) { item ->
+        items(
+            items = items,
+            key = { it.id },
+            contentType = { "recommend_card" }
+        ) { item ->
             RecommendCard(item = item)
         }
     }
@@ -118,15 +122,20 @@ private fun RecommendCard(
             .background(MaterialTheme.colorScheme.surface)
     ) {
         // 图片区域 - 使用不同 aspectRatio 模拟瀑布流高低错落
-        AsyncImage(
-            model = item.imageUrl,
-            contentDescription = item.title,
-            contentScale = ContentScale.Crop,
+        Box(
             modifier = Modifier
                 .fillMaxWidth()
                 .aspectRatio(if (item.id % 3 == 0) 0.85f else if (item.id % 2 == 0) 1.05f else 0.95f)
                 .clip(RoundedCornerShape(topStart = 12.dp, topEnd = 12.dp))
-        )
+                .background(MaterialTheme.colorScheme.surfaceVariant)
+        ) {
+            AsyncImage(
+                model = item.imageUrl,
+                contentDescription = item.title,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxSize()
+            )
+        }
 
         // 文字信息区域
         Column(modifier = Modifier.padding(10.dp)) {

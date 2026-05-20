@@ -24,13 +24,17 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Tab
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import android.template.core.ui.MyApplicationTheme
 import android.template.feature.home.ui.album.AlbumScreen
 import android.template.feature.home.ui.recommend.RecommendScreen
+import androidx.compose.runtime.collectAsState
 import androidx.compose.material3.SecondaryScrollableTabRow
 import kotlinx.coroutines.launch
 
@@ -59,27 +63,33 @@ fun HomeScreen(
 ) {
     val pagerState = rememberPagerState(pageCount = { HomeTab.entries.size })
     val scope = rememberCoroutineScope()
+    val selectedPage by remember(pagerState) {
+        snapshotFlow { pagerState.currentPage }
+    }.collectAsState(initial = pagerState.currentPage)
 
     Column(modifier = modifier.fillMaxSize()) {
         // 顶部 Tab 栏 - 与 Pager 联动
         SecondaryScrollableTabRow(
-            selectedTabIndex = pagerState.currentPage,
+            selectedTabIndex = selectedPage,
             containerColor = MaterialTheme.colorScheme.surface,
             contentColor = MaterialTheme.colorScheme.onSurface,
             edgePadding = 16.dp
         ) {
             HomeTab.entries.forEachIndexed { index, tab ->
+                val selected = selectedPage == index
                 Tab(
-                    selected = pagerState.currentPage == index,
+                    selected = selected,
                     onClick = {
-                        scope.launch {
-                            pagerState.animateScrollToPage(index)
+                        if (selectedPage != index) {
+                            scope.launch {
+                                pagerState.animateScrollToPage(index)
+                            }
                         }
                     },
                     text = {
                         Text(
                             text = tab.title,
-                            style = if (pagerState.currentPage == index)
+                            style = if (selected)
                                 MaterialTheme.typography.titleMedium
                             else
                                 MaterialTheme.typography.titleMedium.copy(

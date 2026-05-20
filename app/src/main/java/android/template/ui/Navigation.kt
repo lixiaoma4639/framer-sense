@@ -33,11 +33,13 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.activity.compose.BackHandler
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.testTag
 import android.template.feature.camera.ui.CameraScreen
 import android.template.feature.home.ui.HomeScreen
 import android.template.feature.mymodel.ui.MyModelMainScreen
@@ -75,8 +77,9 @@ enum class MyModelRoute {
 @Preview(showBackground = true)
 @Composable
 fun MainNavigation() {
-    var selectedTab by remember { mutableIntStateOf(0) }
-    var myModelRoute by remember { mutableStateOf(MyModelRoute.MAIN) }
+    var selectedTab by rememberSaveable { mutableIntStateOf(BottomNavTab.HOME.ordinal) }
+    var myModelRoute by rememberSaveable { mutableStateOf(MyModelRoute.MAIN) }
+    val tabStateHolder = rememberSaveableStateHolder()
 
     Scaffold(
         bottomBar = {
@@ -85,10 +88,15 @@ fun MainNavigation() {
                 NavigationBar {
                     BottomNavTab.entries.forEachIndexed { index, tab ->
                         NavigationBarItem(
+                            modifier = Modifier.testTag("bottom_tab_${tab.name}"),
                             icon = { Icon(tab.icon, contentDescription = tab.label) },
                             label = { Text(tab.label) },
                             selected = selectedTab == index,
-                            onClick = { selectedTab = index }
+                            onClick = {
+                                if (selectedTab != index) {
+                                    selectedTab = index
+                                }
+                            }
                         )
                     }
                 }
@@ -100,37 +108,39 @@ fun MainNavigation() {
                 .fillMaxSize()
                 .padding(innerPadding)
         ) {
-            when (selectedTab) {
-                BottomNavTab.HOME.ordinal -> HomeScreen()
-                BottomNavTab.CAMERA.ordinal -> CameraScreen()
-                BottomNavTab.MY_MODEL.ordinal -> {
-                    // 设置页面时拦截物理返回键，返回我的主页而非退出App
-                    BackHandler(enabled = myModelRoute == MyModelRoute.SETTINGS) {
-                        myModelRoute = MyModelRoute.MAIN
-                    }
-                    // 我的模块：使用 AnimatedContent 切换主页面和设置页面
-                    AnimatedContent(
-                        targetState = myModelRoute,
-                        transitionSpec = {
-                            if (targetState == MyModelRoute.SETTINGS) {
-                                // 进入设置页：从右侧滑入
-                                slideInHorizontally { fullWidth -> fullWidth } togetherWith
-                                    slideOutHorizontally { fullWidth -> -fullWidth }
-                            } else {
-                                // 返回主页：从左侧滑入
-                                slideInHorizontally { fullWidth -> -fullWidth } togetherWith
-                                    slideOutHorizontally { fullWidth -> fullWidth }
+            tabStateHolder.SaveableStateProvider(selectedTab) {
+                when (selectedTab) {
+                    BottomNavTab.HOME.ordinal -> HomeScreen()
+                    BottomNavTab.CAMERA.ordinal -> CameraScreen()
+                    BottomNavTab.MY_MODEL.ordinal -> {
+                        // 设置页面时拦截物理返回键，返回我的主页而非退出App
+                        BackHandler(enabled = myModelRoute == MyModelRoute.SETTINGS) {
+                            myModelRoute = MyModelRoute.MAIN
+                        }
+                        // 我的模块：使用 AnimatedContent 切换主页面和设置页面
+                        AnimatedContent(
+                            targetState = myModelRoute,
+                            transitionSpec = {
+                                if (targetState == MyModelRoute.SETTINGS) {
+                                    // 进入设置页：从右侧滑入
+                                    slideInHorizontally { fullWidth -> fullWidth } togetherWith
+                                        slideOutHorizontally { fullWidth -> -fullWidth }
+                                } else {
+                                    // 返回主页：从左侧滑入
+                                    slideInHorizontally { fullWidth -> -fullWidth } togetherWith
+                                        slideOutHorizontally { fullWidth -> fullWidth }
+                                }
+                            },
+                            label = "mymodel_nav"
+                        ) { route ->
+                            when (route) {
+                                MyModelRoute.MAIN -> MyModelMainScreen(
+                                    onSettingsClick = { myModelRoute = MyModelRoute.SETTINGS }
+                                )
+                                MyModelRoute.SETTINGS -> SettingsScreen(
+                                    onBackClick = { myModelRoute = MyModelRoute.MAIN }
+                                )
                             }
-                        },
-                        label = "mymodel_nav"
-                    ) { route ->
-                        when (route) {
-                            MyModelRoute.MAIN -> MyModelMainScreen(
-                                onSettingsClick = { myModelRoute = MyModelRoute.SETTINGS }
-                            )
-                            MyModelRoute.SETTINGS -> SettingsScreen(
-                                onBackClick = { myModelRoute = MyModelRoute.MAIN }
-                            )
                         }
                     }
                 }

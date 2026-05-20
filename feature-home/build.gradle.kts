@@ -53,7 +53,10 @@ kotlin {
 }
 
 dependencies {
+    val composeBom = platform(libs.androidx.compose.bom)
+
     implementation(project(":core-ui"))
+    implementation(libs.androidx.core.ktx)
 
     // Hilt Dependency Injection
     implementation(libs.hilt.android)
@@ -61,6 +64,9 @@ dependencies {
 
     // Tests
     testImplementation(libs.junit)
+    androidTestImplementation(composeBom)
     androidTestImplementation(libs.androidx.test.ext.junit)
     androidTestImplementation(libs.androidx.test.runner)
+    androidTestImplementation(libs.androidx.compose.ui.test.junit4)
+    debugImplementation(libs.androidx.compose.ui.test.manifest)
 }

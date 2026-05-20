@@ -16,13 +16,10 @@
 
 package android.template.feature.home.ui.album
 
-import android.net.Uri
-import android.provider.MediaStore
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -33,6 +30,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -78,6 +76,8 @@ fun AlbumScreen(
         hasPermission = permissions.values.all { it }
         if (hasPermission) {
             viewModel.loadAlbumPhotos()
+        } else {
+            viewModel.onAlbumPermissionDenied()
         }
     }
 
@@ -108,19 +108,28 @@ fun AlbumScreen(
                         columns = GridCells.Fixed(3),
                         contentPadding = PaddingValues(4.dp),
                         horizontalArrangement = Arrangement.spacedBy(4.dp),
-                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                        verticalArrangement = Arrangement.spacedBy(4.dp),
+                        modifier = Modifier.fillMaxSize()
                     ) {
-                        items(state.photos, key = { it }) { uri ->
-                            AsyncImage(
-                                model = uri,
-                                contentDescription = "相册照片",
-                                contentScale = ContentScale.Crop,
+                        items(
+                            items = state.photos,
+                            key = { it },
+                            contentType = { "album_photo" }
+                        ) { uri ->
+                            Box(
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .aspectRatio(1f)
                                     .clip(MaterialTheme.shapes.small)
                                     .background(MaterialTheme.colorScheme.surfaceVariant)
-                            )
+                            ) {
+                                AsyncImage(
+                                    model = uri,
+                                    contentDescription = "相册照片",
+                                    contentScale = ContentScale.Crop,
+                                    modifier = Modifier.fillMaxSize()
+                                )
+                            }
                         }
                     }
                 }
@@ -139,14 +148,15 @@ fun AlbumScreen(
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
-                    Text(
-                        text = "重新授权",
-                        style = MaterialTheme.typography.labelLarge,
-                        color = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier
-                            .padding(horizontal = 24.dp, vertical = 8.dp)
-                            .clickable { viewModel.checkAndRequestPermission { perms -> permissionLauncher.launch(perms.toTypedArray()) } }
-                    )
+                    Button(
+                        onClick = {
+                            viewModel.checkAndRequestPermission { perms ->
+                                permissionLauncher.launch(perms.toTypedArray())
+                            }
+                        }
+                    ) {
+                        Text(text = "重新授权")
+                    }
                 }
             }
             is AlbumUiState.Error -> {

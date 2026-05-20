@@ -53,6 +53,8 @@ kotlin {
 }
 
 dependencies {
+    val composeBom = platform(libs.androidx.compose.bom)
+
     implementation(project(":core-data"))
     implementation(project(":core-ui"))
     implementation(project(":feature-mymodel-navigation"))
@@ -66,6 +68,7 @@ dependencies {
     implementation(libs.androidx.navigation3.runtime)
 
     // Instrumented tests
+    androidTestImplementation(composeBom)
     androidTestImplementation(libs.androidx.compose.ui.test.junit4)
     debugImplementation(libs.androidx.compose.ui.test.manifest)
 

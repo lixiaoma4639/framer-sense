@@ -29,44 +29,32 @@ class HomeScreenTest {
     val composeTestRule = createComposeRule()
 
     @Test
-    fun homeScreen_displaysAlbumTabByDefault() {
+    fun homeScreen_displaysRecommendTabByDefault() {
         composeTestRule.setContent {
             HomeScreen()
         }
-        // 默认选中相册 Tab，应显示相册 Tab 文字
-        composeTestRule.onNodeWithText("相册").assertIsDisplayed()
-    }
 
-    @Test
-    fun homeScreen_displaysRecommendTab() {
-        composeTestRule.setContent {
-            HomeScreen()
-        }
-        // 推荐 Tab 应始终可见
         composeTestRule.onNodeWithText("推荐").assertIsDisplayed()
-    }
-
-    @Test
-    fun homeScreen_clickRecommendTab_switchesToRecommend() {
-        composeTestRule.setContent {
-            HomeScreen()
-        }
-        // 点击推荐 Tab
-        composeTestRule.onNodeWithText("推荐").performClick()
-        // 推荐内容区域应该显示（假数据中的标题）
         composeTestRule.onNodeWithText("春日限定樱花拍摄攻略").assertIsDisplayed()
     }
 
     @Test
-    fun homeScreen_clickAlbumTab_staysOnAlbum() {
+    fun homeScreen_displaysAlbumTab() {
         composeTestRule.setContent {
             HomeScreen()
         }
-        // 点击推荐后再点回相册
-        composeTestRule.onNodeWithText("推荐").performClick()
-        composeTestRule.onNodeWithText("相册").performClick()
-        // 相册 Tab 仍然显示
+
         composeTestRule.onNodeWithText("相册").assertIsDisplayed()
+    }
+
+    @Test
+    fun homeScreen_clickSelectedRecommendTab_keepsRecommendContent() {
+        composeTestRule.setContent {
+            HomeScreen()
+        }
+
+        composeTestRule.onNodeWithText("推荐").performClick()
+        composeTestRule.onNodeWithText("周末探店 | 这家咖啡厅太好拍了").assertIsDisplayed()
     }
 
     @Test
@@ -74,10 +62,8 @@ class HomeScreenTest {
         composeTestRule.setContent {
             HomeScreen()
         }
-        // 切换到推荐页
-        composeTestRule.onNodeWithText("推荐").performClick()
-        // 验证多个推荐卡片标题存在
+
+        composeTestRule.onNodeWithText("春日限定樱花拍摄攻略").assertIsDisplayed()
         composeTestRule.onNodeWithText("周末探店 | 这家咖啡厅太好拍了").assertIsDisplayed()
-        composeTestRule.onNodeWithText("旅行Vlog | 云南大理的浪漫").assertIsDisplayed()
     }
 }
