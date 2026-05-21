@@ -49,7 +49,7 @@ class VisualDemoTest {
         pause()
 
         composeTestRule.onNodeWithTag("bottom_tab_CAMERA").performClick()
-        composeTestRule.onNodeWithText("当前模块：Camera").assertIsDisplayed()
+        composeTestRule.onNodeWithText("AI 构图引导").assertIsDisplayed()
         pause()
 
         composeTestRule.onNodeWithTag("bottom_tab_MY_MODEL").performClick()
@@ -72,7 +72,7 @@ class VisualDemoTest {
     fun visualDemo_repeatedBottomTabClicksStayResponsive() {
         repeat(2) {
             composeTestRule.onNodeWithTag("bottom_tab_CAMERA").performClick()
-            composeTestRule.onNodeWithText("当前模块：Camera").assertIsDisplayed()
+            composeTestRule.onNodeWithText("AI 构图引导").assertIsDisplayed()
 
             composeTestRule.onNodeWithTag("bottom_tab_MY_MODEL").performClick()
             composeTestRule.onNodeWithText("用户名称").assertIsDisplayed()

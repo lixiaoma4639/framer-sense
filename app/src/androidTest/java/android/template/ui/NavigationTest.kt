@@ -77,7 +77,7 @@ class NavigationTest {
         composeTestRule.onNodeWithTag("bottom_tab_CAMERA").performClick()
 
         // 应显示拍照模块内容
-        composeTestRule.onNodeWithText("当前模块：Camera").assertIsDisplayed()
+        composeTestRule.onNodeWithText("AI 构图引导").assertIsDisplayed()
     }
 
     @Test
@@ -143,7 +143,7 @@ class NavigationTest {
 
         // 首页 -> 拍照
         composeTestRule.onNodeWithTag("bottom_tab_CAMERA").performClick()
-        composeTestRule.onNodeWithText("当前模块：Camera").assertIsDisplayed()
+        composeTestRule.onNodeWithText("AI 构图引导").assertIsDisplayed()
 
         // 拍照 -> 我的
         composeTestRule.onNodeWithTag("bottom_tab_MY_MODEL").performClick()

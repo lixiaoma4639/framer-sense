@@ -60,7 +60,9 @@ enum class MyModelRoute {
 ### 拍照
 
 - 入口：`CameraScreen()`
-- 当前为占位页，展示标题 `拍照` 和模块标识 `当前模块：Camera`。
+- 当前为 CameraX + ML Kit 构图引导页，显示实时相机预览、虚线人物构图框、移动提示和拍摄按钮。
+- 点击拍摄后，照片会保存到系统相册。
+- 详细实现见 `docs/CAMERA_COMPOSITION_GUIDE.md`。
 
 ### 我的
 
