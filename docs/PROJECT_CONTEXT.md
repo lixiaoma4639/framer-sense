@@ -17,13 +17,13 @@ Framer_Sense 是一个基于 Android 官方多模块架构模板演进而来的 
 | 异步与状态 | Kotlin Coroutines、Flow、Lifecycle Compose |
 | 导航 | 底部导航状态切换、Navigation3 模板能力保留 |
 | 图片加载 | Coil 3 |
-| 相机与端侧 AI | CameraX、ML Kit Object Detection、ML Kit Pose Detection |
+| 相机与端侧 AI | CameraX、ONNX Runtime、SSD MobileNet ONNX、ML Kit 旧方案保留 |
 | 测试 | JUnit、Compose UI Test、Android Instrumented Test、Hilt Test |
 
 当前应用主体验是一个三栏底部导航 App：
 
 - 首页：推荐流和系统相册。
-- 拍照：CameraX 实时预览、ML Kit 端侧构图引导和拍摄保存到系统相册。
+- 拍照：CameraX 实时预览、ONNX Runtime 端侧构图引导和拍摄保存到系统相册。
 - 我的：个人主页、内容 Tab 和设置页。
 
 同时项目保留了模板中的 MyModel 数据链路，用于演示 Room + Repository + ViewModel 的读写流程。
@@ -58,7 +58,8 @@ Framer_Sense 是一个基于 Android 官方多模块架构模板演进而来的 
 | 模块 | 当前职责 |
 | --- | --- |
 | `feature-home` | 首页模块，包含推荐流和相册页面。 |
-| `feature-camera` | 拍照模块，包含 CameraX 预览、ML Kit 画面分析、构图引导虚线覆盖层、拍摄保存和相机权限 UI。 |
+| `feature-camera` | 旧 ML Kit 拍照模块，包含 CameraX 预览、ML Kit 画面分析、构图引导虚线覆盖层、拍摄保存和相机权限 UI；当前不再作为 app 拍照入口。 |
+| `feature-camera-pytorch` | 当前拍照入口模块，包含 CameraX 预览、ONNX Runtime SSD MobileNet 端侧检测、构图引导虚线覆盖层、拍摄保存和相机权限 UI。 |
 | `feature-mymodel` | 我的模块，包含个人主页、设置页和模板 MyModel 数据功能。 |
 
 ### *-navigation 模块
@@ -138,17 +139,18 @@ MyApplication
 
 ### 拍照页面
 
-`CameraScreen` 是 CameraX + ML Kit 的实时构图引导页面：
+`CameraScreen` 当前来自 `feature-camera-pytorch`，是 CameraX + ONNX Runtime 的实时构图引导页面：
 
 - 首次进入先检查 `CAMERA` 权限，未授权时展示权限说明和重新授权按钮。
 - 已授权后使用 CameraX `PreviewView` 显示后置摄像头实时预览。
 - `ImageAnalysis` 使用 `STRATEGY_KEEP_ONLY_LATEST` 获取实时帧，交给 `CameraGuideAnalyzer` 进行端侧分析。
-- `CameraGuideAnalyzer` 使用 ML Kit Object Detection 检测画面中的物体/障碍物，使用 ML Kit Pose Detection 检测真人姿态。
-- `CompositionGuideEngine` 将检测结果转为通用人像构图建议，生成虚线人物区域、简化 pose 线条和引导文案。
+- `CameraGuideAnalyzer` 对实时帧做约 520ms 节流，调用 `OnnxCameraAiDetector` 执行端侧检测。
+- `OnnxCameraAiDetector` 使用 assets 中的 SSD MobileNet ONNX int8 模型检测人物和环境物体。
+- `CompositionGuideEngine` 将检测结果转为通用人像构图建议，生成虚线人物区域、模板 pose 线条和引导文案。
 - `CameraGuideOverlay` 在预览上使用 Compose `Canvas` 绘制虚线人形，并显示“走进虚线内”“向右移动手机”等提示。
 - 页面底部提供拍摄按钮，使用 CameraX `ImageCapture` 拍照，并通过 `MediaStore` 保存到系统相册。
 
-相机构图功能的详细设计、数据流、依赖和扩展方向见 `docs/CAMERA_COMPOSITION_GUIDE.md`。后续拍照保存、滤镜或自定义模型能力仍应优先在 `feature-camera` 内实现。
+ONNX 相机构图功能的详细设计、数据流、模型来源和扩展方向见 `docs/FEATURE_CAMERA_PYTORCH.md`。旧 ML Kit 方案见 `docs/CAMERA_COMPOSITION_GUIDE.md`。后续拍照保存、滤镜或自定义模型能力应优先在 `feature-camera-pytorch` 内实现。
 
 ### 我的模块
 
@@ -189,7 +191,8 @@ feature-mymodel
 ```text
 CameraX Preview + ImageAnalysis
   -> CameraGuideAnalyzer
-  -> ML Kit Object Detection / Pose Detection
+  -> OnnxCameraAiDetector
+  -> ONNX Runtime SSD MobileNet
   -> CompositionGuideEngine
   -> CameraGuideOverlay
 
@@ -239,6 +242,7 @@ CameraX ImageCapture
 # 运行指定模块单元测试
 ./gradlew :feature-home:testDebugUnitTest
 ./gradlew :feature-camera:testDebugUnitTest
+./gradlew :feature-camera-pytorch:testDebugUnitTest
 ./gradlew :feature-mymodel:testDebugUnitTest
 ./gradlew :core-data:testDebugUnitTest
 
@@ -256,7 +260,8 @@ CameraX ImageCapture
 当前仓库包含多类测试：
 
 - `core-data`：Repository 单元测试。
-- `feature-camera`：构图规则本地单元测试和拍照页 Compose 仪器测试。
+- `feature-camera-pytorch`：ONNX 构图规则本地单元测试和拍照页 Compose 仪器测试。
+- `feature-camera`：旧 ML Kit 构图规则本地单元测试和拍照页 Compose 仪器测试。
 - `feature-home`：首页页面级 Compose 测试位于 `androidTest`，本地单元测试命令不依赖 Compose UI Test 运行环境。
 - `feature-mymodel`：我的主页页面级 Compose 测试位于 `androidTest`，本地单元测试覆盖 MyModel ViewModel 等非页面级逻辑。
 - `app`：主导航相关 Android Instrumented Test。
@@ -273,7 +278,8 @@ CameraX ImageCapture
 - 当前源码中首页支持左右滑动切换；部分旧文档可能仍描述为不支持滑动。
 - 当前首页默认页是 `HomeTab.RECOMMEND`，因为 `HomeTab` 枚举顺序为“推荐、相册”。
 - `core-common`、`core-network`、`feature-home-navigation`、`feature-camera-navigation` 当前更偏预留模块，不应误判为已有完整业务能力。
-- 拍照模块依赖相机权限、CameraX 和 ML Kit；无权限或无可用后置摄像头时只显示可恢复提示。
+- 当前拍照模块依赖相机权限、CameraX、ONNX Runtime 和内置 ONNX 模型；无权限、模型加载失败或无可用后置摄像头时只显示可恢复提示。
+- 当前 app 与 `feature-camera-pytorch` 因 `onnxruntime-android:1.26.0` 要求提升到 `minSdk = 24`；其他旧模块仍可保持各自 `minSdk = 23`。
 - 推荐页使用网络图片 URL，网络环境会影响图片加载结果。
 - 相册页依赖系统权限和设备媒体库，测试或演示时可能出现空相册、权限拒绝或加载失败。
 - 旧文档可以保留用于理解演进历史；后续编程优先以本文档和源码为准。

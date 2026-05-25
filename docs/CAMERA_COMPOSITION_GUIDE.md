@@ -1,6 +1,6 @@
-# 相机构图引导模块
+# 相机构图引导模块（旧 ML Kit 方案）
 
-本文档记录 `feature-camera` 中 CameraX + ML Kit 端侧构图引导的实现约定。项目总体上下文仍以 `docs/PROJECT_CONTEXT.md` 为入口。
+本文档记录 `feature-camera` 中 CameraX + ML Kit 端侧构图引导的实现约定。当前 App 拍照入口已切换到 `feature-camera-pytorch` 的 ONNX Runtime 方案，新方案见 `docs/FEATURE_CAMERA_PYTORCH.md`。项目总体上下文仍以 `docs/PROJECT_CONTEXT.md` 为入口。
 
 ## 功能目标
 
@@ -132,7 +132,7 @@ CameraCaptureControls
 
 设备建议：
 
-- 当前 app `minSdk = 23`，因此 Android 6.0 及以上设备可以安装运行；CameraX 和本版 ML Kit 能力本身支持 Android API 21 及以上。
+- 当前 app 因 ONNX Runtime 新拍照入口要求已提升到 `minSdk = 24`；本旧 ML Kit 模块自身仍保持 `minSdk = 23`。
 - 推荐使用 Android 10 及以上、arm64、后置摄像头正常的真机测试，Pixel、三星 Galaxy S/Note/A 系列、国内主流 Snapdragon/天玑机型都可以。
 - 不要求专用 NPU 或 TensorFlow Lite/ExecuTorch 运行环境；ML Kit 推理会在端侧执行。
 - 姿态检测更依赖画面条件：人物需要在画面中足够完整、光线较好、身体关键点不要被大面积遮挡。只拍近距离局部身体或复杂遮挡时，提示可能停留在“实时检测中：未检测到人物，请移动相机对准人物”。

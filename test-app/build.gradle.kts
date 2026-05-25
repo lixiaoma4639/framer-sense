@@ -29,7 +29,7 @@ android {
     targetProjectPath = ":app"
 
     defaultConfig {
-        minSdk = 23
+        minSdk = 24
         targetSdk = 36
 
         testInstrumentationRunner = "android.template.core.testing.HiltTestRunner"

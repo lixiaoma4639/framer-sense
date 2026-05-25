@@ -29,7 +29,7 @@ android {
 
     defaultConfig {
         applicationId = "android.template"
-        minSdk = 23
+        minSdk = 24
         targetSdk = 36
         versionCode = 1
         versionName = "1.0"
@@ -84,7 +84,7 @@ dependencies {
 
     implementation(project(":core-ui"))
     implementation(project(":feature-home"))
-    implementation(project(":feature-camera"))
+    implementation(project(":feature-camera-pytorch"))
     implementation(project(":feature-mymodel"))
 
     // Core Android dependencies (non-UI)

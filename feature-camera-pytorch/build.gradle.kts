@@ -22,11 +22,11 @@ plugins {
 }
 
 android {
-    namespace = "android.template.feature.camera"
+    namespace = "android.template.feature.camera.pytorch"
     compileSdk = 36
 
     defaultConfig {
-        minSdk = 23
+        minSdk = 24
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         consumerProguardFiles("consumer-rules.pro")
     }
@@ -62,6 +62,8 @@ dependencies {
     implementation(libs.androidx.camera.lifecycle)
     implementation(libs.androidx.camera.view)
 
+    // On-device AI inference
+    implementation(libs.onnxruntime.android)
 
     // Tests
     testImplementation(libs.junit)

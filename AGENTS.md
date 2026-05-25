@@ -9,6 +9,7 @@
 - 若 `README.md`、`ARCHITECTURE.md`、`docs/NAVIGATION.md`、`docs/HOME_MODULE.md` 与当前源码或 `docs/PROJECT_CONTEXT.md` 不一致，以源码和 `docs/PROJECT_CONTEXT.md` 为准。
 - 不要修改与当前任务无关的文件。
 - 不要还原用户已有改动；如果工作区存在未跟踪或已修改文件，先确认它们是否与任务相关。
+- 后续需要测试时，只编写或更新自动化测试代码，不主动运行 Gradle/Android 自动化测试；由用户自行在本地执行验证。若用户明确要求运行测试，则按用户要求执行。
 
 ## 文档同步规则
 

@@ -39,7 +39,7 @@ import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.testTag
-import android.template.feature.camera.ui.CameraScreen
+import android.template.feature.camera.pytorch.ui.CameraScreen
 import android.template.feature.home.ui.HomeScreen
 import android.template.feature.mymodel.ui.MyModelMainScreen
 import android.template.feature.mymodel.ui.SettingsScreen

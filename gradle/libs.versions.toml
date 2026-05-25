@@ -21,6 +21,7 @@ lifecycleViewmodelNav3 = "2.10.0"
 mlkitObjectDetection = "17.0.2"
 mlkitPoseDetection = "18.0.0-beta5"
 nav3Core = "1.0.1"
+onnxRuntime = "1.26.0"
 
 [libraries]
 androidx-activity-compose = { module = "androidx.activity:activity-compose", version.ref = "androidxActivity" }
@@ -63,6 +64,7 @@ kotlinx-serialization-core = { module = "org.jetbrains.kotlinx:kotlinx-serializa
 kotlinx-serialization-json = { module = "org.jetbrains.kotlinx:kotlinx-serialization-json", version.ref = "kotlinxSerializationCore" }
 mlkit-obj-detector = { module = "com.google.mlkit:object-detection", version.ref = "mlkitObjectDetection" }
 mlkit-pose-detector = { module = "com.google.mlkit:pose-detection", version.ref = "mlkitPoseDetection" }
+onnxruntime-android = { module = "com.microsoft.onnxruntime:onnxruntime-android", version.ref = "onnxRuntime" }
 
 
 [plugins]

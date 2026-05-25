@@ -60,9 +60,9 @@ enum class MyModelRoute {
 ### 拍照
 
 - 入口：`CameraScreen()`
-- 当前为 CameraX + ML Kit 构图引导页，显示实时相机预览、虚线人物构图框、移动提示和拍摄按钮。
+- 当前入口来自 `feature-camera-pytorch`，为 CameraX + ONNX Runtime 构图引导页，显示实时相机预览、虚线人物构图框、移动提示和拍摄按钮。
 - 点击拍摄后，照片会保存到系统相册。
-- 详细实现见 `docs/CAMERA_COMPOSITION_GUIDE.md`。
+- 详细实现见 `docs/FEATURE_CAMERA_PYTORCH.md`；旧 ML Kit 方案见 `docs/CAMERA_COMPOSITION_GUIDE.md`。
 
 ### 我的
 

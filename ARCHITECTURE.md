@@ -13,7 +13,7 @@ Framer_Sense 是一个基于 **Android 官方架构模板 (architecture-template
 | Navigation3 | 1.0.1 | 导航框架 |
 | KSP | 2.3.6 | 注解处理 |
 
-- **compileSdk**: 36 / **minSdk**: 23 / **targetSdk**: 36
+- **compileSdk**: 36 / **minSdk**: 24（app 与 `feature-camera-pytorch`，ONNX Runtime 要求）/ **targetSdk**: 36
 
 核心功能：一个简单的 "MyModel" 数据增删查应用 —— 用户可以输入名称保存，列表展示最近 10 条记录。
 
