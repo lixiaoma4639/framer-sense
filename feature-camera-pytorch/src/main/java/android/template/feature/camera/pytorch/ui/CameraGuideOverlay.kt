@@ -1,5 +1,6 @@
 package android.template.feature.camera.pytorch.ui
 
+import android.template.core.ui.MyApplicationTheme
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -22,6 +23,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 
 @Composable
@@ -83,6 +85,7 @@ fun CameraGuideOverlay(
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
+            //Surface：主要负责背景、圆角、阴影、边框、点击、Material 语义
             Surface(
                 color = Color.Black.copy(alpha = 0.58f),
                 contentColor = Color.White,
@@ -137,3 +140,15 @@ private fun CameraMovementDirection.directionText(): String? =
         CameraMovementDirection.DOWN -> "↓ 向下移动手机"
         CameraMovementDirection.NONE -> null
     }
+
+
+@Preview(showBackground = true)
+@Composable
+private fun CameraGuidePreview() {
+    MyApplicationTheme {
+        CameraGuideOverlay(
+            CameraGuideState.Initial,
+            Modifier.fillMaxSize(),
+        )
+    }
+}

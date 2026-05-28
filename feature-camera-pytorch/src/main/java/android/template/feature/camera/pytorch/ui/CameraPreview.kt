@@ -56,6 +56,7 @@ fun CameraPreview(
     }
     val analysisExecutor = remember { Executors.newSingleThreadExecutor() }
     val mainExecutor = remember(context) { ContextCompat.getMainExecutor(context) }
+    // remember 的作用, 在 Compose 重组（recomposition）时保留对象实例，避免被重新创建。
     val analyzer = remember {
         CameraGuideAnalyzer(
             context = context,

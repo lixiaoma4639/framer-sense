@@ -225,43 +225,19 @@ data object Main : NavKey
 
 ### 4.6 `feature-mymodel` 模块
 
-**职责**：功能模块，包含 MyModel 功能的 UI（Screen + ViewModel）和导航入口注册。是用户界面的核心实现。
+**职责**：功能模块，包含底部导航中的“我的”主页和设置页。该模块按 MVVM 组织，Composable 只渲染状态并转发事件。
 
 | 文件 | 作用 |
 |---|---|
-| `ui/MyModelViewModel.kt` | `@HiltViewModel`，注入 Repository，管理 UI 状态 |
-| `ui/MyModelScreen.kt` | Compose UI 界面（输入框 + 保存按钮 + 列表展示） |
-| `navigation/EntryProvider.kt` | Navigation3 入口注册，将 `Main` 路由键映射到 `MyModelScreen` |
-
-**核心代码**：
-
-```kotlin
-// ViewModel - UI 状态管理
-@HiltViewModel
-class MyModelViewModel @Inject constructor(
-    myModelRepository: MyModelRepository   // 注入接口，不依赖具体实现
-) : ViewModel() {
-    val uiState: StateFlow<MyModelUiState> = myModelRepository.myModels
-        .map { Success(it) }
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), Loading)
-
-    fun addMyModel(name: String) = viewModelScope.launch {
-        myModelRepository.add(name)
-    }
-}
-
-// UI 状态密封接口
-sealed interface MyModelUiState {
-    data object Loading : MyModelUiState
-    data class Error(val throwable: Throwable) : MyModelUiState
-    data class Success(val data: List<String>) : MyModelUiState
-}
-```
+| `ui/MyModelMainScreen.kt` | 我的主页 UI，展示资料、操作栏和内容 Tab |
+| `ui/MyModelMainViewModel.kt` | `@HiltViewModel`，管理主页资料、当前 Tab 和空状态文案 |
+| `ui/SettingsScreen.kt` | 设置页 UI |
+| `ui/SettingsViewModel.kt` | `@HiltViewModel`，管理设置项列表 |
 
 **关键设计**：
-- ViewModel 仅依赖 `MyModelRepository` 接口，不依赖数据库层
-- UI 状态使用 sealed interface 确保类型安全的状态管理
-- `stateIn` 的 `WhileSubscribed(5000)` 实现 5 秒超时的状态共享，避免配置变更时重新查询
+- `MyModelMainUiState` 暴露用户名、简介、当前内容 Tab 和各 Tab 空状态文案。
+- `SettingsUiState` 暴露设置项列表，设置项数据不直接写在 Composable 中。
+- 模板 MyModel Repository/Room 数据层仍保留在 `core-data`、`core-database`，但当前不再接入“我的”模块 UI。
 
 ---
 
@@ -273,28 +249,28 @@ sealed interface MyModelUiState {
 |---|---|
 | `MyApplication.kt` | `@HiltAndroidApp` Application 类，触发 Hilt 依赖图生成 |
 | `ui/MainActivity.kt` | `@AndroidEntryPoint` 主 Activity，全面屏 + Compose setContent |
-| `ui/Navigation.kt` | Navigation3 导航配置，注册 `MyModelEntryProvider` |
+| `ui/Navigation.kt` | 底部导航 UI 组装，收集 `MainNavigationViewModel` 状态 |
+| `ui/MainNavigationViewModel.kt` | 管理底部 Tab、“我的”内部路由和底部栏显隐 |
 
 **核心代码**：
 
 ```kotlin
-// Navigation.kt - 模块组装的核心
 @Composable
-fun MainNavigation() {
-    val backstack = rememberNavBackStack(Main)   // 初始路由 Main 来自 navigation 模块
-    NavDisplay(backstack, entryProvider = {
-        MyModelEntryProvider(onItemClick = { /* 预留导航扩展 */ })  // 来自 feature-mymodel
-    }, decorators = listOf(
-        rememberSaveableStateHolderNavEntryDecorator(),  // 状态保存
-        rememberViewModelStoreNavEntryDecorator()        // ViewModel 管理
-    ))
+fun MainNavigation(viewModel: MainNavigationViewModel = hiltViewModel()) {
+    val uiState by viewModel.uiState.collectAsStateWithLifecycle()
+    MainNavigationContent(
+        uiState = uiState,
+        onTabSelected = viewModel::onTabSelected,
+        onSettingsClick = viewModel::onSettingsClick,
+        onSettingsBack = viewModel::onSettingsBack
+    )
 }
 ```
 
 **关键设计**：
-- `app` 是唯一的 "组装点"，将 navigation 键和 feature UI 连接起来
-- 通过 `entryProvider` 注册机制实现松耦合
-- 测试时通过 `TestFakeDataModule`（支持 add 操作的 Fake）替换真实数据源
+- `app` 是当前底部导航的组装点，直接挂载首页、拍照、我的三个 feature。
+- 主导航状态由 `MainNavigationViewModel` 管理，Compose 侧只保留 `rememberSaveableStateHolder` 保存各 Tab 页面状态。
+- 拍照入口仍指向 `feature-camera-pytorch`，后续可单独演进到 MVI。
 
 ---
 
@@ -319,19 +295,23 @@ fun MainNavigation() {
 ### 5.1 依赖注入 (Hilt) —— 核心交互机制
 
 ```
-DatabaseModule (core-database)
-    │ 提供 AppDatabase, MyModelDao
+MainNavigationViewModel (app)
+    │ 管理底部 Tab 与我的内部路由
     ▼
-DataModule (core-data)
-    │ @Binds DefaultMyModelRepository → MyModelRepository
-    ▼
-MyModelViewModel (feature-mymodel)
-    │ @Inject MyModelRepository
-    ▼
-MyModelScreen (feature-mymodel)
-    │ hiltViewModel() → MyModelViewModel
+MainNavigation (app)
+    │ 组装 HomeScreen / CameraScreen / MyModelMainScreen
     ▼
 MainActivity (app)
+
+HomeViewModel / RecommendViewModel / MyModelMainViewModel / SettingsViewModel
+    │ 管理各自页面 UI state
+    ▼
+对应 Screen 收集状态并渲染
+
+DatabaseModule / DataModule
+    │ 保留 MyModel Repository 与 Room 数据层能力
+    ▼
+后续真实数据功能可通过 Repository 接入对应 ViewModel
 ```
 
 ### 5.2 接口抽象隔离
@@ -343,57 +323,42 @@ MainActivity (app)
 | 导航键 vs UI 实现 | `feature-mymodel-navigation` 独立模块 | 其他模块无需依赖完整 feature 即可导航 |
 | 测试替换 | `@TestInstallIn(replaces = [...])` | 测试中无缝替换 DI 模块 |
 
-### 5.3 导航键解耦
+### 5.3 主导航状态
 
 ```
-feature-mymodel-navigation       feature-mymodel              app
-┌──────────────────┐    ┌───────────────────────┐    ┌───────────────────┐
-│ Main : NavKey    │◄───│ MyModelEntryProvider  │    │ MainNavigation    │
-│ (路由键定义)      │    │ (注册 Main → Screen)   │    │ (使用 Main 作初始路由)│
-└──────────────────┘    └───────────────────────┘    └───────────────────┘
-         ▲                            │                         │
-         │                            │                         │
-         └────────────────────────────┘◄────────────────────────┘
-              两者都依赖 navigation 模块，但不直接相互依赖
+MainNavigationViewModel
+    │ MainNavigationUiState(selectedTab, myModelRoute)
+    ▼
+MainNavigationContent
+    │ 渲染底部栏、当前 Tab、设置页覆盖层
+    ▼
+HomeScreen / CameraScreen / MyModelMainScreen / SettingsScreen
 ```
 
 ### 5.4 数据流向
 
 ```
-用户输入名称 → 点击 Save
-       │
+首页 Tab 点击/滑动
        ▼
-MyModelScreen.onSave()
-       │
+HomeViewModel.onTabSelected/onPageChanged()
        ▼
-MyModelViewModel.addMyModel(name)
-       │
+HomeUiState(selectedTab)
        ▼
-MyModelRepository.add(name: String)          ← 接口调用，不感知实现
-       │
-       ▼
-DefaultMyModelRepository.add()
-       │
-       ▼
-MyModelDao.insertMyModel(MyModel(name))      ← String → Entity 映射
-       │
-       ▼
-Room Database (SQLite)                       ← 数据持久化
+HomeScreen 渲染 Tab 与 Pager
 
+推荐页进入
+       ▼
+RecommendViewModel.uiState
+       ▼
+RecommendScreen 渲染推荐流
 
-数据库变化 (Room Flow 自动通知)
-       │
+我的页 Tab 点击/滑动
        ▼
-MyModelDao.getMyModels() → Flow<List<MyModel>>
-       │
+MyModelMainViewModel.onTabSelected/onPageChanged()
        ▼
-DefaultMyModelRepository.myModels            ← Entity → String 映射
-       │
+MyModelMainUiState(profile, selectedTab, tabContents)
        ▼
-MyModelViewModel.uiState (StateFlow)         ← Loading / Error / Success
-       │
-       ▼
-MyModelScreen 渲染列表                        ← Compose 重组
+MyModelMainScreen 渲染资料与内容空状态
 ```
 
 ---
@@ -404,7 +369,7 @@ MyModelScreen 渲染列表                        ← Compose 重组
 |---|---|---|
 | **数据层隔离** | Repository 接口 + 实体映射 | 上层只知道 `String`，不知道 `MyModel` 实体 |
 | **依赖倒置** | Hilt `@Binds` 接口绑定 | ViewModel 依赖 `MyModelRepository` 接口而非实现类 |
-| **导航解耦** | 独立 navigation 模块 | 路由键定义与 UI 实现分离 |
+| **导航解耦** | app 层统一组装 + navigation 模块预留 | 当前底部导航由 app 组装，Navigation3 路由键能力保留 |
 | **主题复用** | 独立 core-ui 模块 | 主题定义可跨 feature 复用 |
 | **测试隔离** | `@TestInstallIn` 替换 | 生产/测试使用不同的 DI 绑定 |
 | **测试基础设施** | 独立 core-testing 模块 | `HiltTestRunner` 被所有模块复用 |
@@ -415,10 +380,10 @@ MyModelScreen 渲染列表                        ← Compose 重组
 ## 七、架构特点
 
 1. **标准分层架构**：`database → data → feature → app`，层次清晰，依赖方向单一
-2. **Navigation3**：采用最新的 Navigation3 框架，使用 `NavDisplay` + `entryProvider` 模式替代 Navigation2 的 NavGraph
+2. **MVVM 状态管理**：非拍照模块由 ViewModel 暴露 UI state，Composable 只负责渲染与事件转发
 3. **全面的测试策略**：
-   - 单元测试：Repository（core-data）、ViewModel（feature-mymodel）
-   - UI 测试：Screen（feature-mymodel）
+   - 单元测试：Repository（core-data）、ViewModel（app、feature-home、feature-mymodel）
+   - UI 测试：Screen/Content（feature-home、feature-mymodel）
    - 集成测试：Navigation（app）
    - 端到端测试（test-app）
 4. **模板化设计**：`customizer.sh` 可一键重命名包名/模块名/数据模型名，快速适配新项目
@@ -430,8 +395,8 @@ MyModelScreen 渲染列表                        ← Compose 重组
 
 新增功能模块的标准步骤：
 
-1. **创建 `feature-xxx` 模块**：包含 ViewModel + Screen + EntryProvider
-2. **创建 `feature-xxx-navigation` 模块**：定义 `NavKey` 路由键
-3. **在 `app` 模块注册**：`MainNavigation` 中添加 `entryProvider` 映射
+1. **创建 `feature-xxx` 模块**：包含 ViewModel + Screen，按 MVVM 暴露 UI state
+2. **按需创建 `feature-xxx-navigation` 模块**：跨模块路由需要稳定路由键时定义 `NavKey`
+3. **在 `app` 模块组装**：`MainNavigation` 中添加底部 Tab 或 feature 内部入口
 4. **如需数据支持**：在 `core-database` 添加 Entity + DAO，在 `core-data` 添加 Repository 接口和实现
 5. **编写测试**：单元测试、UI 测试、集成测试

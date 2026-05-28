@@ -16,6 +16,10 @@
 
 package android.template.feature.home.ui
 
+import android.template.feature.home.ui.recommend.RecommendScreenContent
+import android.template.feature.home.ui.recommend.RecommendItem
+import android.template.feature.home.ui.recommend.RecommendUiState
+import androidx.compose.material3.Text
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithText
@@ -31,7 +35,13 @@ class HomeScreenTest {
     @Test
     fun homeScreen_displaysRecommendTabByDefault() {
         composeTestRule.setContent {
-            HomeScreen()
+            HomeScreenContent(
+                uiState = HomeUiState(),
+                onTabSelected = {},
+                onPageChanged = {},
+                recommendContent = { RecommendScreenContent(RecommendUiState.Success(fakeRecommendItems)) },
+                albumContent = { Text("相册内容") }
+            )
         }
 
         composeTestRule.onNodeWithText("推荐").assertIsDisplayed()
@@ -41,7 +51,13 @@ class HomeScreenTest {
     @Test
     fun homeScreen_displaysAlbumTab() {
         composeTestRule.setContent {
-            HomeScreen()
+            HomeScreenContent(
+                uiState = HomeUiState(),
+                onTabSelected = {},
+                onPageChanged = {},
+                recommendContent = { RecommendScreenContent(RecommendUiState.Success(fakeRecommendItems)) },
+                albumContent = { Text("相册内容") }
+            )
         }
 
         composeTestRule.onNodeWithText("相册").assertIsDisplayed()
@@ -50,7 +66,13 @@ class HomeScreenTest {
     @Test
     fun homeScreen_clickSelectedRecommendTab_keepsRecommendContent() {
         composeTestRule.setContent {
-            HomeScreen()
+            HomeScreenContent(
+                uiState = HomeUiState(),
+                onTabSelected = {},
+                onPageChanged = {},
+                recommendContent = { RecommendScreenContent(RecommendUiState.Success(fakeRecommendItems)) },
+                albumContent = { Text("相册内容") }
+            )
         }
 
         composeTestRule.onNodeWithText("推荐").performClick()
@@ -60,10 +82,21 @@ class HomeScreenTest {
     @Test
     fun recommendScreen_showsMultipleCards() {
         composeTestRule.setContent {
-            HomeScreen()
+            HomeScreenContent(
+                uiState = HomeUiState(),
+                onTabSelected = {},
+                onPageChanged = {},
+                recommendContent = { RecommendScreenContent(RecommendUiState.Success(fakeRecommendItems)) },
+                albumContent = { Text("相册内容") }
+            )
         }
 
         composeTestRule.onNodeWithText("春日限定樱花拍摄攻略").assertIsDisplayed()
         composeTestRule.onNodeWithText("周末探店 | 这家咖啡厅太好拍了").assertIsDisplayed()
     }
 }
+
+private val fakeRecommendItems = listOf(
+    RecommendItem(1, "春日限定樱花拍摄攻略", "https://example.com/1.jpg", "摄影小达人", 2847),
+    RecommendItem(2, "周末探店 | 这家咖啡厅太好拍了", "https://example.com/2.jpg", "城市漫游者", 1523)
+)

@@ -26,7 +26,7 @@ Framer_Sense 是一个基于 Android 官方多模块架构模板演进而来的 
 - 拍照：CameraX 实时预览、ONNX Runtime 端侧构图引导和拍摄保存到系统相册。
 - 我的：个人主页、内容 Tab 和设置页。
 
-同时项目保留了模板中的 MyModel 数据链路，用于演示 Room + Repository + ViewModel 的读写流程。
+非拍照模块当前按 MVVM 组织：Composable 负责渲染和事件转发，ViewModel 持有页面 UI 状态。模板中的 MyModel Repository/Room 数据层仍保留在 `core-data`、`core-database`，但不再接入底部导航中的“我的”主页。
 
 ## 2. 模块结构
 
@@ -35,7 +35,8 @@ Framer_Sense 是一个基于 Android 官方多模块架构模板演进而来的 
 主应用模块，负责应用入口、主题装配和主导航组装。
 
 - `MainActivity`：Activity 入口，启用 edge-to-edge，注入 `MyApplicationTheme`，渲染 `MainNavigation`。
-- `Navigation.kt`：当前主 UI 入口，维护底部导航状态和“我的”模块内部页面状态。
+- `Navigation.kt`：当前主 UI 入口，收集 `MainNavigationViewModel` 状态并组装底部导航。
+- `MainNavigationViewModel`：管理底部 Tab、“我的”模块内部路由和底部栏显隐状态。
 - `MyApplication`：Hilt Application 入口。
 
 ### core-* 模块
@@ -57,10 +58,10 @@ Framer_Sense 是一个基于 Android 官方多模块架构模板演进而来的 
 
 | 模块 | 当前职责 |
 | --- | --- |
-| `feature-home` | 首页模块，包含推荐流和相册页面。 |
+| `feature-home` | 首页模块，包含推荐流和相册页面；首页 Tab、推荐流、相册读取分别由对应 ViewModel 管理状态。 |
 | `feature-camera` | 旧 ML Kit 拍照模块，包含 CameraX 预览、ML Kit 画面分析、构图引导虚线覆盖层、拍摄保存和相机权限 UI；当前不再作为 app 拍照入口。 |
 | `feature-camera-pytorch` | 当前拍照入口模块，包含 CameraX 预览、ONNX Runtime SSD MobileNet 端侧检测、构图引导虚线覆盖层、拍摄保存和相机权限 UI。 |
-| `feature-mymodel` | 我的模块，包含个人主页、设置页和模板 MyModel 数据功能。 |
+| `feature-mymodel` | 我的模块，包含个人主页和设置页；主页资料、内容 Tab、设置项列表由 ViewModel 管理状态。 |
 
 ### *-navigation 模块
 
@@ -89,7 +90,7 @@ MyApplication
   -> MainNavigation
 ```
 
-`MainNavigation` 使用 `Scaffold` 和 `NavigationBar` 组织底部导航，当前包含 3 个固定 Tab：
+`MainNavigation` 收集 `MainNavigationViewModel` 暴露的 `MainNavigationUiState`，并使用 `Scaffold` 和 `NavigationBar` 组织底部导航。当前包含 3 个固定 Tab：
 
 | Tab | Composable |
 | --- | --- |
@@ -97,11 +98,11 @@ MyApplication
 | 拍照 | `CameraScreen()` |
 | 我的 | `MyModelMainScreen()` |
 
-底部导航只在“我的”模块主页面显示。当用户进入“我的 -> 设置”页面时，底部导航隐藏；物理返回键会从设置页返回我的主页。主导航使用可保存状态记录当前底部 Tab 和“我的”模块内部路由，重复点击已选中的底部 Tab 会被忽略，以减少无意义重组并保留页面状态。
+底部导航只在“我的”模块主页面显示。当用户进入“我的 -> 设置”页面时，底部导航隐藏；物理返回键会从设置页返回我的主页。主导航状态由 ViewModel 管理，Compose 侧仅保留 `rememberSaveableStateHolder` 用于保存各 Tab 页面状态。
 
 ### 首页模块
 
-`HomeScreen` 使用顶部 `SecondaryScrollableTabRow` 和 `HorizontalPager` 联动，当前 Tab 顺序为：
+`HomeScreen` 使用顶部 `SecondaryScrollableTabRow` 和 `HorizontalPager` 联动，Tab 选中状态由 `HomeViewModel` 暴露的 `HomeUiState` 管理。当前 Tab 顺序为：
 
 1. 推荐
 2. 相册
@@ -115,7 +116,7 @@ MyApplication
 
 ### 推荐页面
 
-`RecommendScreen` 使用本地假数据构建类小红书风格推荐流：
+`RecommendScreen` 收集 `RecommendViewModel` 暴露的 `RecommendUiState`，当前使用本地假数据构建类小红书风格推荐流：
 
 - 数据模型：`RecommendItem`
 - 布局：`LazyVerticalGrid` 固定 2 列。
@@ -163,22 +164,20 @@ ONNX 相机构图功能的详细设计、数据流、模型来源和扩展方向
 - 点击当前已选中的内容 Tab 不会重复触发滚动动画。
 - 设置按钮通过 `MainNavigation` 切换到 `SettingsScreen`。
 
-`SettingsScreen` 是“我的”模块内部设置页，不通过底部导航直接暴露；设置项保持 56dp 以上触控高度。
+`MyModelMainViewModel` 负责主页资料、当前内容 Tab 和各 Tab 空状态文案。`SettingsScreen` 是“我的”模块内部设置页，不通过底部导航直接暴露；`SettingsViewModel` 负责设置项列表，设置项保持 56dp 以上触控高度。
 
 ### MyModel 模板数据功能
 
-项目仍保留原模板的 MyModel 数据功能：
+项目仍保留原模板的 MyModel 数据层能力，但当前不再提供对应页面入口：
 
-- `MyModelScreen`：包含输入、列表展示等模板 UI。
-- `MyModelViewModel`：连接 UI 与 Repository。
 - `MyModelRepository`：对上层暴露 `Flow<List<String>>` 和 `add(name)`。
 - `core-database`：Room 实体 `MyModel`、DAO 和 `AppDatabase`。
 
-该链路可作为后续真实数据功能的参考，但当前底部导航“我的”主页使用的是 `MyModelMainScreen`。
+该数据层可作为后续真实数据功能的参考；如重新接入 UI，应按当前 MVVM 约定新增对应 ViewModel 和明确的 UI state。
 
 ## 4. 数据与依赖流
 
-主要数据依赖链路：
+保留的模板数据依赖链路：
 
 ```text
 feature-mymodel
@@ -204,6 +203,7 @@ CameraX ImageCapture
 职责边界：
 
 - UI 层只依赖 ViewModel 或明确的 UI 状态，不直接操作 Room DAO。
+- 非拍照模块默认采用 MVVM；拍照模块当前保持现状，后续可单独演进到 MVI。
 - Repository 负责屏蔽数据来源细节，对 feature 暴露业务语义接口。
 - Room 实体和 DAO 保持在 `core-database`。
 - Hilt Module 负责绑定接口和提供数据库实例。
@@ -221,7 +221,7 @@ CameraX ImageCapture
 - 只有多个模块复用的 UI、工具、数据能力才下沉到 `core-*`。
 - 数据访问应经过 Repository，不要让 Compose 页面直接依赖 DAO 或数据库实体。
 - 新增数据库字段或表时，需要同步更新 Room schema 和相关测试。
-- 新增页面状态时，优先使用明确的 UI state 类型，避免在 Composable 中堆叠复杂业务判断。
+- 新增页面状态时，优先使用 ViewModel + 明确的 UI state 类型，避免在 Composable 中堆叠复杂业务判断。
 - 新增导航入口时，先判断是 app 级底部导航、feature 内部页面，还是跨 feature 路由。
 - 测试 Fake、测试 DI 和测试 Runner 不应混入正式业务实现。
 - 修改旧文档前先确认是否是历史记录；通用项目上下文优先维护本文档。

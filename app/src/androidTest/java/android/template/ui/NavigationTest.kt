@@ -16,6 +16,9 @@
 
 package android.template.ui
 
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsNotSelected
 import androidx.compose.ui.test.assertIsSelected
@@ -25,6 +28,12 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import android.template.core.ui.MyApplicationTheme
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Column
+import androidx.compose.material3.Text
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
@@ -47,7 +56,55 @@ class NavigationTest {
     fun init() {
         composeTestRule.setContent {
             MyApplicationTheme {
-                MainNavigation()
+                var uiState by mutableStateOf(MainNavigationUiState())
+                MainNavigationContent(
+                    uiState = uiState,
+                    onTabSelected = { tab ->
+                        uiState = uiState.copy(selectedTab = tab)
+                    },
+                    onSettingsClick = {
+                        uiState = uiState.copy(
+                            selectedTab = BottomNavTab.MY_MODEL,
+                            myModelRoute = MyModelRoute.SETTINGS
+                        )
+                    },
+                    onSettingsBack = {
+                        uiState = uiState.copy(myModelRoute = MyModelRoute.MAIN)
+                    },
+                    homeContent = {
+                        Column {
+                            Text("推荐")
+                            Text("春日限定樱花拍摄攻略")
+                        }
+                    },
+                    cameraContent = {
+                        Text("AI 构图引导")
+                    },
+                    myModelContent = { onSettingsClick ->
+                        Column {
+                            Text("我的")
+                            Text("用户名称")
+                            Text(
+                                text = "设置",
+                                modifier = Modifier
+                                    .semantics { contentDescription = "设置" }
+                                    .clickable(onClick = onSettingsClick)
+                            )
+                        }
+                    },
+                    settingsContent = { onBackClick ->
+                        Column {
+                            Text("设置")
+                            Text("隐私条款")
+                            Text(
+                                text = "返回",
+                                modifier = Modifier
+                                    .semantics { contentDescription = "返回" }
+                                    .clickable(onClick = onBackClick)
+                            )
+                        }
+                    }
+                )
             }
         }
     }
@@ -102,7 +159,7 @@ class NavigationTest {
     // ========== 我的 Tab 测试 ==========
 
     @Test
-    fun clickMyModelTab_showsMyModelScreen() {
+    fun clickMyModelTab_showsProfileScreen() {
         // 点击我的 Tab
         composeTestRule.onNodeWithTag("bottom_tab_MY_MODEL").performClick()
 
@@ -122,7 +179,7 @@ class NavigationTest {
     }
 
     @Test
-    fun clickSettings_hidesBottomBarAndBackReturnsMyModelScreen() {
+    fun clickSettings_hidesBottomBarAndBackReturnsProfileScreen() {
         composeTestRule.onNodeWithTag("bottom_tab_MY_MODEL").performClick()
         composeTestRule.onNodeWithContentDescription("设置").performClick()
 

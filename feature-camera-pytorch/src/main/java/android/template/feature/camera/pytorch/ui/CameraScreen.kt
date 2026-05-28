@@ -76,7 +76,7 @@ fun CameraScreen(
         }
     }
 
-    CameraScreenContent(
+    return CameraScreenContent(
         uiState = uiState,
         captureStatus = captureStatus,
         captureRequestId = captureRequestId,
@@ -111,6 +111,9 @@ fun CameraScreen(
     )
 }
 
+/**
+ * internal 同一个模块（Module）内」被访问
+ */
 @Composable
 internal fun CameraScreenContent(
     uiState: CameraUiState,

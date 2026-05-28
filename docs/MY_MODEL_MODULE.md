@@ -2,18 +2,24 @@
 
 ## 模块概述
 
-`feature-mymodel` 承载底部导航中的“我的”主页、设置页，以及模板保留的 MyModel 数据示例功能。
+`feature-mymodel` 承载底部导航中的“我的”主页和设置页，并按 MVVM 管理主页资料、内容 Tab 和设置项列表。
 
 底部导航实际使用：
 
 - `MyModelMainScreen()`：我的主页。
 - `SettingsScreen()`：我的模块内部设置页，由 app 层 `MainNavigation` 控制进入和返回。
 
-模板数据能力保留：
+模板 MyModel 数据层仍保留在 `core-data`、`core-database`，但当前不再接入“我的”模块 UI。
 
-- `MyModelScreen()`：原模板数据输入与列表页面。
-- `MyModelViewModel`：连接 Repository 和 UI。
-- `MyModelRepository`、Room DAO 和实体位于 `core-data`、`core-database`。
+## 文件结构
+
+```text
+feature-mymodel/src/main/java/android/template/feature/mymodel/ui/
+├── MyModelMainScreen.kt       # 我的主页 UI
+├── MyModelMainViewModel.kt    # 主页资料、内容 Tab 和空状态文案
+├── SettingsScreen.kt          # 设置页 UI
+└── SettingsViewModel.kt       # 设置项列表状态
+```
 
 ## 我的主页
 
@@ -24,6 +30,12 @@
 - 内容 Tab：作品、点赞、收藏、评论。
 
 内容 Tab 使用 `PrimaryTabRow` 和 `HorizontalPager` 联动。用户可以点击 Tab 切换，也可以左右滑动切换；点击当前已选中的 Tab 会被忽略，避免重复触发滚动动画。
+
+`MyModelMainViewModel` 暴露 `MyModelMainUiState`，包含：
+
+- 个人资料：用户名、简介。
+- 当前选中的内容 Tab。
+- 各内容 Tab 的空状态文案。
 
 ## 设置页
 
@@ -45,10 +57,11 @@
 - 进入设置页时底部导航隐藏。
 - 点击返回按钮或系统返回键时回到我的主页。
 - 设置项行保持 56dp 以上触控高度，适配手机端点击。
+- `SettingsViewModel` 暴露 `SettingsUiState`，设置项数据不直接写在 Composable 中。
 
 ## 导航关系
 
-`MainNavigation` 持有 `MyModelRoute`：
+`MainNavigationViewModel` 持有 `MyModelRoute`：
 
 ```kotlin
 enum class MyModelRoute {
@@ -67,9 +80,10 @@ enum class MyModelRoute {
 
 ```text
 feature-mymodel/src/androidTest/java/android/template/feature/mymodel/ui/MyModelMainScreenTest.kt
+feature-mymodel/src/androidTest/java/android/template/feature/mymodel/ui/SettingsScreenTest.kt
 ```
 
-模板数据与 ViewModel 本地测试仍位于：
+ViewModel 本地测试位于：
 
 ```text
 feature-mymodel/src/test/java/android/template/feature/mymodel/ui/

@@ -31,7 +31,11 @@ class MyModelMainScreenTest {
     @Test
     fun myModelMainScreen_displaysProfile() {
         composeTestRule.setContent {
-            MyModelMainScreen()
+            MyModelMainContent(
+                uiState = MyModelMainUiState(),
+                onTabSelected = {},
+                onPageChanged = {}
+            )
         }
 
         composeTestRule.onNodeWithText("用户名称").assertIsDisplayed()
@@ -41,7 +45,11 @@ class MyModelMainScreenTest {
     @Test
     fun myModelMainScreen_displaysActionsAndTabs() {
         composeTestRule.setContent {
-            MyModelMainScreen()
+            MyModelMainContent(
+                uiState = MyModelMainUiState(),
+                onTabSelected = {},
+                onPageChanged = {}
+            )
         }
 
         composeTestRule.onNodeWithContentDescription("扫一扫").assertIsDisplayed()

@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2022 The Android Open Source Project
+ * Copyright (C) 2026 The Android Open Source Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,35 +16,27 @@
 
 package android.template.feature.mymodel.ui
 
-import androidx.activity.ComponentActivity
-import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
-import androidx.compose.ui.test.performClick
-import androidx.test.ext.junit.runners.AndroidJUnit4
-import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
-import org.junit.runner.RunWith
 
-/**
- * UI tests for [MyModelScreen].
- */
-@RunWith(AndroidJUnit4::class)
-class MyModelScreenTest {
+class SettingsScreenTest {
 
     @get:Rule
-    val composeTestRule = createAndroidComposeRule<ComponentActivity>()
+    val composeTestRule = createComposeRule()
 
-    @Before
-    fun setup() {
-        composeTestRule.setContent {
-            MyModelScreen(FAKE_DATA, onSave = {})
-        }
-    }
     @Test
-    fun firstItem_exists() {
-        composeTestRule.onNodeWithText(FAKE_DATA.first()).assertExists().performClick()
+    fun settingsScreen_displaysTitleBackButtonAndItems() {
+        composeTestRule.setContent {
+            SettingsScreenContent(uiState = SettingsUiState())
+        }
+
+        composeTestRule.onNodeWithText("设置").assertIsDisplayed()
+        composeTestRule.onNodeWithContentDescription("返回").assertIsDisplayed()
+        composeTestRule.onNodeWithText("隐私条款").assertIsDisplayed()
+        composeTestRule.onNodeWithText("应用权限").assertIsDisplayed()
     }
 }
-
-private val FAKE_DATA = listOf("Compose", "Room", "Kotlin")

@@ -38,18 +38,20 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import android.template.core.ui.MyApplicationTheme
+import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 
 /**
  * 设置项数据
  */
 data class SettingsItem(
-    val title: String,
-    val onClick: () -> Unit = {}
+    val title: String
 )
 
 /**
@@ -63,18 +65,27 @@ data class SettingsItem(
 @Composable
 fun SettingsScreen(
     onBackClick: () -> Unit = {},
+    viewModel: SettingsViewModel = hiltViewModel<SettingsViewModel>(),
     modifier: Modifier = Modifier
 ) {
-    val settingsItems = listOf(
-        SettingsItem(title = "隐私条款"),
-        SettingsItem(title = "个人信息收集清单"),
-        SettingsItem(title = "第三方信息共享清单"),
-        SettingsItem(title = "开源软件声明"),
-        SettingsItem(title = "关于"),
-        SettingsItem(title = "用户协议"),
-        SettingsItem(title = "应用权限")
-    )
+    val uiState by viewModel.uiState.collectAsStateWithLifecycle()
 
+    SettingsScreenContent(
+        uiState = uiState,
+        onBackClick = onBackClick,
+        onItemClick = viewModel::onItemClick,
+        modifier = modifier
+    )
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+internal fun SettingsScreenContent(
+    uiState: SettingsUiState,
+    onBackClick: () -> Unit = {},
+    onItemClick: (SettingsItem) -> Unit = {},
+    modifier: Modifier = Modifier
+) {
     Scaffold(
         modifier = modifier.fillMaxSize(),
         topBar = {
@@ -103,12 +114,12 @@ fun SettingsScreen(
                 .padding(innerPadding)
                 .verticalScroll(rememberScrollState())
         ) {
-            settingsItems.forEachIndexed { index, item ->
+            uiState.items.forEachIndexed { index, item ->
                 SettingsItemRow(
                     title = item.title,
-                    onClick = item.onClick
+                    onClick = { onItemClick(item) }
                 )
-                if (index < settingsItems.size - 1) {
+                if (index < uiState.items.size - 1) {
                     HorizontalDivider(
                         modifier = Modifier.padding(start = 16.dp),
                         thickness = 0.5.dp,
@@ -154,6 +165,6 @@ private fun SettingsItemRow(
 @Composable
 private fun SettingsScreenPreview() {
     MyApplicationTheme {
-        SettingsScreen()
+        SettingsScreenContent(uiState = SettingsUiState())
     }
 }

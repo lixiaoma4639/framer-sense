@@ -27,6 +27,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.pager.PagerState
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.CircleShape
@@ -41,11 +42,9 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.PrimaryTabRow
 import androidx.compose.material3.Tab
 import androidx.compose.material3.Text
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -54,7 +53,9 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import android.template.core.ui.MyApplicationTheme
-import kotlinx.coroutines.launch
+import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import kotlinx.coroutines.flow.distinctUntilChanged
 
 /**
  * 我的模块 Tab 定义
@@ -77,31 +78,74 @@ enum class MyModelTab(val title: String) {
 @Composable
 fun MyModelMainScreen(
     onSettingsClick: () -> Unit = {},
+    viewModel: MyModelMainViewModel = hiltViewModel<MyModelMainViewModel>(),
     modifier: Modifier = Modifier
 ) {
-    val pagerState = rememberPagerState(pageCount = { MyModelTab.entries.size })
-    val scope = rememberCoroutineScope()
-    val selectedPage by remember(pagerState) {
-        snapshotFlow { pagerState.currentPage }
-    }.collectAsState(initial = pagerState.currentPage)
+    val uiState by viewModel.uiState.collectAsStateWithLifecycle()
 
+    MyModelMainContent(
+        uiState = uiState,
+        onTabSelected = viewModel::onTabSelected,
+        onPageChanged = viewModel::onPageChanged,
+        onSettingsClick = onSettingsClick,
+        modifier = modifier
+    )
+}
+
+@Composable
+internal fun MyModelMainContent(
+    uiState: MyModelMainUiState,
+    onTabSelected: (MyModelTab) -> Unit,
+    onPageChanged: (Int) -> Unit,
+    onSettingsClick: () -> Unit = {},
+    modifier: Modifier = Modifier
+) {
+    val pagerState = rememberPagerState(
+        initialPage = uiState.selectedTab.ordinal,
+        pageCount = { MyModelTab.entries.size }
+    )
+
+    LaunchedEffect(pagerState) {
+        snapshotFlow { pagerState.currentPage }
+            .distinctUntilChanged()
+            .collect(onPageChanged)
+    }
+
+    LaunchedEffect(uiState.selectedTab) {
+        val targetPage = uiState.selectedTab.ordinal
+        if (pagerState.currentPage != targetPage) {
+            pagerState.animateScrollToPage(targetPage)
+        }
+    }
+
+    MyModelMainContent(
+        uiState = uiState,
+        pagerState = pagerState,
+        onTabSelected = onTabSelected,
+        onSettingsClick = onSettingsClick,
+        modifier = modifier
+    )
+}
+
+@Composable
+private fun MyModelMainContent(
+    uiState: MyModelMainUiState,
+    pagerState: PagerState,
+    onTabSelected: (MyModelTab) -> Unit,
+    onSettingsClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
     Column(modifier = modifier.fillMaxSize()) {
         // 顶部标题栏 - 右侧向左：设置、消息、扫一扫
         TopActionBar(onSettingsClick = onSettingsClick)
 
         // 个人信息区
-        ProfileSection()
+        ProfileSection(profile = uiState.profile)
 
         // Tab 栏 + HorizontalPager 联动
         ProfileTabRow(
-            selectedTabIndex = selectedPage,
-            onTabClick = { index ->
-                if (selectedPage != index) {
-                    scope.launch {
-                        pagerState.animateScrollToPage(index)
-                    }
-                }
-            }
+            selectedTab = uiState.selectedTab,
+            onTabClick = onTabSelected
         )
 
         // 内容区域 - 支持左右滑动
@@ -109,12 +153,7 @@ fun MyModelMainScreen(
             state = pagerState,
             modifier = Modifier.fillMaxSize()
         ) { page ->
-            when (MyModelTab.entries[page]) {
-                MyModelTab.WORKS -> WorksContent()
-                MyModelTab.LIKES -> LikesContent()
-                MyModelTab.FAVORITES -> FavoritesContent()
-                MyModelTab.COMMENTS -> CommentsContent()
-            }
+            PlaceholderContent(uiState.emptyTextFor(MyModelTab.entries[page]))
         }
     }
 }
@@ -162,7 +201,7 @@ private fun TopActionBar(onSettingsClick: () -> Unit) {
  * 个人信息区 - 圆形头像 + 名称 + 简介
  */
 @Composable
-private fun ProfileSection() {
+private fun ProfileSection(profile: ProfileUiState) {
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -187,13 +226,13 @@ private fun ProfileSection() {
         Spacer(modifier = Modifier.height(12.dp))
         // 名称
         Text(
-            text = "用户名称",
+            text = profile.userName,
             style = MaterialTheme.typography.titleLarge
         )
         Spacer(modifier = Modifier.height(4.dp))
         // 简介
         Text(
-            text = "这是一段个人简介，记录生活中的美好瞬间",
+            text = profile.bio,
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             textAlign = TextAlign.Center,
@@ -207,20 +246,20 @@ private fun ProfileSection() {
  */
 @Composable
 private fun ProfileTabRow(
-    selectedTabIndex: Int,
-    onTabClick: (Int) -> Unit
+    selectedTab: MyModelTab,
+    onTabClick: (MyModelTab) -> Unit
 ) {
     PrimaryTabRow(
-        selectedTabIndex = selectedTabIndex
+        selectedTabIndex = selectedTab.ordinal
     ) {
-        MyModelTab.entries.forEachIndexed { index, tab ->
+        MyModelTab.entries.forEach { tab ->
             Tab(
-                selected = selectedTabIndex == index,
-                onClick = { onTabClick(index) },
+                selected = selectedTab == tab,
+                onClick = { onTabClick(tab) },
                 text = {
                     Text(
                         text = tab.title,
-                        style = if (selectedTabIndex == index)
+                        style = if (selectedTab == tab)
                             MaterialTheme.typography.titleSmall
                         else
                             MaterialTheme.typography.titleSmall.copy(
@@ -231,28 +270,6 @@ private fun ProfileTabRow(
             )
         }
     }
-}
-
-// ========== 4个Tab的内容页面 ==========
-
-@Composable
-private fun WorksContent() {
-    PlaceholderContent("暂无作品")
-}
-
-@Composable
-private fun LikesContent() {
-    PlaceholderContent("暂无点赞")
-}
-
-@Composable
-private fun FavoritesContent() {
-    PlaceholderContent("暂无收藏")
-}
-
-@Composable
-private fun CommentsContent() {
-    PlaceholderContent("暂无评论")
 }
 
 @Composable
@@ -274,6 +291,10 @@ private fun PlaceholderContent(text: String) {
 @Composable
 private fun MyModelMainScreenPreview() {
     MyApplicationTheme {
-        MyModelMainScreen()
+        MyModelMainContent(
+            uiState = MyModelMainUiState(),
+            onTabSelected = {},
+            onPageChanged = {}
+        )
     }
 }

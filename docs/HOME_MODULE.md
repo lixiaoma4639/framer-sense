@@ -2,30 +2,32 @@
 
 ## 模块概述
 
-首页模块 (`feature-home`) 是应用的内容展示入口，使用 Jetpack Compose 实现顶部 Tab 与页面联动。
+首页模块 (`feature-home`) 是应用的内容展示入口，使用 Jetpack Compose 实现顶部 Tab 与页面联动，并按 MVVM 管理页面状态。
 
 当前 Tab 顺序：
 
 1. 推荐
 2. 相册
 
-`HomeScreen` 使用 `SecondaryScrollableTabRow` 和 `HorizontalPager`。用户可以点击顶部 Tab 切换，也可以左右滑动切换；点击当前已选中的 Tab 会被忽略，避免重复触发滚动动画。
+`HomeScreen` 收集 `HomeViewModel` 暴露的 `HomeUiState`。用户可以点击顶部 Tab 切换，也可以左右滑动切换；点击当前已选中的 Tab 会被忽略，避免重复触发滚动动画。`PagerState` 只保留在 Compose 层，当前页变化会同步回 ViewModel。
 
 ## 文件结构
 
 ```text
 feature-home/src/main/java/android/template/feature/home/ui/
 ├── HomeScreen.kt              # 首页入口、顶部 Tab、Pager 联动
+├── HomeViewModel.kt           # 首页 Tab 状态
 ├── album/
 │   ├── AlbumScreen.kt         # 相册页面，3 列系统图片网格
 │   └── AlbumViewModel.kt      # 权限检查、相册查询与 UI 状态
 └── recommend/
-    └── RecommendScreen.kt     # 推荐页，两列内容流与本地假数据
+    ├── RecommendScreen.kt     # 推荐页，两列内容流
+    └── RecommendViewModel.kt  # 推荐流 UI 状态与当前本地假数据
 ```
 
 ## 推荐页面
 
-`RecommendScreen` 使用本地假数据构建类小红书风格推荐流。
+`RecommendScreen` 收集 `RecommendViewModel` 暴露的 `RecommendUiState`。当前推荐数据仍是本地假数据，后续可替换为 Repository 或网络分页数据。
 
 核心行为：
 
@@ -34,6 +36,12 @@ feature-home/src/main/java/android/template/feature/home/ui/
 - 图片使用 Coil `AsyncImage` 加载网络图片。
 - 图片区域使用固定 `aspectRatio` 和 `surfaceVariant` 占位背景，减少网络图片加载时的布局跳动。
 - 点赞数通过 `formatLikes` 格式化为 `k` 或 `w`。
+
+推荐页面 UI 状态：
+
+- `Loading`：加载中。
+- `Success`：推荐内容列表。
+- `Error`：推荐内容加载失败。
 
 ## 相册页面
 

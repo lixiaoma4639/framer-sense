@@ -89,6 +89,9 @@ dependencies {
 
     // Core Android dependencies (non-UI)
     implementation(libs.androidx.lifecycle.runtime.ktx)
+    implementation(libs.androidx.lifecycle.runtime.compose)
+    implementation(libs.androidx.lifecycle.viewmodel.compose)
+    implementation(libs.androidx.hilt.lifecycle.viewmodel.compose)
 
     // Hilt Dependency Injection
     implementation(libs.hilt.android)
@@ -108,4 +111,7 @@ dependencies {
     androidTestImplementation(libs.hilt.android.testing)
     androidTestImplementation(libs.androidx.test.ext.junit)
     androidTestImplementation(libs.androidx.compose.ui.test.junit4)
+
+    // Local tests
+    testImplementation(libs.junit)
 }

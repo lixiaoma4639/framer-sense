@@ -18,6 +18,7 @@ package android.template.feature.home.ui
 
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.pager.PagerState
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.material3.MaterialTheme
@@ -25,8 +26,7 @@ import androidx.compose.material3.Tab
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.tooling.preview.Preview
@@ -34,9 +34,10 @@ import androidx.compose.ui.unit.dp
 import android.template.core.ui.MyApplicationTheme
 import android.template.feature.home.ui.album.AlbumScreen
 import android.template.feature.home.ui.recommend.RecommendScreen
-import androidx.compose.runtime.collectAsState
 import androidx.compose.material3.SecondaryScrollableTabRow
-import kotlinx.coroutines.launch
+import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import kotlinx.coroutines.flow.distinctUntilChanged
 
 /**
  * 首页 Tab 定义（可扩展）
@@ -59,32 +60,79 @@ enum class HomeTab(val title: String) {
  */
 @Composable
 fun HomeScreen(
+    viewModel: HomeViewModel = hiltViewModel<HomeViewModel>(),
     modifier: Modifier = Modifier
 ) {
-    val pagerState = rememberPagerState(pageCount = { HomeTab.entries.size })
-    val scope = rememberCoroutineScope()
-    val selectedPage by remember(pagerState) {
-        snapshotFlow { pagerState.currentPage }
-    }.collectAsState(initial = pagerState.currentPage)
+    val uiState by viewModel.uiState.collectAsStateWithLifecycle()
 
+    HomeScreenContent(
+        uiState = uiState,
+        onTabSelected = viewModel::onTabSelected,
+        onPageChanged = viewModel::onPageChanged,
+        modifier = modifier
+    )
+}
+
+@Composable
+internal fun HomeScreenContent(
+    uiState: HomeUiState,
+    onTabSelected: (HomeTab) -> Unit,
+    onPageChanged: (Int) -> Unit,
+    recommendContent: @Composable () -> Unit = { RecommendScreen() },
+    albumContent: @Composable () -> Unit = { AlbumScreen() },
+    modifier: Modifier = Modifier
+) {
+    val pagerState = rememberPagerState(
+        initialPage = uiState.selectedTab.ordinal,
+        pageCount = { HomeTab.entries.size }
+    )
+
+    LaunchedEffect(pagerState) {
+        snapshotFlow { pagerState.currentPage }
+            .distinctUntilChanged()
+            .collect(onPageChanged)
+    }
+
+    LaunchedEffect(uiState.selectedTab) {
+        val targetPage = uiState.selectedTab.ordinal
+        if (pagerState.currentPage != targetPage) {
+            pagerState.animateScrollToPage(targetPage)
+        }
+    }
+
+    HomeScreenContent(
+        uiState = uiState,
+        pagerState = pagerState,
+        onTabSelected = onTabSelected,
+        recommendContent = recommendContent,
+        albumContent = albumContent,
+        modifier = modifier
+    )
+}
+
+@Composable
+private fun HomeScreenContent(
+    uiState: HomeUiState,
+    pagerState: PagerState,
+    onTabSelected: (HomeTab) -> Unit,
+    recommendContent: @Composable () -> Unit,
+    albumContent: @Composable () -> Unit,
+    modifier: Modifier = Modifier
+) {
     Column(modifier = modifier.fillMaxSize()) {
         // 顶部 Tab 栏 - 与 Pager 联动
         SecondaryScrollableTabRow(
-            selectedTabIndex = selectedPage,
+            selectedTabIndex = uiState.selectedTab.ordinal,
             containerColor = MaterialTheme.colorScheme.surface,
             contentColor = MaterialTheme.colorScheme.onSurface,
             edgePadding = 16.dp
         ) {
-            HomeTab.entries.forEachIndexed { index, tab ->
-                val selected = selectedPage == index
+            HomeTab.entries.forEach { tab ->
+                val selected = uiState.selectedTab == tab
                 Tab(
                     selected = selected,
                     onClick = {
-                        if (selectedPage != index) {
-                            scope.launch {
-                                pagerState.animateScrollToPage(index)
-                            }
-                        }
+                        onTabSelected(tab)
                     },
                     text = {
                         Text(
@@ -107,8 +155,8 @@ fun HomeScreen(
             modifier = Modifier.fillMaxSize()
         ) { page ->
             when (HomeTab.entries[page]) {
-                HomeTab.ALBUM -> AlbumScreen()
-                HomeTab.RECOMMEND -> RecommendScreen()
+                HomeTab.ALBUM -> albumContent()
+                HomeTab.RECOMMEND -> recommendContent()
             }
         }
     }
@@ -118,6 +166,12 @@ fun HomeScreen(
 @Composable
 private fun HomeScreenPreview() {
     MyApplicationTheme {
-        HomeScreen()
+        HomeScreenContent(
+            uiState = HomeUiState(),
+            onTabSelected = {},
+            onPageChanged = {},
+            recommendContent = { Text("春日限定樱花拍摄攻略") },
+            albumContent = { Text("相册内容") }
+        )
     }
 }
