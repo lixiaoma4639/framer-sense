@@ -31,6 +31,18 @@ data class MainNavigationUiState(
     val showBottomBar: Boolean = myModelRoute == MyModelRoute.MAIN
 }
 
+/**
+ * 这里的 @Inject 是 依赖注入（DI）框架 的核心注解（最常见是 Hilt / Dagger）。
+ * 不用自己写 MainNavigationViewModel()
+ * 不用自己管理对象生命周期
+ * 框架自动帮你实例化、注入、管理。
+ *
+ * ViewModel = 页面数据管家
+ * 屏幕旋转，数据不丢失（最核心功能）
+ * 存放数据、处理业务逻辑
+ * 让页面代码更干净、好维护
+ * 生命周期比页面长，真正退出才销毁
+ */
 @HiltViewModel
 class MainNavigationViewModel @Inject constructor() : ViewModel() {
 
