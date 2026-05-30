@@ -2,14 +2,14 @@
 
 ## 模块概述
 
-`feature-mymodel` 承载底部导航中的“我的”主页、扫一扫说明页、设置页和消息列表页，并按 MVVM 管理主页资料、内容 Tab、扫一扫说明、设置项列表和消息列表。
+`feature-mymodel` 承载底部导航中的“我的”主页、扫一扫说明页、设置页和消息列表页，并按 MVVM 管理主页资料、内容 Tab、扫一扫说明、设置项列表和消息列表。内部页面由 app 层使用 Navigation3 back stack 组织。
 
 底部导航实际使用：
 
 - `MyModelMainScreen()`：我的主页。
-- `ScanScreen()`：我的模块内部扫一扫说明页，由 app 层 `MainNavigation` 控制进入和返回。
-- `SettingsScreen()`：我的模块内部设置页，由 app 层 `MainNavigation` 控制进入和返回。
-- `MessageListScreen()`：我的模块内部消息列表页，由 app 层 `MainNavigation` 控制进入和返回。
+- `ScanScreen()`：我的模块内部扫一扫说明页，由 app 层 `MainNavigation` 通过 Navigation3 控制进入和返回。
+- `SettingsScreen()`：我的模块内部设置页，由 app 层 `MainNavigation` 通过 Navigation3 控制进入和返回。
+- `MessageListScreen()`：我的模块内部消息列表页，由 app 层 `MainNavigation` 通过 Navigation3 控制进入和返回。
 
 模板 MyModel 数据层仍保留在 `core-data`、`core-database`，但当前不再接入“我的”模块 UI。
 
@@ -100,23 +100,23 @@ feature-mymodel/src/main/java/com/framer/sense/feature/mymodel/ui/
 
 ## 导航关系
 
-`MainNavigationViewModel` 持有 `MyModelRoute`：
+`MainNavigationViewModel` 只持有底部 Tab 状态；“我的”内部页面由 app 层 `MainNavigation` 使用 Navigation3 `NavDisplay` 和 `MyModelNavKey` 维护返回栈：
 
 ```kotlin
-enum class MyModelRoute {
-    MAIN,
-    SETTINGS,
-    MESSAGES,
-    SCAN
-}
+sealed interface MyModelNavKey : NavKey
+
+data object Main : MyModelNavKey
+data object Settings : MyModelNavKey
+data object Messages : MyModelNavKey
+data object Scan : MyModelNavKey
 ```
 
-- `MAIN` 渲染 `MyModelMainScreen`。
-- `SETTINGS` 渲染 `SettingsScreen`。
-- `MESSAGES` 渲染 `MessageListScreen`。
-- `SCAN` 渲染 `ScanScreen`。
-- `BackHandler` 在“我的”内部页面启用，用于回到 `MAIN`。
-- 内部页面的 `AnimatedVisibility` 横向滑动动画由 app 层统一 Host 管理，退出动画期间保留上一内部页面内容；后续新增页面只需扩展路由与页面内容配置。
+- `Main` 是内部 back stack 根节点，对应 `MyModelMainScreen`。
+- `Settings` 渲染 `SettingsScreen`。
+- `Messages` 渲染 `MessageListScreen`。
+- `Scan` 渲染 `ScanScreen`。
+- 内部页面返回按钮和系统返回键都通过 Navigation3 `onBack` 出栈。
+- 内部页面的横向滑动动画由 app 层 `NavDisplay` 统一管理；后续新增页面只需扩展 `MyModelNavKey` 与 `entryProvider`。
 
 ## 测试
 

@@ -20,4 +20,16 @@ import androidx.navigation3.runtime.NavKey
 import kotlinx.serialization.Serializable
 
 @Serializable
-data object Main : NavKey
+sealed interface MyModelNavKey : NavKey
+
+@Serializable
+data object Main : MyModelNavKey
+
+@Serializable
+data object Settings : MyModelNavKey
+
+@Serializable
+data object Messages : MyModelNavKey
+
+@Serializable
+data object Scan : MyModelNavKey

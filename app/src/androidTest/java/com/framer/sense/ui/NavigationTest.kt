@@ -62,27 +62,6 @@ class NavigationTest {
                     onTabSelected = { tab ->
                         uiState = uiState.copy(selectedTab = tab)
                     },
-                    onSettingsClick = {
-                        uiState = uiState.copy(
-                            selectedTab = BottomNavTab.MY_MODEL,
-                            myModelRoute = MyModelRoute.SETTINGS
-                        )
-                    },
-                    onMessagesClick = {
-                        uiState = uiState.copy(
-                            selectedTab = BottomNavTab.MY_MODEL,
-                            myModelRoute = MyModelRoute.MESSAGES
-                        )
-                    },
-                    onScanClick = {
-                        uiState = uiState.copy(
-                            selectedTab = BottomNavTab.MY_MODEL,
-                            myModelRoute = MyModelRoute.SCAN
-                        )
-                    },
-                    onMyModelInternalBack = {
-                        uiState = uiState.copy(myModelRoute = MyModelRoute.MAIN)
-                    },
                     homeContent = {
                         Column {
                             Text("推荐")

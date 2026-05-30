@@ -27,7 +27,6 @@ class MainNavigationViewModelTest {
         val viewModel = MainNavigationViewModel()
 
         assertEquals(BottomNavTab.HOME, viewModel.uiState.value.selectedTab)
-        assertEquals(MyModelRoute.MAIN, viewModel.uiState.value.myModelRoute)
         assertTrue(viewModel.uiState.value.showBottomBar)
     }
 
@@ -41,50 +40,12 @@ class MainNavigationViewModelTest {
     }
 
     @Test
-    fun settingsRoute_keepsBottomBarStateAndInternalBackReturnsMain() {
+    fun onTabSelected_keepsBottomBarState() {
         val viewModel = MainNavigationViewModel()
 
-        viewModel.onSettingsClick()
+        viewModel.onTabSelected(BottomNavTab.CAMERA)
 
-        assertEquals(BottomNavTab.MY_MODEL, viewModel.uiState.value.selectedTab)
-        assertEquals(MyModelRoute.SETTINGS, viewModel.uiState.value.myModelRoute)
-        assertTrue(viewModel.uiState.value.showBottomBar)
-
-        viewModel.onMyModelInternalBack()
-
-        assertEquals(MyModelRoute.MAIN, viewModel.uiState.value.myModelRoute)
-        assertTrue(viewModel.uiState.value.showBottomBar)
-    }
-
-    @Test
-    fun messagesRoute_keepsBottomBarStateAndInternalBackReturnsMain() {
-        val viewModel = MainNavigationViewModel()
-
-        viewModel.onMessagesClick()
-
-        assertEquals(BottomNavTab.MY_MODEL, viewModel.uiState.value.selectedTab)
-        assertEquals(MyModelRoute.MESSAGES, viewModel.uiState.value.myModelRoute)
-        assertTrue(viewModel.uiState.value.showBottomBar)
-
-        viewModel.onMyModelInternalBack()
-
-        assertEquals(MyModelRoute.MAIN, viewModel.uiState.value.myModelRoute)
-        assertTrue(viewModel.uiState.value.showBottomBar)
-    }
-
-    @Test
-    fun scanRoute_keepsBottomBarStateAndInternalBackReturnsMain() {
-        val viewModel = MainNavigationViewModel()
-
-        viewModel.onScanClick()
-
-        assertEquals(BottomNavTab.MY_MODEL, viewModel.uiState.value.selectedTab)
-        assertEquals(MyModelRoute.SCAN, viewModel.uiState.value.myModelRoute)
-        assertTrue(viewModel.uiState.value.showBottomBar)
-
-        viewModel.onMyModelInternalBack()
-
-        assertEquals(MyModelRoute.MAIN, viewModel.uiState.value.myModelRoute)
+        assertEquals(BottomNavTab.CAMERA, viewModel.uiState.value.selectedTab)
         assertTrue(viewModel.uiState.value.showBottomBar)
     }
 }

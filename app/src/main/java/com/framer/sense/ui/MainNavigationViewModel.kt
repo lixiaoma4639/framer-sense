@@ -25,8 +25,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 
 data class MainNavigationUiState(
-    val selectedTab: BottomNavTab = BottomNavTab.HOME,
-    val myModelRoute: MyModelRoute = MyModelRoute.MAIN
+    val selectedTab: BottomNavTab = BottomNavTab.HOME
 ) {
     val showBottomBar: Boolean = true
 }
@@ -52,33 +51,6 @@ class MainNavigationViewModel @Inject constructor() : ViewModel() {
     fun onTabSelected(tab: BottomNavTab) {
         _uiState.update { state ->
             if (state.selectedTab == tab) state else state.copy(selectedTab = tab)
-        }
-    }
-
-    fun onSettingsClick() {
-        openMyModelRoute(MyModelRoute.SETTINGS)
-    }
-
-    fun onMessagesClick() {
-        openMyModelRoute(MyModelRoute.MESSAGES)
-    }
-
-    fun onScanClick() {
-        openMyModelRoute(MyModelRoute.SCAN)
-    }
-
-    fun onMyModelInternalBack() {
-        _uiState.update { state ->
-            state.copy(myModelRoute = MyModelRoute.MAIN)
-        }
-    }
-
-    private fun openMyModelRoute(route: MyModelRoute) {
-        _uiState.update { state ->
-            state.copy(
-                selectedTab = BottomNavTab.MY_MODEL,
-                myModelRoute = route
-            )
         }
     }
 }

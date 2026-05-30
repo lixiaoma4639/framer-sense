@@ -86,6 +86,7 @@ dependencies {
     implementation(project(":feature-home"))
     implementation(project(":feature-camera-pytorch"))
     implementation(project(":feature-mymodel"))
+    implementation(project(":feature-mymodel-navigation"))
 
     // Core Android dependencies (non-UI)
     implementation(libs.androidx.lifecycle.runtime.ktx)

@@ -71,7 +71,7 @@ Framer_Sense 是一个基于 Android 官方多模块架构模板演进而来的 
 
 | 模块 | 当前状态 |
 | --- | --- |
-| `feature-mymodel-navigation` | 定义 Navigation3 `NavKey`，保留模板式路由能力。 |
+| `feature-mymodel-navigation` | 定义“我的”模块内部 Navigation3 `NavKey`，供 app 层组装内部返回栈。 |
 | `feature-home-navigation` | 首页导航能力预留模块。 |
 | `feature-camera-navigation` | 拍照导航能力预留模块。 |
 
@@ -100,7 +100,7 @@ MyApplication
 | 拍照 | `CameraScreen()` |
 | 我的 | `MyModelMainScreen()` |
 
-底部导航状态不会因“我的”模块内部页面而移除。当用户进入“我的 -> 扫一扫”“我的 -> 设置”或“我的 -> 消息”页面时，内部页面作为全屏覆盖层盖住上一页全部内容，物理返回键会返回我的主页。主导航状态由 ViewModel 管理，Compose 侧仅保留 `rememberSaveableStateHolder` 用于保存各 Tab 页面状态。
+底部导航状态不会因“我的”模块内部页面而移除。当用户进入“我的 -> 扫一扫”“我的 -> 设置”或“我的 -> 消息”页面时，app 层使用 Navigation3 `NavDisplay` 和 `MyModelNavKey` 维护内部返回栈，内部页面作为全屏覆盖层盖住上一页全部内容，物理返回键会从 Navigation3 back stack 返回我的主页。主导航 ViewModel 只管理底部 Tab 状态，Compose 侧使用 `rememberSaveableStateHolder` 保存各 Tab 页面状态。
 
 ### 首页模块
 

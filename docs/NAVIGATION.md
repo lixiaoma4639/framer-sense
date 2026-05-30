@@ -18,7 +18,7 @@
 - 当前底部 Tab 使用可保存状态保存，配置变化或重组后尽量保持原选中状态。
 - 点击已选中的底部 Tab 会被忽略，避免重复触发页面重组。
 - 每个底部 Tab 的页面状态通过保存状态容器保留，减少来回切换时的状态丢失。
-- 用户进入“我的 -> 扫一扫”“我的 -> 设置”或“我的 -> 消息”时不从状态中移除底部导航，内部页面作为全屏覆盖层盖住上一页全部内容；从内部页面返回时恢复“我的”主页。
+- 用户进入“我的 -> 扫一扫”“我的 -> 设置”或“我的 -> 消息”时不从状态中移除底部导航，内部页面通过 Navigation3 `NavDisplay` 作为全屏覆盖层盖住上一页全部内容；从内部页面返回时从内部 back stack 出栈并恢复“我的”主页。
 
 ## 底部 Tab 定义
 
@@ -30,27 +30,27 @@ enum class BottomNavTab(val label: String, val icon: ImageVector) {
 }
 ```
 
-## 我的模块内部路由
+## 我的模块内部导航
 
-“我的”模块内部使用 `MyModelRoute` 管理主页、设置页、消息列表页和扫一扫页：
+“我的”模块内部使用 `feature-mymodel-navigation` 中的 `MyModelNavKey` 定义 Navigation3 路由键：
 
 ```kotlin
-enum class MyModelRoute {
-    MAIN,
-    SETTINGS,
-    MESSAGES,
-    SCAN
-}
+sealed interface MyModelNavKey : NavKey
+
+data object Main : MyModelNavKey
+data object Settings : MyModelNavKey
+data object Messages : MyModelNavKey
+data object Scan : MyModelNavKey
 ```
 
 行为规则：
 
-- `MAIN` 显示 `MyModelMainScreen`，底部导航可见。
-- `SETTINGS` 显示全屏覆盖的 `SettingsScreen`。
-- `MESSAGES` 显示全屏覆盖的 `MessageListScreen`。
-- `SCAN` 显示全屏覆盖的 `ScanScreen`。
-- 内部页面点击返回按钮或系统返回键都会回到 `MAIN`。
-- 主页和内部页面之间使用横向滑动动画切换，动画和返回处理由 app 层统一 Host 管理；退出动画期间保留上一内部页面内容，避免直接消失。
+- `Main` 是内部返回栈根节点，对应底部 Tab 中的 `MyModelMainScreen`。
+- `Settings` 显示全屏覆盖的 `SettingsScreen`。
+- `Messages` 显示全屏覆盖的 `MessageListScreen`。
+- `Scan` 显示全屏覆盖的 `ScanScreen`。
+- 内部页面点击返回按钮或系统返回键都会从 Navigation3 back stack 出栈。
+- 主页和内部页面之间使用 `NavDisplay` 横向滑动动画切换；页面级 `ViewModel` 通过 Navigation3 entry decorator 绑定到对应 `NavEntry`。
 
 ## 模块说明
 
@@ -73,9 +73,9 @@ enum class MyModelRoute {
 - 入口：`MyModelMainScreen()`
 - 包含顶部操作栏、个人信息区、内容 Tab、扫一扫入口、消息入口和设置入口。
 - 内容 Tab 顺序：`作品`、`点赞`、`收藏`、`评论`。
-- 扫一扫入口由 app 层 `MainNavigation` 切换到 `ScanScreen`。
-- 设置入口由 app 层 `MainNavigation` 切换到 `SettingsScreen`。
-- 消息入口由 app 层 `MainNavigation` 切换到 `MessageListScreen`。
+- 扫一扫入口由 app 层 `MainNavigation` 将 `Scan` 压入 Navigation3 内部 back stack。
+- 设置入口由 app 层 `MainNavigation` 将 `Settings` 压入 Navigation3 内部 back stack。
+- 消息入口由 app 层 `MainNavigation` 将 `Messages` 压入 Navigation3 内部 back stack。
 
 ## 测试
 
