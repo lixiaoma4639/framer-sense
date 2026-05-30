@@ -22,7 +22,7 @@ plugins {
 }
 
 android {
-    namespace = "android.template.core.testing"
+    namespace = "com.framer.sense.core.testing"
     compileSdk = 36
 
     defaultConfig {

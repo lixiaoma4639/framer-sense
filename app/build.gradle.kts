@@ -24,17 +24,17 @@ plugins {
 }
 
 android {
-    namespace = "android.template"
+    namespace = "com.framer.sense"
     compileSdk = 36
 
     defaultConfig {
-        applicationId = "android.template"
+        applicationId = "com.framer.sense"
         minSdk = 24
         targetSdk = 36
         versionCode = 1
         versionName = "1.0"
 
-        testInstrumentationRunner = "android.template.core.testing.HiltTestRunner"
+        testInstrumentationRunner = "com.framer.sense.core.testing.HiltTestRunner"
 
         vectorDrawables {
             useSupportLibrary = true

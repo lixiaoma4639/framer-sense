@@ -22,7 +22,7 @@ plugins {
 }
 
 android {
-    namespace = "android.template.feature.camera"
+    namespace = "com.framer.sense.feature.camera"
     compileSdk = 36
 
     defaultConfig {

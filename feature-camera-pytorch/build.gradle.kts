@@ -22,7 +22,7 @@ plugins {
 }
 
 android {
-    namespace = "android.template.feature.camera.pytorch"
+    namespace = "com.framer.sense.feature.camera.pytorch"
     compileSdk = 36
 
     defaultConfig {

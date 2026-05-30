@@ -24,13 +24,13 @@ plugins {
 }
 
 android {
-    namespace = "android.template.feature.mymodel"
+    namespace = "com.framer.sense.feature.mymodel"
     compileSdk = 36
 
     defaultConfig {
         minSdk = 23
 
-        testInstrumentationRunner = "android.template.core.testing.HiltTestRunner"
+        testInstrumentationRunner = "com.framer.sense.core.testing.HiltTestRunner"
         consumerProguardFiles("consumer-rules.pro")
     }
 

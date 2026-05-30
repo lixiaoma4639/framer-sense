@@ -24,7 +24,7 @@ plugins {
 }
 
 android {
-    namespace = "android.template.test.navigation"
+    namespace = "com.framer.sense.test.app"
     compileSdk = 36
     targetProjectPath = ":app"
 
@@ -32,7 +32,7 @@ android {
         minSdk = 24
         targetSdk = 36
 
-        testInstrumentationRunner = "android.template.core.testing.HiltTestRunner"
+        testInstrumentationRunner = "com.framer.sense.core.testing.HiltTestRunner"
     }
 
     buildFeatures {

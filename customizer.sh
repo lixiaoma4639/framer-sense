@@ -33,6 +33,8 @@ fi
 PACKAGE=$1
 DATAMODEL=$2
 APPNAME=$3
+BASE_PACKAGE=com.framer.sense
+BASE_SUBDIR=${BASE_PACKAGE//.//}
 SUBDIR=${PACKAGE//.//} # Replaces . with /
 
 for n in $(find . -type d \( -path '*/src/androidTest' -or -path '*/src/main' -or -path '*/src/test' \) )
@@ -40,18 +42,18 @@ do
   echo "Creating $n/java/$SUBDIR"
   mkdir -p $n/java/$SUBDIR
   echo "Moving files to $n/java/$SUBDIR"
-  mv $n/java/android/template/* $n/java/$SUBDIR
-  echo "Removing old $n/java/android/template"
-rm -rf $n/java/android
+  mv $n/java/$BASE_SUBDIR/* $n/java/$SUBDIR
+  echo "Removing old $n/java/$BASE_SUBDIR"
+  rmdir -p $n/java/$BASE_SUBDIR 2>/dev/null || true
 done
 
 # Rename package and imports
 echo "Renaming packages to $PACKAGE"
-find ./ -type f -name "*.kt" -exec sed -i.bak "s/package android.template/package $PACKAGE/g" {} \;
-find ./ -type f -name "*.kt" -exec sed -i.bak "s/import android.template/import $PACKAGE/g" {} \;
+find ./ -type f -name "*.kt" -exec sed -i.bak "s/package $BASE_PACKAGE/package $PACKAGE/g" {} \;
+find ./ -type f -name "*.kt" -exec sed -i.bak "s/import $BASE_PACKAGE/import $PACKAGE/g" {} \;
 
 # Gradle files
-find ./ -type f -name "*.kts" -exec sed -i.bak "s/android.template/$PACKAGE/g" {} \;
+find ./ -type f -name "*.kts" -exec sed -i.bak "s/$BASE_PACKAGE/$PACKAGE/g" {} \;
 
 # Rename model
 echo "Renaming model to $DATAMODEL"

@@ -20,6 +20,8 @@ Framer_Sense 是一个基于 Android 官方多模块架构模板演进而来的 
 | 相机与端侧 AI | CameraX、ONNX Runtime、SSD MobileNet ONNX、ML Kit 旧方案保留 |
 | 测试 | JUnit、Compose UI Test、Android Instrumented Test、Hilt Test |
 
+当前源码基准包名和 app `applicationId` 为 `com.framer.sense`。各 module 的 Gradle `namespace` 默认以 `com.framer.sense` 为前缀，并按模块边界追加 `core.*`、`feature.*`、`test.*` 等后缀。
+
 当前应用主体验是一个三栏底部导航 App：
 
 - 首页：推荐流和系统相册。

@@ -22,7 +22,7 @@ plugins {
 }
 
 android {
-    namespace = "android.template.core.ui"
+    namespace = "com.framer.sense.core.ui"
     compileSdk = 36
 
     defaultConfig {

@@ -24,7 +24,7 @@ plugins {
 }
 
 android {
-    namespace = "android.template.feature.home"
+    namespace = "com.framer.sense.feature.home"
     compileSdk = 36
 
     defaultConfig {
