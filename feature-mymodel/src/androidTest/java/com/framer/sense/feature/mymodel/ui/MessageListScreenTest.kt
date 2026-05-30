@@ -20,25 +20,25 @@ import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
-import com.framer.sense.feature.mymodel.ui.setting.SettingsScreenContent
-import com.framer.sense.feature.mymodel.ui.setting.SettingsUiState
+import com.framer.sense.feature.mymodel.ui.message.MessageListScreenContent
+import com.framer.sense.feature.mymodel.ui.message.MessageListUiState
 import org.junit.Rule
 import org.junit.Test
 
-class SettingsScreenTest {
+class MessageListScreenTest {
 
     @get:Rule
     val composeTestRule = createComposeRule()
 
     @Test
-    fun settingsScreen_displaysTitleBackButtonAndItems() {
+    fun messageListScreen_displaysTitleBackButtonAndMessages() {
         composeTestRule.setContent {
-            SettingsScreenContent(uiState = SettingsUiState())
+            MessageListScreenContent(uiState = MessageListUiState())
         }
 
-        composeTestRule.onNodeWithText("设置").assertIsDisplayed()
+        composeTestRule.onNodeWithText("消息").assertIsDisplayed()
         composeTestRule.onNodeWithContentDescription("返回").assertIsDisplayed()
-        composeTestRule.onNodeWithText("隐私条款").assertIsDisplayed()
-        composeTestRule.onNodeWithText("应用权限").assertIsDisplayed()
+        composeTestRule.onNodeWithText("系统通知").assertIsDisplayed()
+        composeTestRule.onNodeWithText("欢迎使用 Framer Sense，开始记录你的灵感瞬间。").assertIsDisplayed()
     }
 }

@@ -28,7 +28,7 @@ data class MainNavigationUiState(
     val selectedTab: BottomNavTab = BottomNavTab.HOME,
     val myModelRoute: MyModelRoute = MyModelRoute.MAIN
 ) {
-    val showBottomBar: Boolean = myModelRoute == MyModelRoute.MAIN
+    val showBottomBar: Boolean = true
 }
 
 /**
@@ -56,17 +56,29 @@ class MainNavigationViewModel @Inject constructor() : ViewModel() {
     }
 
     fun onSettingsClick() {
+        openMyModelRoute(MyModelRoute.SETTINGS)
+    }
+
+    fun onMessagesClick() {
+        openMyModelRoute(MyModelRoute.MESSAGES)
+    }
+
+    fun onScanClick() {
+        openMyModelRoute(MyModelRoute.SCAN)
+    }
+
+    fun onMyModelInternalBack() {
         _uiState.update { state ->
-            state.copy(
-                selectedTab = BottomNavTab.MY_MODEL,
-                myModelRoute = MyModelRoute.SETTINGS
-            )
+            state.copy(myModelRoute = MyModelRoute.MAIN)
         }
     }
 
-    fun onSettingsBack() {
+    private fun openMyModelRoute(route: MyModelRoute) {
         _uiState.update { state ->
-            state.copy(myModelRoute = MyModelRoute.MAIN)
+            state.copy(
+                selectedTab = BottomNavTab.MY_MODEL,
+                myModelRoute = route
+            )
         }
     }
 }

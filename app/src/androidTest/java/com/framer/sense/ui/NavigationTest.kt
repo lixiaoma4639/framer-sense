@@ -68,7 +68,19 @@ class NavigationTest {
                             myModelRoute = MyModelRoute.SETTINGS
                         )
                     },
-                    onSettingsBack = {
+                    onMessagesClick = {
+                        uiState = uiState.copy(
+                            selectedTab = BottomNavTab.MY_MODEL,
+                            myModelRoute = MyModelRoute.MESSAGES
+                        )
+                    },
+                    onScanClick = {
+                        uiState = uiState.copy(
+                            selectedTab = BottomNavTab.MY_MODEL,
+                            myModelRoute = MyModelRoute.SCAN
+                        )
+                    },
+                    onMyModelInternalBack = {
                         uiState = uiState.copy(myModelRoute = MyModelRoute.MAIN)
                     },
                     homeContent = {
@@ -80,10 +92,22 @@ class NavigationTest {
                     cameraContent = {
                         Text("AI 构图引导")
                     },
-                    myModelContent = { onSettingsClick ->
+                    myModelContent = { onSettingsClick, onMessagesClick, onScanClick ->
                         Column {
                             Text("我的")
                             Text("用户名称")
+                            Text(
+                                text = "扫一扫",
+                                modifier = Modifier
+                                    .semantics { contentDescription = "扫一扫" }
+                                    .clickable(onClick = onScanClick)
+                            )
+                            Text(
+                                text = "消息",
+                                modifier = Modifier
+                                    .semantics { contentDescription = "消息" }
+                                    .clickable(onClick = onMessagesClick)
+                            )
                             Text(
                                 text = "设置",
                                 modifier = Modifier
@@ -96,6 +120,30 @@ class NavigationTest {
                         Column {
                             Text("设置")
                             Text("隐私条款")
+                            Text(
+                                text = "返回",
+                                modifier = Modifier
+                                    .semantics { contentDescription = "返回" }
+                                    .clickable(onClick = onBackClick)
+                            )
+                        }
+                    },
+                    messageListContent = { onBackClick ->
+                        Column {
+                            Text("消息")
+                            Text("系统通知")
+                            Text(
+                                text = "返回",
+                                modifier = Modifier
+                                    .semantics { contentDescription = "返回" }
+                                    .clickable(onClick = onBackClick)
+                            )
+                        }
+                    },
+                    scanContent = { onBackClick ->
+                        Column {
+                            Text("扫一扫")
+                            Text("扫码功能入口")
                             Text(
                                 text = "返回",
                                 modifier = Modifier
@@ -179,12 +227,35 @@ class NavigationTest {
     }
 
     @Test
-    fun clickSettings_hidesBottomBarAndBackReturnsProfileScreen() {
+    fun clickSettings_showsFullScreenPageAndBackReturnsProfileScreen() {
         composeTestRule.onNodeWithTag("bottom_tab_MY_MODEL").performClick()
         composeTestRule.onNodeWithContentDescription("设置").performClick()
 
         composeTestRule.onNodeWithText("隐私条款").assertIsDisplayed()
-        composeTestRule.onNodeWithText("首页").assertDoesNotExist()
+
+        composeTestRule.onNodeWithContentDescription("返回").performClick()
+        composeTestRule.onNodeWithText("用户名称").assertIsDisplayed()
+        composeTestRule.onNodeWithText("首页").assertIsDisplayed()
+    }
+
+    @Test
+    fun clickScan_showsFullScreenPageAndBackReturnsProfileScreen() {
+        composeTestRule.onNodeWithTag("bottom_tab_MY_MODEL").performClick()
+        composeTestRule.onNodeWithContentDescription("扫一扫").performClick()
+
+        composeTestRule.onNodeWithText("扫码功能入口").assertIsDisplayed()
+
+        composeTestRule.onNodeWithContentDescription("返回").performClick()
+        composeTestRule.onNodeWithText("用户名称").assertIsDisplayed()
+        composeTestRule.onNodeWithText("首页").assertIsDisplayed()
+    }
+
+    @Test
+    fun clickMessages_showsFullScreenPageAndBackReturnsProfileScreen() {
+        composeTestRule.onNodeWithTag("bottom_tab_MY_MODEL").performClick()
+        composeTestRule.onNodeWithContentDescription("消息").performClick()
+
+        composeTestRule.onNodeWithText("系统通知").assertIsDisplayed()
 
         composeTestRule.onNodeWithContentDescription("返回").performClick()
         composeTestRule.onNodeWithText("用户名称").assertIsDisplayed()

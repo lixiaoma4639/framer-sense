@@ -78,6 +78,8 @@ enum class MyModelTab(val title: String) {
 @Composable
 fun MyModelMainScreen(
     onSettingsClick: () -> Unit = {},
+    onMessagesClick: () -> Unit = {},
+    onScanClick: () -> Unit = {},
     viewModel: MyModelMainViewModel = hiltViewModel<MyModelMainViewModel>(),
     modifier: Modifier = Modifier
 ) {
@@ -88,6 +90,8 @@ fun MyModelMainScreen(
         onTabSelected = viewModel::onTabSelected,
         onPageChanged = viewModel::onPageChanged,
         onSettingsClick = onSettingsClick,
+        onMessagesClick = onMessagesClick,
+        onScanClick = onScanClick,
         modifier = modifier
     )
 }
@@ -98,6 +102,8 @@ internal fun MyModelMainContent(
     onTabSelected: (MyModelTab) -> Unit,
     onPageChanged: (Int) -> Unit,
     onSettingsClick: () -> Unit = {},
+    onMessagesClick: () -> Unit = {},
+    onScanClick: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val pagerState = rememberPagerState(
@@ -123,6 +129,8 @@ internal fun MyModelMainContent(
         pagerState = pagerState,
         onTabSelected = onTabSelected,
         onSettingsClick = onSettingsClick,
+        onMessagesClick = onMessagesClick,
+        onScanClick = onScanClick,
         modifier = modifier
     )
 }
@@ -133,11 +141,17 @@ private fun MyModelMainContent(
     pagerState: PagerState,
     onTabSelected: (MyModelTab) -> Unit,
     onSettingsClick: () -> Unit,
+    onMessagesClick: () -> Unit,
+    onScanClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     Column(modifier = modifier.fillMaxSize()) {
         // 顶部标题栏 - 右侧向左：设置、消息、扫一扫
-        TopActionBar(onSettingsClick = onSettingsClick)
+        TopActionBar(
+            onSettingsClick = onSettingsClick,
+            onMessagesClick = onMessagesClick,
+            onScanClick = onScanClick
+        )
 
         // 个人信息区
         ProfileSection(profile = uiState.profile)
@@ -162,7 +176,11 @@ private fun MyModelMainContent(
  * 顶部操作栏 - 右侧向左依次为：设置、消息、扫一扫
  */
 @Composable
-private fun TopActionBar(onSettingsClick: () -> Unit) {
+private fun TopActionBar(
+    onSettingsClick: () -> Unit,
+    onMessagesClick: () -> Unit,
+    onScanClick: () -> Unit
+) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -171,7 +189,7 @@ private fun TopActionBar(onSettingsClick: () -> Unit) {
         verticalAlignment = Alignment.CenterVertically
     ) {
         // 扫一扫
-        IconButton(onClick = { /* TODO */ }) {
+        IconButton(onClick = onScanClick) {
             Icon(
                 imageVector = Icons.Default.QrCodeScanner,
                 contentDescription = "扫一扫",
@@ -179,7 +197,7 @@ private fun TopActionBar(onSettingsClick: () -> Unit) {
             )
         }
         // 消息
-        IconButton(onClick = { /* TODO */ }) {
+        IconButton(onClick = onMessagesClick) {
             Icon(
                 imageVector = Icons.Default.Notifications,
                 contentDescription = "消息",

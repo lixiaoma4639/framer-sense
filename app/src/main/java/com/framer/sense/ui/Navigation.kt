@@ -29,16 +29,22 @@ import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.activity.compose.BackHandler
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveableStateHolder
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.testTag
 import com.framer.sense.feature.camera.pytorch.ui.CameraScreen
 import com.framer.sense.feature.home.ui.HomeScreen
+import com.framer.sense.feature.mymodel.ui.message.MessageListScreen
 import com.framer.sense.feature.mymodel.ui.MyModelMainScreen
-import com.framer.sense.feature.mymodel.ui.SettingsScreen
+import com.framer.sense.feature.mymodel.ui.scan.ScanScreen
+import com.framer.sense.feature.mymodel.ui.setting.SettingsScreen
 import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Person
@@ -63,7 +69,9 @@ enum class BottomNavTab(
  */
 enum class MyModelRoute {
     MAIN,
-    SETTINGS
+    SETTINGS,
+    MESSAGES,
+    SCAN
 }
 
 /**
@@ -81,7 +89,9 @@ fun MainNavigation(
         uiState = uiState,
         onTabSelected = viewModel::onTabSelected,
         onSettingsClick = viewModel::onSettingsClick,
-        onSettingsBack = viewModel::onSettingsBack
+        onMessagesClick = viewModel::onMessagesClick,
+        onScanClick = viewModel::onScanClick,
+        onMyModelInternalBack = viewModel::onMyModelInternalBack
     )
 }
 
@@ -90,29 +100,39 @@ internal fun MainNavigationContent(
     uiState: MainNavigationUiState,
     onTabSelected: (BottomNavTab) -> Unit,
     onSettingsClick: () -> Unit,
-    onSettingsBack: () -> Unit,
+    onMessagesClick: () -> Unit,
+    onScanClick: () -> Unit,
+    onMyModelInternalBack: () -> Unit,
     homeContent: @Composable () -> Unit = { HomeScreen() },
     cameraContent: @Composable () -> Unit = { CameraScreen() },
-    myModelContent: @Composable (() -> Unit) -> Unit = { onClick ->
-        MyModelMainScreen(onSettingsClick = onClick)
+    myModelContent: @Composable (
+        onSettingsClick: () -> Unit,
+        onMessagesClick: () -> Unit,
+        onScanClick: () -> Unit
+    ) -> Unit = { onClickSettings, onClickMessages, onClickScan ->
+        MyModelMainScreen(
+            onSettingsClick = onClickSettings,
+            onMessagesClick = onClickMessages,
+            onScanClick = onClickScan
+        )
     },
     settingsContent: @Composable (() -> Unit) -> Unit = { onBackClick ->
         SettingsScreen(onBackClick = onBackClick)
+    },
+    messageListContent: @Composable (() -> Unit) -> Unit = { onBackClick ->
+        MessageListScreen(onBackClick = onBackClick)
+    },
+    scanContent: @Composable (() -> Unit) -> Unit = { onBackClick ->
+        ScanScreen(onBackClick = onBackClick)
     },
     modifier: Modifier = Modifier
 ) {
     val tabStateHolder = rememberSaveableStateHolder()
 
-    // 设置页面时拦截物理返回键，返回我的主页而非退出App
-    BackHandler(enabled = uiState.myModelRoute == MyModelRoute.SETTINGS) {
-        onSettingsBack()
-    }
-
     Box(modifier = modifier.fillMaxSize()) {
         // 主内容：外层 Scaffold 提供底部导航栏
         Scaffold(
             bottomBar = {
-                // 设置页面时隐藏底部导航栏
                 if (uiState.showBottomBar) {
                     NavigationBar {
                         BottomNavTab.entries.forEach { tab ->
@@ -139,19 +159,59 @@ internal fun MainNavigationContent(
                     when (uiState.selectedTab) {
                         BottomNavTab.HOME -> homeContent()
                         BottomNavTab.CAMERA -> cameraContent()
-                        BottomNavTab.MY_MODEL -> myModelContent(onSettingsClick)
+                        BottomNavTab.MY_MODEL -> myModelContent(
+                            onSettingsClick,
+                            onMessagesClick,
+                            onScanClick
+                        )
                     }
                 }
             }
         }
 
-        // 设置页面：独立全屏页面，自行处理状态栏 insets
-        AnimatedVisibility(
-            visible = uiState.myModelRoute == MyModelRoute.SETTINGS,
-            enter = slideInHorizontally { fullWidth -> fullWidth },
-            exit = slideOutHorizontally { fullWidth -> fullWidth }
-        ) {
-            settingsContent(onSettingsBack)
+        MyModelInternalPageHost(
+            route = uiState.myModelRoute,
+            onBack = onMyModelInternalBack,
+            settingsContent = settingsContent,
+            messageListContent = messageListContent,
+            scanContent = scanContent
+        )
+    }
+}
+
+@Composable
+private fun MyModelInternalPageHost(
+    route: MyModelRoute,
+    onBack: () -> Unit,
+    settingsContent: @Composable (() -> Unit) -> Unit,
+    messageListContent: @Composable (() -> Unit) -> Unit,
+    scanContent: @Composable (() -> Unit) -> Unit
+) {
+    val visible = route != MyModelRoute.MAIN
+    var lastVisibleRoute by remember { mutableStateOf(MyModelRoute.SETTINGS) }
+
+    LaunchedEffect(route) {
+        if (route != MyModelRoute.MAIN) {
+            lastVisibleRoute = route
+        }
+    }
+
+    // 我的模块内部页面时拦截物理返回键，返回我的主页而非退出 App。
+    BackHandler(enabled = visible) {
+        onBack()
+    }
+
+    AnimatedVisibility(
+        modifier = Modifier.fillMaxSize(),
+        visible = visible,
+        enter = slideInHorizontally { fullWidth -> fullWidth },
+        exit = slideOutHorizontally { fullWidth -> fullWidth }
+    ) {
+        when (val contentRoute = if (visible) route else lastVisibleRoute) {
+            MyModelRoute.MAIN -> Box(modifier = Modifier.fillMaxSize())
+            MyModelRoute.SETTINGS -> settingsContent(onBack)
+            MyModelRoute.MESSAGES -> messageListContent(onBack)
+            MyModelRoute.SCAN -> scanContent(onBack)
         }
     }
 }
@@ -163,10 +223,14 @@ private fun MainNavigationPreview() {
         uiState = MainNavigationUiState(),
         onTabSelected = {},
         onSettingsClick = {},
-        onSettingsBack = {},
+        onMessagesClick = {},
+        onScanClick = {},
+        onMyModelInternalBack = {},
         homeContent = { Text("推荐") },
         cameraContent = { Text("AI 构图引导") },
-        myModelContent = { Text("用户名称") },
-        settingsContent = { Text("设置") }
+        myModelContent = { _, _, _ -> Text("用户名称") },
+        settingsContent = { Text("设置") },
+        messageListContent = { Text("消息") },
+        scanContent = { Text("扫一扫") }
     )
 }

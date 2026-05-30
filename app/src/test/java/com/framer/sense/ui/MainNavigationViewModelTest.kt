@@ -17,7 +17,6 @@
 package com.framer.sense.ui
 
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -42,16 +41,48 @@ class MainNavigationViewModelTest {
     }
 
     @Test
-    fun settingsRoute_hidesBottomBarAndBackReturnsMain() {
+    fun settingsRoute_keepsBottomBarStateAndInternalBackReturnsMain() {
         val viewModel = MainNavigationViewModel()
 
         viewModel.onSettingsClick()
 
         assertEquals(BottomNavTab.MY_MODEL, viewModel.uiState.value.selectedTab)
         assertEquals(MyModelRoute.SETTINGS, viewModel.uiState.value.myModelRoute)
-        assertFalse(viewModel.uiState.value.showBottomBar)
+        assertTrue(viewModel.uiState.value.showBottomBar)
 
-        viewModel.onSettingsBack()
+        viewModel.onMyModelInternalBack()
+
+        assertEquals(MyModelRoute.MAIN, viewModel.uiState.value.myModelRoute)
+        assertTrue(viewModel.uiState.value.showBottomBar)
+    }
+
+    @Test
+    fun messagesRoute_keepsBottomBarStateAndInternalBackReturnsMain() {
+        val viewModel = MainNavigationViewModel()
+
+        viewModel.onMessagesClick()
+
+        assertEquals(BottomNavTab.MY_MODEL, viewModel.uiState.value.selectedTab)
+        assertEquals(MyModelRoute.MESSAGES, viewModel.uiState.value.myModelRoute)
+        assertTrue(viewModel.uiState.value.showBottomBar)
+
+        viewModel.onMyModelInternalBack()
+
+        assertEquals(MyModelRoute.MAIN, viewModel.uiState.value.myModelRoute)
+        assertTrue(viewModel.uiState.value.showBottomBar)
+    }
+
+    @Test
+    fun scanRoute_keepsBottomBarStateAndInternalBackReturnsMain() {
+        val viewModel = MainNavigationViewModel()
+
+        viewModel.onScanClick()
+
+        assertEquals(BottomNavTab.MY_MODEL, viewModel.uiState.value.selectedTab)
+        assertEquals(MyModelRoute.SCAN, viewModel.uiState.value.myModelRoute)
+        assertTrue(viewModel.uiState.value.showBottomBar)
+
+        viewModel.onMyModelInternalBack()
 
         assertEquals(MyModelRoute.MAIN, viewModel.uiState.value.myModelRoute)
         assertTrue(viewModel.uiState.value.showBottomBar)

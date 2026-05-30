@@ -26,7 +26,7 @@ Framer_Sense 是一个基于 Android 官方多模块架构模板演进而来的 
 
 - 首页：推荐流和系统相册。
 - 拍照：CameraX 实时预览、ONNX Runtime 端侧构图引导和拍摄保存到系统相册。
-- 我的：个人主页、内容 Tab 和设置页。
+- 我的：个人主页、内容 Tab、扫一扫说明页、消息列表页和设置页。
 
 非拍照模块当前按 MVVM 组织：Composable 负责渲染和事件转发，ViewModel 持有页面 UI 状态。模板中的 MyModel Repository/Room 数据层仍保留在 `core-data`、`core-database`，但不再接入底部导航中的“我的”主页。
 
@@ -63,7 +63,7 @@ Framer_Sense 是一个基于 Android 官方多模块架构模板演进而来的 
 | `feature-home` | 首页模块，包含推荐流和相册页面；首页 Tab、推荐流、相册读取分别由对应 ViewModel 管理状态。 |
 | `feature-camera` | 旧 ML Kit 拍照模块，包含 CameraX 预览、ML Kit 画面分析、构图引导虚线覆盖层、拍摄保存和相机权限 UI；当前不再作为 app 拍照入口。 |
 | `feature-camera-pytorch` | 当前拍照入口模块，包含 CameraX 预览、ONNX Runtime SSD MobileNet 端侧检测、构图引导虚线覆盖层、拍摄保存和相机权限 UI。 |
-| `feature-mymodel` | 我的模块，包含个人主页和设置页；主页资料、内容 Tab、设置项列表由 ViewModel 管理状态。 |
+| `feature-mymodel` | 我的模块，包含个人主页、扫一扫说明页、消息列表页和设置页；主页资料、内容 Tab、扫一扫说明、消息列表、设置项列表由 ViewModel 管理状态。 |
 
 ### *-navigation 模块
 
@@ -100,7 +100,7 @@ MyApplication
 | 拍照 | `CameraScreen()` |
 | 我的 | `MyModelMainScreen()` |
 
-底部导航只在“我的”模块主页面显示。当用户进入“我的 -> 设置”页面时，底部导航隐藏；物理返回键会从设置页返回我的主页。主导航状态由 ViewModel 管理，Compose 侧仅保留 `rememberSaveableStateHolder` 用于保存各 Tab 页面状态。
+底部导航状态不会因“我的”模块内部页面而移除。当用户进入“我的 -> 扫一扫”“我的 -> 设置”或“我的 -> 消息”页面时，内部页面作为全屏覆盖层盖住上一页全部内容，物理返回键会返回我的主页。主导航状态由 ViewModel 管理，Compose 侧仅保留 `rememberSaveableStateHolder` 用于保存各 Tab 页面状态。
 
 ### 首页模块
 
@@ -164,9 +164,11 @@ ONNX 相机构图功能的详细设计、数据流、模型来源和扩展方向
 - 内容 Tab：作品、点赞、收藏、评论。
 - Tab 使用 `PrimaryTabRow` 与 `HorizontalPager` 联动。
 - 点击当前已选中的内容 Tab 不会重复触发滚动动画。
+- 扫一扫按钮通过 `MainNavigation` 切换到 `ScanScreen`。
+- 消息按钮通过 `MainNavigation` 切换到 `MessageListScreen`。
 - 设置按钮通过 `MainNavigation` 切换到 `SettingsScreen`。
 
-`MyModelMainViewModel` 负责主页资料、当前内容 Tab 和各 Tab 空状态文案。`SettingsScreen` 是“我的”模块内部设置页，不通过底部导航直接暴露；`SettingsViewModel` 负责设置项列表，设置项保持 56dp 以上触控高度。
+`MyModelMainViewModel` 负责主页资料、当前内容 Tab 和各 Tab 空状态文案。`SettingsScreen`、`MessageListScreen` 与 `ScanScreen` 是“我的”模块内部页面，不通过底部导航直接暴露；`SettingsViewModel` 负责设置项列表，设置项保持 56dp 以上触控高度，`MessageListViewModel` 当前提供本地静态示例消息列表，`ScanViewModel` 当前提供简单的扫码入口说明。
 
 ### MyModel 模板数据功能
 

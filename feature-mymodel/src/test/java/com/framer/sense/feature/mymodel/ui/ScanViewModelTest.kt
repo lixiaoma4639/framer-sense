@@ -16,18 +16,19 @@
 
 package com.framer.sense.feature.mymodel.ui
 
-import com.framer.sense.feature.mymodel.ui.setting.SettingsViewModel
+import com.framer.sense.feature.mymodel.ui.scan.ScanViewModel
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
-class SettingsViewModelTest {
+class ScanViewModelTest {
 
     @Test
-    fun uiState_containsDefaultSettingsItems() {
-        val viewModel = SettingsViewModel()
+    fun uiState_containsDefaultScanDescription() {
+        val viewModel = ScanViewModel()
+        val uiState = viewModel.uiState.value
 
-        assertEquals("隐私条款", viewModel.uiState.value.items.first().title)
-        assertEquals("应用权限", viewModel.uiState.value.items.last().title)
-        assertEquals(7, viewModel.uiState.value.items.size)
+        assertEquals("扫一扫", uiState.title)
+        assertTrue(uiState.description.contains("扫码功能入口"))
     }
 }

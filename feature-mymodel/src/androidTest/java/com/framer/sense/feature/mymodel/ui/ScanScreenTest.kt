@@ -20,25 +20,25 @@ import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
-import com.framer.sense.feature.mymodel.ui.setting.SettingsScreenContent
-import com.framer.sense.feature.mymodel.ui.setting.SettingsUiState
+import com.framer.sense.feature.mymodel.ui.scan.ScanScreenContent
+import com.framer.sense.feature.mymodel.ui.scan.ScanUiState
 import org.junit.Rule
 import org.junit.Test
 
-class SettingsScreenTest {
+class ScanScreenTest {
 
     @get:Rule
     val composeTestRule = createComposeRule()
 
     @Test
-    fun settingsScreen_displaysTitleBackButtonAndItems() {
+    fun scanScreen_displaysTitleBackButtonAndDescription() {
         composeTestRule.setContent {
-            SettingsScreenContent(uiState = SettingsUiState())
+            ScanScreenContent(uiState = ScanUiState())
         }
 
-        composeTestRule.onNodeWithText("设置").assertIsDisplayed()
+        composeTestRule.onNodeWithText("扫一扫").assertIsDisplayed()
         composeTestRule.onNodeWithContentDescription("返回").assertIsDisplayed()
-        composeTestRule.onNodeWithText("隐私条款").assertIsDisplayed()
-        composeTestRule.onNodeWithText("应用权限").assertIsDisplayed()
+        composeTestRule.onNodeWithText("这里是扫码功能入口，后续可接入二维码识别、相册扫码或扫码结果处理。")
+            .assertIsDisplayed()
     }
 }

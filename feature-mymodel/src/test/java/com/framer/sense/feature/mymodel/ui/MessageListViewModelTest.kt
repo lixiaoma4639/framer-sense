@@ -16,18 +16,20 @@
 
 package com.framer.sense.feature.mymodel.ui
 
-import com.framer.sense.feature.mymodel.ui.setting.SettingsViewModel
+import com.framer.sense.feature.mymodel.ui.message.MessageListViewModel
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
-class SettingsViewModelTest {
+class MessageListViewModelTest {
 
     @Test
-    fun uiState_containsDefaultSettingsItems() {
-        val viewModel = SettingsViewModel()
+    fun uiState_containsDefaultMessages() {
+        val viewModel = MessageListViewModel()
+        val messages = viewModel.uiState.value.messages
 
-        assertEquals("隐私条款", viewModel.uiState.value.items.first().title)
-        assertEquals("应用权限", viewModel.uiState.value.items.last().title)
-        assertEquals(7, viewModel.uiState.value.items.size)
+        assertTrue(messages.isNotEmpty())
+        assertEquals("系统通知", messages.first().title)
+        assertTrue(messages.any { it.unread })
     }
 }
