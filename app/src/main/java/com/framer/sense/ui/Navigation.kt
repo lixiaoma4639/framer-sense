@@ -196,11 +196,11 @@ private fun MyModelNavigationHost(
         ),
         transitionSpec = {
             slideIntoContainer(AnimatedContentTransitionScope.SlideDirection.Left) togetherWith
-                slideOutOfContainer(AnimatedContentTransitionScope.SlideDirection.Left)
+            slideOutOfContainer(AnimatedContentTransitionScope.SlideDirection.Left)
         },
         popTransitionSpec = {
             slideIntoContainer(AnimatedContentTransitionScope.SlideDirection.Right) togetherWith
-                slideOutOfContainer(AnimatedContentTransitionScope.SlideDirection.Right)
+            slideOutOfContainer(AnimatedContentTransitionScope.SlideDirection.Right)
         },
         entryProvider = entryProvider {
             entry<Main> { Box(modifier = Modifier.fillMaxSize()) }

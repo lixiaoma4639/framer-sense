@@ -21,10 +21,6 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -33,29 +29,25 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
+import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 
 @Composable
 fun CameraScreen(
+    viewModel: CameraViewModel = hiltViewModel(),
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
-    var uiState by remember { mutableStateOf<CameraUiState>(CameraUiState.Loading) }
-    var captureStatus by remember { mutableStateOf<PhotoCaptureStatus>(PhotoCaptureStatus.Idle) }
-    var captureRequestId by remember { mutableIntStateOf(0) }
+    val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val permissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission()
     ) { granted ->
-        uiState = if (granted) CameraUiState.Ready() else CameraUiState.PermissionDenied
+        viewModel.onIntent(CameraIntent.CameraPermissionResult(granted))
     }
     val storagePermissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission()
     ) { granted ->
-        if (granted) {
-            captureStatus = PhotoCaptureStatus.Saving
-            captureRequestId += 1
-        } else {
-            captureStatus = PhotoCaptureStatus.Error("需要存储权限才能保存到系统相册")
-        }
+        viewModel.onIntent(CameraIntent.LegacyStoragePermissionResult(granted))
     }
 
     fun hasCameraPermission(): Boolean =
@@ -69,44 +61,31 @@ fun CameraScreen(
             ) != PackageManager.PERMISSION_GRANTED
 
     LaunchedEffect(Unit) {
-        if (hasCameraPermission()) {
-            uiState = CameraUiState.Ready()
-        } else {
-            uiState = CameraUiState.PermissionDenied
+        viewModel.onIntent(CameraIntent.PageStarted(hasCameraPermission()))
+    }
+
+    LaunchedEffect(viewModel) {
+        viewModel.effects.collect { effect ->
+            when (effect) {
+                CameraEffect.RequestCameraPermission -> {
+                    permissionLauncher.launch(Manifest.permission.CAMERA)
+                }
+                CameraEffect.RequestLegacyStoragePermission -> {
+                    storagePermissionLauncher.launch(Manifest.permission.WRITE_EXTERNAL_STORAGE)
+                }
+            }
         }
     }
 
-    return CameraScreenContent(
+    CameraScreenContent(
         uiState = uiState,
-        captureStatus = captureStatus,
-        captureRequestId = captureRequestId,
         onRequestPermission = {
-            if (hasCameraPermission()) {
-                uiState = CameraUiState.Ready()
-            } else {
-                permissionLauncher.launch(Manifest.permission.CAMERA)
-            }
-        },
-        onGuideState = { guideState ->
-            uiState = CameraUiState.Ready(guideState)
+            viewModel.onIntent(CameraIntent.RequestPermissionClicked(hasCameraPermission()))
         },
         onCaptureClick = {
-            if (needsLegacyStoragePermission()) {
-                storagePermissionLauncher.launch(Manifest.permission.WRITE_EXTERNAL_STORAGE)
-            } else {
-                captureStatus = PhotoCaptureStatus.Saving
-                captureRequestId += 1
-            }
+            viewModel.onIntent(CameraIntent.CaptureClicked(needsLegacyStoragePermission()))
         },
-        onPhotoSaved = {
-            captureStatus = PhotoCaptureStatus.Saved
-        },
-        onPhotoCaptureError = { throwable ->
-            captureStatus = PhotoCaptureStatus.Error(throwable.message ?: "照片保存失败")
-        },
-        onCameraError = { throwable ->
-            uiState = CameraUiState.Error(throwable.message ?: "无法启动 ONNX 相机引导")
-        },
+        onIntent = viewModel::onIntent,
         modifier = modifier
     )
 }
@@ -117,14 +96,9 @@ fun CameraScreen(
 @Composable
 internal fun CameraScreenContent(
     uiState: CameraUiState,
-    captureStatus: PhotoCaptureStatus,
-    captureRequestId: Int,
     onRequestPermission: () -> Unit,
-    onGuideState: (CameraGuideState) -> Unit,
     onCaptureClick: () -> Unit,
-    onPhotoSaved: () -> Unit,
-    onPhotoCaptureError: (Throwable) -> Unit,
-    onCameraError: (Throwable) -> Unit,
+    onIntent: (CameraIntent) -> Unit,
     modifier: Modifier = Modifier,
     showCameraPreview: Boolean = true
 ) {
@@ -134,28 +108,36 @@ internal fun CameraScreenContent(
             .background(Color.Black),
         contentAlignment = Alignment.Center
     ) {
-        when (uiState) {
-            CameraUiState.Loading -> CameraMessage(
+        when (val screenState = uiState.screenState) {
+            CameraScreenState.Loading -> CameraMessage(
                 title = "AI 构图引导",
                 message = "正在启动 ONNX 相机模型",
                 showProgress = true
             )
 
-            CameraUiState.PermissionDenied -> CameraMessage(
+            CameraScreenState.PermissionDenied -> CameraMessage(
                 title = "AI 构图引导",
                 message = "需要相机权限，请允许访问相机，以便实时识别画面并绘制构图虚线",
                 actionText = "重新授权",
                 onAction = onRequestPermission
             )
 
-            is CameraUiState.Ready -> {
+            CameraScreenState.Ready -> {
                 if (showCameraPreview) {
                     CameraPreview(
-                        captureRequestId = captureRequestId,
-                        onGuideState = onGuideState,
-                        onPhotoSaved = { onPhotoSaved() },
-                        onPhotoCaptureError = onPhotoCaptureError,
-                        onCameraError = onCameraError,
+                        captureRequestId = uiState.captureRequestId,
+                        onGuideState = { guideState ->
+                            onIntent(CameraIntent.GuideStateChanged(guideState))
+                        },
+                        onPhotoSaved = {
+                            onIntent(CameraIntent.PhotoSaved)
+                        },
+                        onPhotoCaptureError = { throwable ->
+                            onIntent(CameraIntent.PhotoCaptureFailed(throwable.message))
+                        },
+                        onCameraError = { throwable ->
+                            onIntent(CameraIntent.CameraFailed(throwable.message))
+                        },
                         modifier = Modifier.fillMaxSize()
                     )
                 }
@@ -164,15 +146,15 @@ internal fun CameraScreenContent(
                     modifier = Modifier.fillMaxSize()
                 )
                 CameraCaptureControls(
-                    captureStatus = captureStatus,
+                    captureStatus = uiState.captureStatus,
                     onCaptureClick = onCaptureClick,
                     modifier = Modifier.align(Alignment.BottomCenter)
                 )
             }
 
-            is CameraUiState.Error -> CameraMessage(
+            is CameraScreenState.Error -> CameraMessage(
                 title = "相机启动失败",
-                message = uiState.message,
+                message = screenState.message,
                 actionText = "重试",
                 onAction = onRequestPermission
             )
@@ -271,15 +253,10 @@ private fun CameraMessage(
 private fun CameraScreenPreview() {
     MyApplicationTheme {
         CameraScreenContent(
-            uiState = CameraUiState.Ready(),
-            captureStatus = PhotoCaptureStatus.Idle,
-            captureRequestId = 0,
+            uiState = CameraUiState(screenState = CameraScreenState.Ready),
             onRequestPermission = {},
-            onGuideState = {},
             onCaptureClick = {},
-            onPhotoSaved = {},
-            onPhotoCaptureError = {},
-            onCameraError = {},
+            onIntent = {},
             showCameraPreview = false
         )
     }

@@ -35,6 +35,9 @@
 
 ```text
 CameraScreen
+  -> CameraIntent
+  -> CameraViewModel
+  -> CameraUiState + CameraEffect
   -> CameraPreview
   -> CameraX PreviewView + ImageAnalysis + ImageCapture
   -> CameraGuideAnalyzer
@@ -52,7 +55,8 @@ CameraCaptureControls
 
 职责边界：
 
-- `CameraScreen`：权限、页面状态、拍照状态和错误态。
+- `CameraScreen`：渲染 MVI 状态、转发用户操作和 CameraX 回调、执行权限请求等一次性 Effect。
+- `CameraViewModel`：处理 `CameraIntent`，归约 `CameraUiState`，发出 `CameraEffect`，不直接依赖 Android 权限 API 或 CameraX。
 - `CameraPreview`：CameraX 生命周期绑定、实时帧分析和拍照保存。
 - `CameraGuideAnalyzer`：节流实时帧，调用 ONNX 检测器并分发结果。
 - `OnnxCameraAiDetector`：加载 assets 中的 ONNX 模型，将 YUV 帧转为 RGB 输入并解析检测输出。
@@ -94,6 +98,7 @@ CameraCaptureControls
 测试覆盖：
 
 - `CompositionGuideEngineTest` 覆盖空旷场景、左右上下障碍物、人物偏离虚线、人物对齐和暗光场景。
+- `CameraViewModelTest` 覆盖 MVI 状态归约、权限 Effect、拍摄请求递增、保存成功/失败和相机错误。
 - `CameraScreenTest` 位于 `androidTest`，覆盖权限拒绝、Ready 构图提示和错误态。
 
 真机验证时重点检查：

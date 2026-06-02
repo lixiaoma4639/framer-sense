@@ -86,13 +86,6 @@ data class CameraGuideState(
     }
 }
 
-sealed interface CameraUiState {
-    data object Loading : CameraUiState
-    data object PermissionDenied : CameraUiState
-    data class Ready(val guideState: CameraGuideState = CameraGuideState.Initial) : CameraUiState
-    data class Error(val message: String) : CameraUiState
-}
-
 sealed interface PhotoCaptureStatus {
     data object Idle : PhotoCaptureStatus
     data object Saving : PhotoCaptureStatus

@@ -28,7 +28,7 @@ Framer_Sense 是一个基于 Android 官方多模块架构模板演进而来的 
 - 拍照：CameraX 实时预览、ONNX Runtime 端侧构图引导和拍摄保存到系统相册。
 - 我的：个人主页、内容 Tab、扫一扫说明页、消息列表页和设置页。
 
-非拍照模块当前按 MVVM 组织：Composable 负责渲染和事件转发，ViewModel 持有页面 UI 状态。模板中的 MyModel Repository/Room 数据层仍保留在 `core-data`、`core-database`，但不再接入底部导航中的“我的”主页。
+拍照模块当前按 MVI 组织：Composable 负责渲染状态、转发 Intent 和执行一次性 Effect，ViewModel 负责状态归约。非拍照模块当前按 MVVM 组织：Composable 负责渲染和事件转发，ViewModel 持有页面 UI 状态。模板中的 MyModel Repository/Room 数据层仍保留在 `core-data`、`core-database`，但不再接入底部导航中的“我的”主页。
 
 ## 2. 模块结构
 
@@ -145,6 +145,7 @@ MyApplication
 `CameraScreen` 当前来自 `feature-camera-pytorch`，是 CameraX + ONNX Runtime 的实时构图引导页面：
 
 - 首次进入先检查 `CAMERA` 权限，未授权时展示权限说明和重新授权按钮。
+- 页面按 MVI 组织，`CameraViewModel` 统一处理 `CameraIntent`、归约 `CameraUiState`，并通过 `CameraEffect` 触发权限请求等一次性平台动作。
 - 已授权后使用 CameraX `PreviewView` 显示后置摄像头实时预览。
 - `ImageAnalysis` 使用 `STRATEGY_KEEP_ONLY_LATEST` 获取实时帧，交给 `CameraGuideAnalyzer` 进行端侧分析。
 - `CameraGuideAnalyzer` 对实时帧做约 520ms 节流，调用 `OnnxCameraAiDetector` 执行端侧检测。
@@ -192,7 +193,11 @@ feature-mymodel
 相机构图引导数据流：
 
 ```text
-CameraX Preview + ImageAnalysis
+CameraScreen
+  -> CameraIntent
+  -> CameraViewModel
+  -> CameraUiState + CameraEffect
+  -> CameraX Preview + ImageAnalysis
   -> CameraGuideAnalyzer
   -> OnnxCameraAiDetector
   -> ONNX Runtime SSD MobileNet
@@ -207,7 +212,7 @@ CameraX ImageCapture
 职责边界：
 
 - UI 层只依赖 ViewModel 或明确的 UI 状态，不直接操作 Room DAO。
-- 非拍照模块默认采用 MVVM；拍照模块当前保持现状，后续可单独演进到 MVI。
+- 拍照模块默认采用 MVI；非拍照模块默认采用 MVVM。
 - Repository 负责屏蔽数据来源细节，对 feature 暴露业务语义接口。
 - Room 实体和 DAO 保持在 `core-database`。
 - Hilt Module 负责绑定接口和提供数据库实例。

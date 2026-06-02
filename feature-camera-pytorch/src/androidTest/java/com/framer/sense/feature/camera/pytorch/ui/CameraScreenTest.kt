@@ -17,15 +17,10 @@ class CameraScreenTest {
         composeTestRule.setContent {
             MyApplicationTheme {
                 CameraScreenContent(
-                    uiState = CameraUiState.PermissionDenied,
-                    captureStatus = PhotoCaptureStatus.Idle,
-                    captureRequestId = 0,
+                    uiState = CameraUiState(screenState = CameraScreenState.PermissionDenied),
                     onRequestPermission = {},
-                    onGuideState = {},
                     onCaptureClick = {},
-                    onPhotoSaved = {},
-                    onPhotoCaptureError = {},
-                    onCameraError = {},
+                    onIntent = {},
                     showCameraPreview = false
                 )
             }
@@ -40,8 +35,9 @@ class CameraScreenTest {
         composeTestRule.setContent {
             MyApplicationTheme {
                 CameraScreenContent(
-                    uiState = CameraUiState.Ready(
-                        CameraGuideState.Initial.copy(
+                    uiState = CameraUiState(
+                        screenState = CameraScreenState.Ready,
+                        guideState = CameraGuideState.Initial.copy(
                             message = "ONNX 实时检测中：请让人物走进虚线区域",
                             poseLines = listOf(
                                 NormalizedLine(
@@ -51,14 +47,9 @@ class CameraScreenTest {
                             )
                         )
                     ),
-                    captureStatus = PhotoCaptureStatus.Idle,
-                    captureRequestId = 0,
                     onRequestPermission = {},
-                    onGuideState = {},
                     onCaptureClick = {},
-                    onPhotoSaved = {},
-                    onPhotoCaptureError = {},
-                    onCameraError = {},
+                    onIntent = {},
                     showCameraPreview = false
                 )
             }
@@ -74,15 +65,12 @@ class CameraScreenTest {
         composeTestRule.setContent {
             MyApplicationTheme {
                 CameraScreenContent(
-                    uiState = CameraUiState.Error("无法启动 ONNX 相机引导"),
-                    captureStatus = PhotoCaptureStatus.Idle,
-                    captureRequestId = 0,
+                    uiState = CameraUiState(
+                        screenState = CameraScreenState.Error("无法启动 ONNX 相机引导")
+                    ),
                     onRequestPermission = {},
-                    onGuideState = {},
                     onCaptureClick = {},
-                    onPhotoSaved = {},
-                    onPhotoCaptureError = {},
-                    onCameraError = {},
+                    onIntent = {},
                     showCameraPreview = false
                 )
             }
