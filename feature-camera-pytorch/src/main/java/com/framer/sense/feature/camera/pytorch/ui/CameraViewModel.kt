@@ -14,9 +14,13 @@ import kotlinx.coroutines.flow.update
 @HiltViewModel
 class CameraViewModel @Inject constructor() : ViewModel() {
 
+    // MutableStateFlow：保存当前状态 的状态流
     private val _uiState = MutableStateFlow(CameraUiState())
     val uiState: StateFlow<CameraUiState> = _uiState.asStateFlow()
 
+    // MutableSharedFlow：发送一次性事件 的状态流, 1默认不需要初始值, 2默认不保存最新值,
+    // 3适合发送一次性动作, 4新观察者不会自动拿到之前的事件
+    // extraBufferCapacity = 1,表示可以额外缓存 1 个事件，降低事件发出时没有立即被消费导致丢失的概率。
     private val _effects = MutableSharedFlow<CameraEffect>(extraBufferCapacity = 1)
     val effects: SharedFlow<CameraEffect> = _effects.asSharedFlow()
 
@@ -54,6 +58,7 @@ class CameraViewModel @Inject constructor() : ViewModel() {
         if (hasCameraPermission) {
             _uiState.update { it.copy(screenState = CameraScreenState.Ready) }
         } else {
+            //_effects.tryEmit 适合发送一次性动作,通知 UI 去弹一次系统权限请求框。
             _effects.tryEmit(CameraEffect.RequestCameraPermission)
         }
     }

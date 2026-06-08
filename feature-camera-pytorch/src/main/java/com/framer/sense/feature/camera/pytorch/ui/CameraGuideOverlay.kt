@@ -148,7 +148,7 @@ private fun CameraGuidePreview() {
     MyApplicationTheme {
         CameraGuideOverlay(
             CameraGuideState.Initial,
-            Modifier.fillMaxSize(),
+            Modifier.fillMaxSize().background(Color.Black),
         )
     }
 }

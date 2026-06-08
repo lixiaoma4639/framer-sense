@@ -27,6 +27,11 @@ data class NormalizedRect(
         return intersectionWidth * intersectionHeight
     }
 
+    /**
+     * 坐标限制在 0f..1f：
+     * 这些检测框是归一化坐标，不是像素坐标。
+     * 表示目标位于画面宽度 25% 到 70%、高度 10% 到 80% 的区域。
+     */
     fun clamped(): NormalizedRect =
         NormalizedRect(
             left = left.coerceIn(0f, 1f),
@@ -41,6 +46,13 @@ data class NormalizedLine(
     val end: NormalizedPoint
 )
 
+/**
+ * 表示一个检测框：
+ * 1. bounds：检测框的坐标
+ * 2. confidence：置信度
+ * 3. classId：类别ID
+ * 4. label：类别名称
+ */
 data class DetectedObjectFrame(
     val bounds: NormalizedRect,
     val confidence: Float,

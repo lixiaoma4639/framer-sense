@@ -60,10 +60,12 @@ fun CameraScreen(
                 Manifest.permission.WRITE_EXTERNAL_STORAGE
             ) != PackageManager.PERMISSION_GRANTED
 
+    //启动一个 Compose 副作用。Unit 作为 key，表示该副作用在当前 Composable 首次进入组合时执行一次。
     LaunchedEffect(Unit) {
         viewModel.onIntent(CameraIntent.PageStarted(hasCameraPermission()))
     }
 
+    //启动另一个副作用，用于收集 ViewModel 发出的单次事件。key 是 viewModel，ViewModel 变化时会重新启动收集。
     LaunchedEffect(viewModel) {
         viewModel.effects.collect { effect ->
             when (effect) {
@@ -171,8 +173,8 @@ private fun CameraCaptureControls(
     Column(
         modifier = modifier
             .fillMaxWidth()
-            .background(Color.Black.copy(alpha = 0.20f))
-            .padding(horizontal = 24.dp, vertical = 18.dp),
+            .padding(horizontal = 24.dp, vertical = 10.dp)
+            .background(Color.Black.copy(alpha = 0.20f)),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
@@ -203,7 +205,7 @@ private fun CameraCaptureControls(
         ) {
             Text(
                 text = if (captureStatus is PhotoCaptureStatus.Saving) "保存中" else "拍摄",
-                modifier = Modifier.padding(horizontal = 18.dp, vertical = 10.dp)
+                modifier = Modifier.padding(horizontal = 18.dp, vertical = 5.dp)
             )
         }
     }

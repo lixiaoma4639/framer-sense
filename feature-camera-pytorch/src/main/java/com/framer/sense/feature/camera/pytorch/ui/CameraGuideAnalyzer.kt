@@ -7,6 +7,7 @@ import java.io.Closeable
 import java.util.concurrent.Executor
 import java.util.concurrent.atomic.AtomicBoolean
 
+
 class CameraGuideAnalyzer(
     context: Context,
     private val callbackExecutor: Executor,
@@ -17,7 +18,7 @@ class CameraGuideAnalyzer(
     private val appContext = context.applicationContext
     private val guideEngine = CompositionGuideEngine()
     private val isClosed = AtomicBoolean(false)
-    private val detectorDelegate = lazy { OnnxCameraAiDetector(appContext) }
+    private val onnxDetectorDelegate = lazy { OnnxCameraAiDetector(appContext) }
     private var lastAnalysisTimestamp = 0L
 
     override fun analyze(imageProxy: ImageProxy) {
@@ -29,7 +30,7 @@ class CameraGuideAnalyzer(
 
         lastAnalysisTimestamp = now
         try {
-            val result = detectorDelegate.value.detect(imageProxy)
+            val result = onnxDetectorDelegate.value.detect(imageProxy)
             val guideState = guideEngine.buildGuide(
                 people = result.people,
                 objects = result.objects,
@@ -52,12 +53,13 @@ class CameraGuideAnalyzer(
     }
 
     override fun close() {
-        if (isClosed.compareAndSet(false, true) && detectorDelegate.isInitialized()) {
-            detectorDelegate.value.close()
+        if (isClosed.compareAndSet(false, true) && onnxDetectorDelegate.isInitialized()) {
+            onnxDetectorDelegate.value.close()
         }
     }
 
     private companion object {
+        //单位毫秒
         const val ANALYSIS_INTERVAL_MS = 520L
     }
 }

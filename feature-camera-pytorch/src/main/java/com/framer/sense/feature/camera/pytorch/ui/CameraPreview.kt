@@ -43,6 +43,7 @@ fun CameraPreview(
     val currentOnPhotoSaved by rememberUpdatedState(onPhotoSaved)
     val currentOnPhotoCaptureError by rememberUpdatedState(onPhotoCaptureError)
     val currentOnCameraError by rememberUpdatedState(onCameraError)
+    // remember 的作用, 在 Compose 重组（recomposition）时保留对象实例，避免被重新创建。
     val previewView = remember {
         PreviewView(context).apply {
             implementationMode = PreviewView.ImplementationMode.COMPATIBLE
@@ -56,7 +57,6 @@ fun CameraPreview(
     }
     val analysisExecutor = remember { Executors.newSingleThreadExecutor() }
     val mainExecutor = remember(context) { ContextCompat.getMainExecutor(context) }
-    // remember 的作用, 在 Compose 重组（recomposition）时保留对象实例，避免被重新创建。
     val analyzer = remember {
         CameraGuideAnalyzer(
             context = context,
@@ -71,6 +71,7 @@ fun CameraPreview(
         modifier = modifier
     )
 
+    //LaunchedEffect这个副作用会在 context、lifecycleOwner 或 previewView 变化时执行。
     LaunchedEffect(context, lifecycleOwner, previewView) {
         try {
             val cameraProvider = context.awaitCameraProvider()
@@ -105,7 +106,9 @@ fun CameraPreview(
         }
     }
 
+    //组件销毁时释放资源
     DisposableEffect(context) {
+        //当 CameraPreview 离开 Compose 组合，或者 context 变化时，会执行 onDispose。
         onDispose {
             analyzer.close()
             analysisExecutor.shutdown()
