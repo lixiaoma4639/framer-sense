@@ -1,0 +1,73 @@
+package com.framer.sense.feature.camera.pytorch.v2.ui
+
+import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.onNodeWithText
+import com.framer.sense.core.ui.MyApplicationTheme
+import org.junit.Rule
+import org.junit.Test
+
+class CameraV2ScreenTest {
+
+    @get:Rule
+    val composeTestRule = createComposeRule()
+
+    @Test
+    fun permissionRequired_showsV2PermissionCopy() {
+        composeTestRule.setContent {
+            MyApplicationTheme {
+                CameraV2ScreenContent(
+                    state = CameraV2State(screenState = CameraV2ScreenState.PermissionRequired),
+                    onRequestPermission = {},
+                    onCaptureClick = {},
+                    onIntent = {},
+                    showCameraPreview = false
+                )
+            }
+        }
+
+        composeTestRule.onNodeWithText("AI 3D 构图引导 V2").assertIsDisplayed()
+        composeTestRule.onNodeWithText("重新授权").assertIsDisplayed()
+    }
+
+    @Test
+    fun streaming_showsGuideAndCaptureStatus() {
+        composeTestRule.setContent {
+            MyApplicationTheme {
+                CameraV2ScreenContent(
+                    state = CameraV2State(
+                        screenState = CameraV2ScreenState.Streaming,
+                        guide = CameraV2Guide.initial().copy(hint = CameraV2Hint.ENTER_GUIDE)
+                    ),
+                    onRequestPermission = {},
+                    onCaptureClick = {},
+                    onIntent = {},
+                    showCameraPreview = false
+                )
+            }
+        }
+
+        composeTestRule.onNodeWithText("请让人物走进 3D 虚拟人像区域").assertIsDisplayed()
+        composeTestRule.onNodeWithText("拍摄").assertIsDisplayed()
+    }
+
+    @Test
+    fun failure_showsRetryAction() {
+        composeTestRule.setContent {
+            MyApplicationTheme {
+                CameraV2ScreenContent(
+                    state = CameraV2State(
+                        screenState = CameraV2ScreenState.Failure(CameraV2Hint.CAMERA_ERROR)
+                    ),
+                    onRequestPermission = {},
+                    onCaptureClick = {},
+                    onIntent = {},
+                    showCameraPreview = false
+                )
+            }
+        }
+
+        composeTestRule.onNodeWithText("相机启动失败").assertIsDisplayed()
+        composeTestRule.onNodeWithText("重新授权").assertIsDisplayed()
+    }
+}

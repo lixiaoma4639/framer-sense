@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="camera_v2_title">AI 3D 构图引导 V2</string>
+    <string name="camera_v2_booting_message">正在启动相机和 ONNX 构图模型</string>
+    <string name="camera_v2_permission_message">需要相机权限，才能实时识别场景并绘制 3D 虚拟人像</string>
+    <string name="camera_v2_permission_action">重新授权</string>
+    <string name="camera_v2_camera_error_title">相机启动失败</string>
+    <string name="camera_v2_camera_error_message">无法启动 v2 相机引导</string>
+    <string name="camera_v2_storage_permission_needed">需要存储权限才能保存到系统相册</string>
+    <string name="camera_v2_capture_failed">照片保存失败</string>
+    <string name="camera_v2_capture_saving">正在保存到系统相册...</string>
+    <string name="camera_v2_capture_saving_short">保存中</string>
+    <string name="camera_v2_capture_saved">照片已保存到系统相册</string>
+    <string name="camera_v2_capture_action">拍摄</string>
+    <string name="camera_v2_body_profile">%1$dcm / %2$dkg 虚拟人像</string>
+    <string name="camera_v2_scene_status">场景：%1$s · %2$s</string>
+    <string name="camera_v2_model_status_ready">ONNX 已就绪</string>
+    <string name="camera_v2_model_status_missing">等待模型资产</string>
+    <string name="camera_v2_hint_starting">正在加载 ONNX 场景、姿态和构图模型</string>
+    <string name="camera_v2_hint_model_assets_missing">请放入 YOLO、POSE 和 Places365 ONNX 模型；当前先展示实时 3D 构图占位</string>
+    <string name="camera_v2_hint_enter_guide">请让人物走进 3D 虚拟人像区域</string>
+    <string name="camera_v2_hint_good">构图良好，保持当前手机位置</string>
+    <string name="camera_v2_hint_low_light">画面偏暗，朝光线更好的方向移动手机</string>
+    <string name="camera_v2_hint_scene_busy">当前场景拥挤，换个角度或轻微移动手机</string>
+    <string name="camera_v2_hint_move_left">人物或空间偏右，向左移动手机</string>
+    <string name="camera_v2_hint_move_right">人物或空间偏左，向右移动手机</string>
+    <string name="camera_v2_hint_move_up">下方空间不足，向上抬一点手机</string>
+    <string name="camera_v2_hint_move_down">上方空间不足，向下压一点手机</string>
+    <string name="camera_v2_hint_step_back">人物太近，请后退一点再拍</string>
+    <string name="camera_v2_hint_step_forward">人物太远，请靠近一点再拍</string>
+    <string name="camera_v2_direction_left">← 向左移动手机</string>
+    <string name="camera_v2_direction_right">向右移动手机 →</string>
+    <string name="camera_v2_direction_up">↑ 向上移动手机</string>
+    <string name="camera_v2_direction_down">↓ 向下移动手机</string>
+    <string name="camera_v2_direction_backward">后退一点</string>
+    <string name="camera_v2_direction_forward">靠近一点</string>
+</resources>

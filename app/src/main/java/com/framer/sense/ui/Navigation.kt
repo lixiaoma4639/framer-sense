@@ -45,7 +45,7 @@ import androidx.navigation3.runtime.entryProvider
 import androidx.navigation3.runtime.rememberNavBackStack
 import androidx.navigation3.runtime.rememberSaveableStateHolderNavEntryDecorator
 import androidx.navigation3.ui.NavDisplay
-import com.framer.sense.feature.camera.pytorch.ui.CameraScreen
+import com.framer.sense.feature.camera.pytorch.v2.ui.CameraScreen
 import com.framer.sense.feature.home.ui.HomeScreen
 import com.framer.sense.feature.mymodel.navigation.Main
 import com.framer.sense.feature.mymodel.navigation.Messages

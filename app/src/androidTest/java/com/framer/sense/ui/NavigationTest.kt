@@ -165,6 +165,22 @@ class NavigationTest {
     }
 
     @Test
+    fun defaultCameraTabContent_usesCameraV2Screen() {
+        composeTestRule.setContent {
+            MyApplicationTheme {
+                MainNavigationContent(
+                    uiState = MainNavigationUiState(selectedTab = BottomNavTab.CAMERA),
+                    onTabSelected = {},
+                    homeContent = { Text("推荐") },
+                    myModelContent = { _, _, _ -> Text("用户名称") }
+                )
+            }
+        }
+
+        composeTestRule.onNodeWithText("AI 3D 构图引导 V2").assertIsDisplayed()
+    }
+
+    @Test
     fun clickCameraTab_cameraTabBecomesSelected() {
         // 点击拍照 Tab 后，该 Tab 应被选中，首页不再被选中
         composeTestRule.onNodeWithTag("bottom_tab_CAMERA").performClick()
