@@ -17,7 +17,7 @@ Framer_Sense 是一个基于 Android 官方多模块架构模板演进而来的 
 | 异步与状态 | Kotlin Coroutines、Flow、Lifecycle Compose |
 | 导航 | 底部导航状态切换、Navigation3 模板能力保留 |
 | 图片加载 | Coil 3 |
-| 相机与端侧 AI | CameraX、ONNX Runtime、YOLO/YOLO Pose/Places365 ONNX 约定模型、旧 ONNX 与 ML Kit 方案保留 |
+| 相机与端侧 AI | CameraX、ONNX Runtime、YOLO/YOLO Pose ONNX 约定模型、旧 ONNX 与 ML Kit 方案保留 |
 | 测试 | JUnit、Compose UI Test、Android Instrumented Test、Hilt Test |
 
 当前源码基准包名和 app `applicationId` 为 `com.framer.sense`。各 module 的 Gradle `namespace` 默认以 `com.framer.sense` 为前缀，并按模块边界追加 `core.*`、`feature.*`、`test.*` 等后缀。
@@ -63,7 +63,7 @@ Framer_Sense 是一个基于 Android 官方多模块架构模板演进而来的 
 | `feature-home` | 首页模块，包含推荐流和相册页面；首页 Tab、推荐流、相册读取分别由对应 ViewModel 管理状态。 |
 | `feature-camera` | 旧 ML Kit 拍照模块，包含 CameraX 预览、ML Kit 画面分析、构图引导虚线覆盖层、拍摄保存和相机权限 UI；当前不再作为 app 拍照入口。 |
 | `feature-camera-pytorch` | 上一版 ONNX 拍照模块，包含 CameraX 预览、ONNX Runtime SSD MobileNet 端侧检测、构图引导虚线覆盖层、拍摄保存和相机权限 UI；当前不再作为 app 拍照入口。 |
-| `feature-camera-pytorch-v2` | 当前拍照入口模块，包含 CameraX 预览、ONNX Runtime YOLO/YOLO Pose/Places365 约定模型加载、场景构图评分、线条式 3D 虚拟人像覆盖层、拍摄保存和相机权限 UI。 |
+| `feature-camera-pytorch-v2` | 当前拍照入口模块，包含 CameraX 预览、ONNX Runtime YOLO/YOLO Pose 约定模型加载、基于物体检测的场景推断、场景构图评分、线条式 3D 虚拟人像覆盖层、拍摄保存和相机权限 UI。 |
 | `feature-mymodel` | 我的模块，包含个人主页、扫一扫说明页、消息列表页和设置页；主页资料、内容 Tab、扫一扫说明、消息列表、设置项列表由 ViewModel 管理状态。 |
 
 ### *-navigation 模块
@@ -150,7 +150,7 @@ MyApplication
 - 已授权后使用 CameraX `PreviewView` 显示后置摄像头实时预览。
 - `ImageAnalysis` 使用 `STRATEGY_KEEP_ONLY_LATEST` 获取实时帧，交给 `CameraV2FrameAnalyzer` 进行端侧分析。
 - `CameraV2FrameAnalyzer` 对实时帧做约 520ms 节流，调用 `CameraV2OnnxAnalyzer` 执行 ONNX 推理。
-- `CameraV2OnnxAnalyzer` 约定加载 assets 中的 YOLO 检测、YOLO Pose 和 Places365 ONNX 模型；模型缺失时显示可恢复提示并继续绘制 3D 构图占位。
+- `CameraV2OnnxAnalyzer` 约定加载 assets 中的 YOLO 检测和 YOLO Pose ONNX 模型；模型缺失时显示可恢复提示并继续绘制 3D 构图占位。
 - `CameraV2CompositionEngine` 根据场景类别、亮度、人物框、障碍物和候选站位输出构图建议。
 - `VirtualHumanProjector` 根据传入身高体重和 pose 模板生成线条式 3D 虚拟人像。
 - `CameraV2Overlay` 在预览上使用 Compose `Canvas` 绘制 3D 虚拟人像、推荐区域和移动提示。
@@ -202,7 +202,7 @@ CameraScreen
   -> CameraX Preview + ImageAnalysis
   -> CameraV2FrameAnalyzer
   -> CameraV2OnnxAnalyzer
-  -> ONNX Runtime YOLO / YOLO Pose / Places365
+  -> ONNX Runtime YOLO / YOLO Pose
   -> CameraV2CompositionEngine
   -> VirtualHumanProjector
   -> CameraV2Overlay

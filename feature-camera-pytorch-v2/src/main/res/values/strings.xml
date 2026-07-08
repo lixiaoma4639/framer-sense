@@ -16,8 +16,13 @@
     <string name="camera_v2_scene_status">场景：%1$s · %2$s</string>
     <string name="camera_v2_model_status_ready">ONNX 已就绪</string>
     <string name="camera_v2_model_status_missing">等待模型资产</string>
-    <string name="camera_v2_hint_starting">正在加载 ONNX 场景、姿态和构图模型</string>
-    <string name="camera_v2_hint_model_assets_missing">请放入 YOLO、POSE 和 Places365 ONNX 模型；当前先展示实时 3D 构图占位</string>
+    <string name="camera_v2_scene_unknown">未知场景</string>
+    <string name="camera_v2_scene_indoor">室内</string>
+    <string name="camera_v2_scene_outdoor">户外</string>
+    <string name="camera_v2_scene_nature">户外自然</string>
+    <string name="camera_v2_scene_urban">城市</string>
+    <string name="camera_v2_hint_starting">正在加载 ONNX 人物、物体和姿态模型</string>
+    <string name="camera_v2_hint_model_assets_missing">请放入 YOLO 和 YOLO-Pose ONNX 模型；当前先展示实时 3D 构图占位</string>
     <string name="camera_v2_hint_enter_guide">请让人物走进 3D 虚拟人像区域</string>
     <string name="camera_v2_hint_good">构图良好，保持当前手机位置</string>
     <string name="camera_v2_hint_low_light">画面偏暗，朝光线更好的方向移动手机</string>

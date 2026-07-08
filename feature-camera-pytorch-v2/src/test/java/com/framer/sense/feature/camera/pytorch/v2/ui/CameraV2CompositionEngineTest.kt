@@ -89,8 +89,7 @@ class CameraV2CompositionEngineTest {
         luminance: Double = 128.0,
         modelAvailability: ModelAvailability = ModelAvailability(
             objectDetectorReady = true,
-            poseDetectorReady = true,
-            sceneClassifierReady = true
+            poseDetectorReady = true
         )
     ): CameraV2Analysis =
         CameraV2Analysis(

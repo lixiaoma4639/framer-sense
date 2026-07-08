@@ -75,6 +75,68 @@ class FramePreprocessor {
         return buffer
     }
 
+    fun toYoloRgbFloatBuffer(
+        imageProxy: ImageProxy,
+        size: Int
+    ): YoloInput {
+        val buffer = FloatBuffer.allocate(size * size * RGB_CHANNELS)
+        val redValues = FloatArray(size * size)
+        val greenValues = FloatArray(size * size)
+        val blueValues = FloatArray(size * size)
+        val rotation = imageProxy.imageInfo.rotationDegrees
+        val rotatedWidth = if (rotation == 90 || rotation == 270) imageProxy.height else imageProxy.width
+        val rotatedHeight = if (rotation == 90 || rotation == 270) imageProxy.width else imageProxy.height
+        val scale = minOf(size.toFloat() / rotatedWidth, size.toFloat() / rotatedHeight)
+        val contentWidth = (rotatedWidth * scale).roundToInt().coerceIn(1, size)
+        val contentHeight = (rotatedHeight * scale).roundToInt().coerceIn(1, size)
+        val padLeft = (size - contentWidth) / 2f
+        val padTop = (size - contentHeight) / 2f
+        val transform = YoloInputTransform(
+            inputSize = size,
+            rotatedWidth = rotatedWidth,
+            rotatedHeight = rotatedHeight,
+            scale = scale,
+            padLeft = padLeft,
+            padTop = padTop
+        )
+
+        for (y in 0 until size) {
+            for (x in 0 until size) {
+                val index = y * size + x
+                val insideContent =
+                    x >= padLeft &&
+                        x < padLeft + contentWidth &&
+                        y >= padTop &&
+                        y < padTop + contentHeight
+                val rgb = if (insideContent) {
+                    val rotatedX = ((x - padLeft) / scale).roundToInt().coerceIn(0, rotatedWidth - 1)
+                    val rotatedY = ((y - padTop) / scale).roundToInt().coerceIn(0, rotatedHeight - 1)
+                    val source = mapRotatedPointToSource(
+                        x = rotatedX,
+                        y = rotatedY,
+                        rotatedWidth = rotatedWidth,
+                        rotatedHeight = rotatedHeight,
+                        sourceWidth = imageProxy.width,
+                        sourceHeight = imageProxy.height,
+                        rotationDegrees = rotation
+                    )
+                    imageProxy.readRgb(source.first, source.second)
+                } else {
+                    Rgb(red = YOLO_PADDING_RGB, green = YOLO_PADDING_RGB, blue = YOLO_PADDING_RGB)
+                }
+                redValues[index] = rgb.red / 255f
+                greenValues[index] = rgb.green / 255f
+                blueValues[index] = rgb.blue / 255f
+            }
+        }
+
+        redValues.forEach(buffer::put)
+        greenValues.forEach(buffer::put)
+        blueValues.forEach(buffer::put)
+        buffer.rewind()
+        return YoloInput(buffer = buffer, transform = transform)
+    }
+
     private fun mapRotatedPointToSource(
         x: Int,
         y: Int,
@@ -124,5 +186,55 @@ class FramePreprocessor {
         const val RGB_CHANNELS = 3
         const val LUMINANCE_SAMPLES = 900
         const val DEFAULT_LUMINANCE = 128.0
+        const val YOLO_PADDING_RGB = 114
     }
+}
+
+data class YoloInput(
+    val buffer: FloatBuffer,
+    val transform: YoloInputTransform
+)
+
+data class YoloInputTransform(
+    val inputSize: Int,
+    val rotatedWidth: Int,
+    val rotatedHeight: Int,
+    val scale: Float,
+    val padLeft: Float,
+    val padTop: Float
+) {
+    fun xywhToNormalizedRect(cx: Float, cy: Float, width: Float, height: Float): V2Rect {
+        val normalizedWidth = width.toModelPixels() / scale / rotatedWidth
+        val normalizedHeight = height.toModelPixels() / scale / rotatedHeight
+        val centerX = (cx.toModelPixels() - padLeft) / scale / rotatedWidth
+        val centerY = (cy.toModelPixels() - padTop) / scale / rotatedHeight
+        return V2Rect(
+            left = centerX - normalizedWidth / 2f,
+            top = centerY - normalizedHeight / 2f,
+            right = centerX + normalizedWidth / 2f,
+            bottom = centerY + normalizedHeight / 2f
+        ).clamped()
+    }
+
+    fun xyxyToNormalizedRect(left: Float, top: Float, right: Float, bottom: Float): V2Rect {
+        val normalizedLeft = (left.toModelPixels() - padLeft) / scale / rotatedWidth
+        val normalizedTop = (top.toModelPixels() - padTop) / scale / rotatedHeight
+        val normalizedRight = (right.toModelPixels() - padLeft) / scale / rotatedWidth
+        val normalizedBottom = (bottom.toModelPixels() - padTop) / scale / rotatedHeight
+        return V2Rect(
+            left = normalizedLeft,
+            top = normalizedTop,
+            right = normalizedRight,
+            bottom = normalizedBottom
+        ).clamped()
+    }
+
+    fun pointToNormalized(point: V2Point): V2Point =
+        V2Point(
+            x = ((point.x.toModelPixels() - padLeft) / scale / rotatedWidth).coerceIn(0f, 1f),
+            y = ((point.y.toModelPixels() - padTop) / scale / rotatedHeight).coerceIn(0f, 1f)
+        )
+
+    private fun Float.toModelPixels(): Float =
+        if (this <= 1f) this * inputSize else this
 }

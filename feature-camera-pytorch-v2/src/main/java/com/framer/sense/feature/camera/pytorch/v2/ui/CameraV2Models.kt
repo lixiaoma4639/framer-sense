@@ -123,17 +123,15 @@ data class CameraV2Analysis(
 
 data class ModelAvailability(
     val objectDetectorReady: Boolean,
-    val poseDetectorReady: Boolean,
-    val sceneClassifierReady: Boolean
+    val poseDetectorReady: Boolean
 ) {
     val allRequiredReady: Boolean =
-        objectDetectorReady && poseDetectorReady && sceneClassifierReady
+        objectDetectorReady && poseDetectorReady
 
     companion object {
         val Missing = ModelAvailability(
             objectDetectorReady = false,
-            poseDetectorReady = false,
-            sceneClassifierReady = false
+            poseDetectorReady = false
         )
     }
 }

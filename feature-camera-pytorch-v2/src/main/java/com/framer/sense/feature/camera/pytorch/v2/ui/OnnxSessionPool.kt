@@ -14,13 +14,11 @@ class OnnxSessionPool(
     val environment: OrtEnvironment = OrtEnvironment.getEnvironment()
     val objectSession: OrtSession? = createSessionIfPresent(OBJECT_MODEL)
     val poseSession: OrtSession? = createSessionIfPresent(POSE_MODEL)
-    val sceneSession: OrtSession? = createSessionIfPresent(SCENE_MODEL)
 
     val availability: ModelAvailability =
         ModelAvailability(
             objectDetectorReady = objectSession != null,
-            poseDetectorReady = poseSession != null,
-            sceneClassifierReady = sceneSession != null
+            poseDetectorReady = poseSession != null
         )
 
     private fun createSessionIfPresent(assetPath: String): OrtSession? {
@@ -50,12 +48,10 @@ class OnnxSessionPool(
     override fun close() {
         objectSession?.close()
         poseSession?.close()
-        sceneSession?.close()
     }
 
     companion object {
         const val OBJECT_MODEL = "models/yolov8n.onnx"
         const val POSE_MODEL = "models/yolov8n-pose.onnx"
-        const val SCENE_MODEL = "models/places365_resnet18.onnx"
     }
 }

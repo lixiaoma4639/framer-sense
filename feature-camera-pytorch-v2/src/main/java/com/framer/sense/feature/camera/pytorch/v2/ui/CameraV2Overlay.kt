@@ -102,7 +102,7 @@ fun CameraV2Overlay(
             Text(
                 text = stringResource(
                     R.string.camera_v2_scene_status,
-                    guide.semanticScene.label,
+                    stringResource(guide.semanticScene.group.labelTextRes()),
                     modelStatus
                 ),
                 style = MaterialTheme.typography.labelSmall,
@@ -141,4 +141,13 @@ private fun CameraV2Movement.directionTextRes(): Int? =
         CameraV2Movement.BACKWARD -> R.string.camera_v2_direction_backward
         CameraV2Movement.FORWARD -> R.string.camera_v2_direction_forward
         CameraV2Movement.NONE -> null
+    }
+
+private fun SceneGroup.labelTextRes(): Int =
+    when (this) {
+        SceneGroup.UNKNOWN -> R.string.camera_v2_scene_unknown
+        SceneGroup.INDOOR -> R.string.camera_v2_scene_indoor
+        SceneGroup.OUTDOOR -> R.string.camera_v2_scene_outdoor
+        SceneGroup.NATURE -> R.string.camera_v2_scene_nature
+        SceneGroup.URBAN -> R.string.camera_v2_scene_urban
     }
