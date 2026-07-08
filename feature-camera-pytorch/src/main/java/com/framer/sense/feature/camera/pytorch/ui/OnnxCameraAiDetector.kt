@@ -49,6 +49,11 @@ class OnnxCameraAiDetector(
         inputTensor.use { tensor ->
             session.run(mapOf(inputName to tensor)).use { result ->
                 //把输入 tensor 传给模型，得到输出结果。
+                //num_detections：检测次数。
+                //detection_boxes：一个边界框列表。列表中的每个项描述了一个框，包含相对于图像尺寸的上、左、下、右四个坐标。
+                //detection_scores：每次检测的得分，取值范围为 0 到 1，表示检测到某一类别的概率。
+                //detection_classes：包含 10 个整数（浮点值）的数组，表示 COCO 类中类标签的索引。
+
                 //detection_boxes：检测框坐标, 格式[ymin, xmin, ymax, xmax] 其实就是top, left, bottom, right
                 val boxes = flattenNumbers(result.valueFor("detection_boxes"))
                 //detection_scores：置信度, 评分
@@ -111,11 +116,13 @@ class OnnxCameraAiDetector(
         val modelFile = File(appContext.cacheDir, MODEL_ASSET_PATH.substringAfterLast('/'))
         appContext.assets.open(MODEL_ASSET_PATH).use { input ->
             if (modelFile.exists() && modelFile.length() == input.available().toLong()) {
+                //先打开 assets 模型文件，检查 cache 里是否已经有同样大小的模型文件。
                 return modelFile
             }
         }
         appContext.assets.open(MODEL_ASSET_PATH).use { input ->
             modelFile.outputStream().use { output ->
+                //如果 cache 里没有模型，或者大小不一致，就重新复制。
                 input.copyTo(output)
             }
         }
@@ -189,9 +196,9 @@ class OnnxCameraAiDetector(
      * 通过ImageProxy中的planes中的YUV数据，把YUV转换成RGB
      */
     private fun ImageProxy.readRgb(x: Int, y: Int): Triple<Int, Int, Int> {
-        val yPlane = planes[0]
-        val uPlane = planes[1]
-        val vPlane = planes[2]
+        val yPlane = planes[0] //Y 亮度
+        val uPlane = planes[1] //U 偏蓝色度
+        val vPlane = planes[2] //V 偏红色度
         val yValue = yPlane.valueAt(x, y)
         val uvX = x / 2
         val uvY = y / 2
@@ -207,7 +214,9 @@ class OnnxCameraAiDetector(
         return Triple(red, green, blue)
     }
 
+
     private fun ImageProxy.PlaneProxy.valueAt(x: Int, y: Int): Int {
+        // rowStride 一行的步数, pixelStride 每一步是几个像素
         val index = y * rowStride + x * pixelStride
         val duplicate = buffer.duplicate()
         if (index !in 0 until duplicate.limit()) return 128
