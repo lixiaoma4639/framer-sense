@@ -154,7 +154,81 @@ class YoloOutputParserTest {
     fun modelAvailability_requiresOnlyObjectAndPoseModels() {
         assertTrue(ModelAvailability(objectDetectorReady = true, poseDetectorReady = true).allRequiredReady)
         assertTrue(ModelAvailability(objectDetectorReady = true, poseDetectorReady = true, segmentationReady = false).allRequiredReady)
+        assertTrue(
+            ModelAvailability(
+                objectDetectorReady = true,
+                poseDetectorReady = true,
+                segmentationReady = false,
+                wholeBodyPoseReady = false
+            ).allRequiredReady
+        )
         assertTrue(!ModelAvailability(objectDetectorReady = true, poseDetectorReady = false).allRequiredReady)
+    }
+
+    @Test
+    fun parseWholeBodyPose_supportsSimccOutputsAndCropMapping() {
+        val xBins = 384
+        val yBins = 512
+        val simccX = MutableList(133 * xBins) { 0f }
+        val simccY = MutableList(133 * yBins) { 0f }
+        repeat(133) { index ->
+            simccX.setSimcc(keypoints = 133, keypoint = index, bin = 96 + index % 7, value = 0.92f)
+            simccY.setSimcc(keypoints = 133, keypoint = index, bin = 128 + index % 9, value = 0.88f)
+        }
+
+        val pose = WholeBodyPoseParser.parse(
+            outputs = listOf(
+                YoloOnnxOutput(values = simccX, shape = longArrayOf(1, 133, xBins.toLong())),
+                YoloOnnxOutput(values = simccY, shape = longArrayOf(1, 133, yBins.toLong()))
+            ),
+            transform = WholeBodyInputTransform(
+                inputWidth = 192,
+                inputHeight = 256,
+                cropBounds = V2Rect(0.25f, 0.10f, 0.75f, 0.90f)
+            )
+        )
+
+        assertEquals(133, pose.keypoints.size)
+        assertEquals(17, pose.body.size)
+        assertEquals(68, pose.face.size)
+        assertEquals(21, pose.leftHand.size)
+        assertEquals(21, pose.rightHand.size)
+        val firstPoint = pose.point(0) ?: error("Expected first whole-body keypoint")
+        assertTrue(firstPoint.x in 0.37f..0.38f)
+        assertTrue(firstPoint.y in 0.29f..0.31f)
+    }
+
+    @Test
+    fun wholeBodyParser_exposesExpectedKeypointGroups() {
+        assertEquals(WholeBodyPart.BODY, WholeBodyPoseParser.groupForIndex(0))
+        assertEquals(WholeBodyPart.FOOT, WholeBodyPoseParser.groupForIndex(18))
+        assertEquals(WholeBodyPart.FACE, WholeBodyPoseParser.groupForIndex(40))
+        assertEquals(WholeBodyPart.LEFT_HAND, WholeBodyPoseParser.groupForIndex(95))
+        assertEquals(WholeBodyPart.RIGHT_HAND, WholeBodyPoseParser.groupForIndex(120))
+    }
+
+    @Test
+    fun parseWholeBodyPose_filtersLowConfidenceKeypoints() {
+        val xBins = 384
+        val yBins = 512
+        val simccX = MutableList(133 * xBins) { 0f }
+        val simccY = MutableList(133 * yBins) { 0f }
+        simccX.setSimcc(keypoints = 133, keypoint = 0, bin = 100, value = 0.12f)
+        simccY.setSimcc(keypoints = 133, keypoint = 0, bin = 140, value = 0.12f)
+
+        val pose = WholeBodyPoseParser.parse(
+            outputs = listOf(
+                YoloOnnxOutput(values = simccX, shape = longArrayOf(1, 133, xBins.toLong())),
+                YoloOnnxOutput(values = simccY, shape = longArrayOf(1, 133, yBins.toLong()))
+            ),
+            transform = WholeBodyInputTransform(
+                inputWidth = 192,
+                inputHeight = 256,
+                cropBounds = V2Rect(0f, 0f, 1f, 1f)
+            )
+        )
+
+        assertEquals(WholeBodyPoseEstimate.Empty, pose)
     }
 
     private fun MutableList<Float>.setChannelsFirst(
@@ -164,5 +238,14 @@ class YoloOutputParserTest {
         value: Float
     ) {
         this[feature * candidateCount + candidate] = value
+    }
+
+    private fun MutableList<Float>.setSimcc(
+        keypoints: Int,
+        keypoint: Int,
+        bin: Int,
+        value: Float
+    ) {
+        this[keypoint * size / keypoints + bin] = value
     }
 }

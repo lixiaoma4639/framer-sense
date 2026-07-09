@@ -116,8 +116,42 @@ class VirtualHumanProjectorTest {
             line.start.x in 0f..1f &&
                 line.start.y in 0f..1f &&
                 line.end.x in 0f..1f &&
+            line.end.y in 0f..1f
+        })
+    }
+
+    @Test
+    fun project_withWholeBodyPose_addsInnerContourLines() {
+        val figure = projector.project(
+            targetBounds = V2Rect(0.18f, 0.12f, 0.72f, 0.92f),
+            profile = BodyProfile(170, 60),
+            template = PoseTemplate.RELAXED_STAND,
+            pose = completePose(),
+            wholeBodyPose = wholeBodyPose()
+        )
+
+        assertTrue(figure.innerContourLines.size > figure.lines.size)
+        assertTrue(figure.innerContourLines.all { line ->
+            line.start.x in 0f..1f &&
+                line.start.y in 0f..1f &&
+                line.end.x in 0f..1f &&
                 line.end.y in 0f..1f
         })
+    }
+
+    @Test
+    fun project_withLowConfidenceWholeBodyPose_doesNotAddInnerContourLines() {
+        val figure = projector.project(
+            targetBounds = V2Rect(0.18f, 0.12f, 0.72f, 0.92f),
+            profile = BodyProfile(170, 60),
+            template = PoseTemplate.RELAXED_STAND,
+            wholeBodyPose = WholeBodyPoseEstimate(
+                keypoints = listOf(WholeBodyKeypoint(23, V2Point(0.42f, 0.20f), 0.1f)),
+                confidence = 0.1f
+            )
+        )
+
+        assertTrue(figure.innerContourLines.isEmpty())
     }
 
     private fun completePose(): PoseEstimate =
@@ -156,6 +190,21 @@ class VirtualHumanProjectorTest {
 
     private fun keypoint(name: PoseKeypointName, x: Float, y: Float): PoseKeypoint =
         PoseKeypoint(name = name, point = V2Point(x, y), confidence = 0.92f)
+
+    private fun wholeBodyPose(): WholeBodyPoseEstimate {
+        val points = mutableListOf<WholeBodyKeypoint>()
+        repeat(133) { index ->
+            points += WholeBodyKeypoint(
+                index = index,
+                point = V2Point(
+                    x = (0.30f + (index % 17) * 0.018f).coerceIn(0f, 1f),
+                    y = (0.16f + (index / 17) * 0.055f).coerceIn(0f, 1f)
+                ),
+                confidence = 0.9f
+            )
+        }
+        return WholeBodyPoseEstimate(points, confidence = 0.86f)
+    }
 
     private fun lineSignature(figure: VirtualHumanFigure): List<Pair<Float, Float>> =
         figure.lines.map { line ->

@@ -137,6 +137,58 @@ class FramePreprocessor {
         return YoloInput(buffer = buffer, transform = transform)
     }
 
+    fun toWholeBodyRgbFloatBuffer(
+        imageProxy: ImageProxy,
+        bounds: V2Rect,
+        width: Int,
+        height: Int
+    ): WholeBodyInput {
+        val buffer = FloatBuffer.allocate(width * height * RGB_CHANNELS)
+        val redValues = FloatArray(width * height)
+        val greenValues = FloatArray(width * height)
+        val blueValues = FloatArray(width * height)
+        val rotation = imageProxy.imageInfo.rotationDegrees
+        val rotatedWidth = if (rotation == 90 || rotation == 270) imageProxy.height else imageProxy.width
+        val rotatedHeight = if (rotation == 90 || rotation == 270) imageProxy.width else imageProxy.height
+        val crop = bounds
+            .expand(WHOLE_BODY_CROP_PADDING)
+            .fitAspect(width.toFloat() / height.toFloat())
+        val transform = WholeBodyInputTransform(
+            inputWidth = width,
+            inputHeight = height,
+            cropBounds = crop
+        )
+
+        for (y in 0 until height) {
+            for (x in 0 until width) {
+                val normalizedX = crop.left + ((x + 0.5f) / width) * crop.width
+                val normalizedY = crop.top + ((y + 0.5f) / height) * crop.height
+                val rotatedX = (normalizedX * rotatedWidth).roundToInt().coerceIn(0, rotatedWidth - 1)
+                val rotatedY = (normalizedY * rotatedHeight).roundToInt().coerceIn(0, rotatedHeight - 1)
+                val source = mapRotatedPointToSource(
+                    x = rotatedX,
+                    y = rotatedY,
+                    rotatedWidth = rotatedWidth,
+                    rotatedHeight = rotatedHeight,
+                    sourceWidth = imageProxy.width,
+                    sourceHeight = imageProxy.height,
+                    rotationDegrees = rotation
+                )
+                val rgb = imageProxy.readRgb(source.first, source.second)
+                val index = y * width + x
+                redValues[index] = (rgb.red - WHOLE_BODY_MEAN[0]) / WHOLE_BODY_STD[0]
+                greenValues[index] = (rgb.green - WHOLE_BODY_MEAN[1]) / WHOLE_BODY_STD[1]
+                blueValues[index] = (rgb.blue - WHOLE_BODY_MEAN[2]) / WHOLE_BODY_STD[2]
+            }
+        }
+
+        redValues.forEach(buffer::put)
+        greenValues.forEach(buffer::put)
+        blueValues.forEach(buffer::put)
+        buffer.rewind()
+        return WholeBodyInput(buffer = buffer, transform = transform)
+    }
+
     private fun mapRotatedPointToSource(
         x: Int,
         y: Int,
@@ -187,6 +239,9 @@ class FramePreprocessor {
         const val LUMINANCE_SAMPLES = 900
         const val DEFAULT_LUMINANCE = 128.0
         const val YOLO_PADDING_RGB = 114
+        const val WHOLE_BODY_CROP_PADDING = 0.08f
+        val WHOLE_BODY_MEAN = floatArrayOf(123.675f, 116.28f, 103.53f)
+        val WHOLE_BODY_STD = floatArrayOf(58.395f, 57.12f, 57.375f)
     }
 }
 
@@ -237,4 +292,49 @@ data class YoloInputTransform(
 
     private fun Float.toModelPixels(): Float =
         if (this <= 1f) this * inputSize else this
+}
+
+data class WholeBodyInput(
+    val buffer: FloatBuffer,
+    val transform: WholeBodyInputTransform
+)
+
+data class WholeBodyInputTransform(
+    val inputWidth: Int,
+    val inputHeight: Int,
+    val cropBounds: V2Rect
+) {
+    fun pointToNormalized(point: V2Point): V2Point =
+        V2Point(
+            x = (cropBounds.left + (point.x / inputWidth) * cropBounds.width).coerceIn(0f, 1f),
+            y = (cropBounds.top + (point.y / inputHeight) * cropBounds.height).coerceIn(0f, 1f)
+        )
+}
+
+private fun V2Rect.expand(padding: Float): V2Rect =
+    V2Rect(left - padding, top - padding, right + padding, bottom + padding).clamped()
+
+private fun V2Rect.fitAspect(targetAspect: Float): V2Rect {
+    val safeWidth = width.coerceAtLeast(0.001f)
+    val safeHeight = height.coerceAtLeast(0.001f)
+    val currentAspect = safeWidth / safeHeight
+    val adjustedWidth: Float
+    val adjustedHeight: Float
+    if (currentAspect > targetAspect) {
+        adjustedWidth = safeWidth
+        adjustedHeight = safeWidth / targetAspect
+    } else {
+        adjustedHeight = safeHeight
+        adjustedWidth = safeHeight * targetAspect
+    }
+    val finalWidth = adjustedWidth.coerceAtMost(1f)
+    val finalHeight = adjustedHeight.coerceAtMost(1f)
+    val adjustedLeft = (centerX - finalWidth / 2f).coerceIn(0f, 1f - finalWidth)
+    val adjustedTop = (centerY - finalHeight / 2f).coerceIn(0f, 1f - finalHeight)
+    return V2Rect(
+        left = adjustedLeft,
+        top = adjustedTop,
+        right = adjustedLeft + finalWidth,
+        bottom = adjustedTop + finalHeight
+    )
 }

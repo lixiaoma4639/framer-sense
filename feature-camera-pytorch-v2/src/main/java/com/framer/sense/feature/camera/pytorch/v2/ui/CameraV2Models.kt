@@ -118,11 +118,46 @@ data class PoseEstimate(
     }
 }
 
+data class WholeBodyKeypoint(
+    val index: Int,
+    val point: V2Point,
+    val confidence: Float
+)
+
+data class WholeBodyPoseEstimate(
+    val keypoints: List<WholeBodyKeypoint>,
+    val confidence: Float
+) {
+    val body: List<WholeBodyKeypoint> = keypoints.inRange(BODY_RANGE)
+    val foot: List<WholeBodyKeypoint> = keypoints.inRange(FOOT_RANGE)
+    val face: List<WholeBodyKeypoint> = keypoints.inRange(FACE_RANGE)
+    val leftHand: List<WholeBodyKeypoint> = keypoints.inRange(LEFT_HAND_RANGE)
+    val rightHand: List<WholeBodyKeypoint> = keypoints.inRange(RIGHT_HAND_RANGE)
+
+    fun point(index: Int): V2Point? =
+        keypoints.firstOrNull { it.index == index && it.confidence >= MIN_KEYPOINT_CONFIDENCE }?.point
+
+    private fun List<WholeBodyKeypoint>.inRange(range: IntRange): List<WholeBodyKeypoint> =
+        filter { it.index in range && it.confidence >= MIN_KEYPOINT_CONFIDENCE }
+
+    companion object {
+        private const val MIN_KEYPOINT_CONFIDENCE = 0.2f
+        val Empty = WholeBodyPoseEstimate(emptyList(), 0f)
+
+        val BODY_RANGE = 0..16
+        val FOOT_RANGE = 17..22
+        val FACE_RANGE = 23..90
+        val LEFT_HAND_RANGE = 91..111
+        val RIGHT_HAND_RANGE = 112..132
+    }
+}
+
 data class CameraV2Analysis(
     val people: List<ScenePerson>,
     val objects: List<SceneObject>,
     val personSegments: List<PersonSegmentation>,
     val pose: PoseEstimate,
+    val wholeBodyPose: WholeBodyPoseEstimate = WholeBodyPoseEstimate.Empty,
     val semanticScene: SemanticScene,
     val luminance: Double,
     val modelAvailability: ModelAvailability
@@ -131,7 +166,8 @@ data class CameraV2Analysis(
 data class ModelAvailability(
     val objectDetectorReady: Boolean,
     val poseDetectorReady: Boolean,
-    val segmentationReady: Boolean = false
+    val segmentationReady: Boolean = false,
+    val wholeBodyPoseReady: Boolean = false
 ) {
     val allRequiredReady: Boolean =
         objectDetectorReady && poseDetectorReady
@@ -140,7 +176,8 @@ data class ModelAvailability(
         val Missing = ModelAvailability(
             objectDetectorReady = false,
             poseDetectorReady = false,
-            segmentationReady = false
+            segmentationReady = false,
+            wholeBodyPoseReady = false
         )
     }
 }
@@ -216,6 +253,7 @@ data class VirtualHumanFigure(
     val bounds: V2Rect,
     val template: PoseTemplate,
     val lines: List<VirtualHumanLine>,
+    val innerContourLines: List<VirtualHumanLine> = emptyList(),
     val headCenter: V2Point,
     val headRadius: Float,
     val contourPathPoints: List<V2Point> = emptyList(),

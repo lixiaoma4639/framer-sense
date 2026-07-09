@@ -26,12 +26,29 @@ class CameraV2OnnxAnalyzer(
             detectedObjects?.first.orEmpty()
         }
         val objects = detectedObjects?.second.orEmpty()
-        val pose = sessions.poseSession?.let { runPoseDetector(it, objectInput) } ?: PoseEstimate.Empty
+        val wholeBodyTarget = personSegments.maxByOrNull { it.bounds.area * it.confidence }?.bounds
+            ?: people.maxByOrNull { it.bounds.area * it.confidence }?.bounds
+        val wholeBodyPose = if (wholeBodyTarget != null) {
+            sessions.wholeBodyPoseSession?.let { session ->
+                runCatching {
+                    runWholeBodyPoseDetector(
+                        session = session,
+                        imageProxy = imageProxy,
+                        targetBounds = wholeBodyTarget
+                    )
+                }.getOrDefault(WholeBodyPoseEstimate.Empty)
+            } ?: WholeBodyPoseEstimate.Empty
+        } else {
+            WholeBodyPoseEstimate.Empty
+        }
+        val yoloPose = sessions.poseSession?.let { runPoseDetector(it, objectInput) } ?: PoseEstimate.Empty
+        val pose = wholeBodyPose.toPoseEstimate() ?: yoloPose
         return CameraV2Analysis(
             people = people,
             objects = objects,
             personSegments = personSegments,
             pose = pose,
+            wholeBodyPose = wholeBodyPose,
             semanticScene = YoloSceneInferencer.infer(objects),
             luminance = luminance,
             modelAvailability = sessions.availability
@@ -108,6 +125,39 @@ class CameraV2OnnxAnalyzer(
         }
     }
 
+    private fun runWholeBodyPoseDetector(
+        session: OrtSession,
+        imageProxy: ImageProxy,
+        targetBounds: V2Rect
+    ): WholeBodyPoseEstimate {
+        val input = preprocessor.toWholeBodyRgbFloatBuffer(
+            imageProxy = imageProxy,
+            bounds = targetBounds,
+            width = WHOLE_BODY_WIDTH,
+            height = WHOLE_BODY_HEIGHT
+        )
+        val inputName = session.inputNames.first()
+        input.buffer.rewind()
+        OnnxTensor.createTensor(
+            sessions.environment,
+            input.buffer,
+            longArrayOf(1, RGB_CHANNELS.toLong(), WHOLE_BODY_HEIGHT.toLong(), WHOLE_BODY_WIDTH.toLong())
+        ).use { tensor ->
+            session.run(mapOf(inputName to tensor)).use { result ->
+                val outputs = result.iterator().asSequence().map { entry ->
+                    YoloOnnxOutput(
+                        values = flattenNumbers(entry.value.value),
+                        shape = entry.value.tensorShape()
+                    )
+                }.toList()
+                return WholeBodyPoseParser.parse(
+                    outputs = outputs,
+                    transform = input.transform
+                )
+            }
+        }
+    }
+
     private fun OrtSession.Result.firstOutput(): OnnxValue? =
         iterator().asSequence().firstOrNull()?.value
 
@@ -120,8 +170,29 @@ class CameraV2OnnxAnalyzer(
 
     private companion object {
         const val YOLO_SIZE = 640
+        const val WHOLE_BODY_WIDTH = 192
+        const val WHOLE_BODY_HEIGHT = 256
         const val RGB_CHANNELS = 3
     }
+}
+
+private fun WholeBodyPoseEstimate.toPoseEstimate(): PoseEstimate? {
+    if (confidence < 0.18f) return null
+    val sourceKeypoints = keypoints
+    val keypoints = PoseKeypointName.entries.mapIndexedNotNull { index, name ->
+        val keypoint = sourceKeypoints.firstOrNull { it.index == index && it.confidence >= 0.2f }
+            ?: return@mapIndexedNotNull null
+        PoseKeypoint(
+            name = name,
+            point = keypoint.point,
+            confidence = keypoint.confidence
+        )
+    }
+    if (keypoints.size < 4) return null
+    return PoseEstimate(
+        keypoints = keypoints,
+        confidence = confidence
+    )
 }
 
 internal data class YoloOnnxOutput(
@@ -539,6 +610,152 @@ internal object YoloSegmentationParser {
     private const val MIN_CONTOUR_POINTS = 4
     private const val MAX_CONTOUR_POINTS = 96
     private const val MAX_SEGMENTS = 3
+}
+
+internal object WholeBodyPoseParser {
+
+    fun parse(
+        outputs: List<YoloOnnxOutput>,
+        transform: WholeBodyInputTransform
+    ): WholeBodyPoseEstimate {
+        val layouts = outputs.mapNotNull { output ->
+            SimccLayout.fromShape(output.shape, output.values.size)?.let { output to it }
+        }
+        if (layouts.size < 2) return WholeBodyPoseEstimate.Empty
+
+        val xOutput = layouts.minByOrNull { (_, layout) ->
+            kotlin.math.abs(layout.bins - transform.inputWidth * SIMCC_SPLIT_RATIO)
+        } ?: return WholeBodyPoseEstimate.Empty
+        val yOutput = layouts
+            .filterNot { it === xOutput }
+            .minByOrNull { (_, layout) ->
+                kotlin.math.abs(layout.bins - transform.inputHeight * SIMCC_SPLIT_RATIO)
+            } ?: return WholeBodyPoseEstimate.Empty
+
+        val xLayout = xOutput.second
+        val yLayout = yOutput.second
+        val keypointCount = minOf(WHOLE_BODY_KEYPOINT_COUNT, xLayout.keypoints, yLayout.keypoints)
+        val keypoints = (0 until keypointCount).mapNotNull { keypointIndex ->
+            val xPeak = xLayout.argmax(xOutput.first.values, keypointIndex)
+            val yPeak = yLayout.argmax(yOutput.first.values, keypointIndex)
+            val confidence = ((xPeak.score.toConfidence() + yPeak.score.toConfidence()) / 2f).coerceIn(0f, 1f)
+            if (confidence < KEYPOINT_SCORE_THRESHOLD) return@mapNotNull null
+            WholeBodyKeypoint(
+                index = keypointIndex,
+                point = transform.pointToNormalized(
+                    V2Point(
+                        x = (xPeak.index + 0.5f) * transform.inputWidth / xLayout.bins,
+                        y = (yPeak.index + 0.5f) * transform.inputHeight / yLayout.bins
+                    )
+                ),
+                confidence = confidence
+            )
+        }
+        if (keypoints.isEmpty()) return WholeBodyPoseEstimate.Empty
+        return WholeBodyPoseEstimate(
+            keypoints = keypoints,
+            confidence = keypoints.map { it.confidence }.average().toFloat()
+        )
+    }
+
+    fun groupForIndex(index: Int): WholeBodyPart =
+        when (index) {
+            in WholeBodyPoseEstimate.BODY_RANGE -> WholeBodyPart.BODY
+            in WholeBodyPoseEstimate.FOOT_RANGE -> WholeBodyPart.FOOT
+            in WholeBodyPoseEstimate.FACE_RANGE -> WholeBodyPart.FACE
+            in WholeBodyPoseEstimate.LEFT_HAND_RANGE -> WholeBodyPart.LEFT_HAND
+            in WholeBodyPoseEstimate.RIGHT_HAND_RANGE -> WholeBodyPart.RIGHT_HAND
+            else -> WholeBodyPart.UNKNOWN
+        }
+
+    private fun Float.toConfidence(): Float =
+        when {
+            isNaN() -> 0f
+            this in 0f..1f -> this
+            else -> (1.0 / (1.0 + exp(-toDouble()))).toFloat()
+        }
+
+    private data class Peak(
+        val index: Int,
+        val score: Float
+    )
+
+    private data class SimccLayout(
+        val keypoints: Int,
+        val bins: Int,
+        val keypointsFirst: Boolean
+    ) {
+        fun argmax(values: List<Float>, keypoint: Int): Peak {
+            var bestIndex = 0
+            var bestScore = Float.NEGATIVE_INFINITY
+            for (bin in 0 until bins) {
+                val score = value(values, keypoint, bin)
+                if (score > bestScore) {
+                    bestScore = score
+                    bestIndex = bin
+                }
+            }
+            return Peak(bestIndex, bestScore.takeIf { it.isFinite() } ?: 0f)
+        }
+
+        private fun value(values: List<Float>, keypoint: Int, bin: Int): Float {
+            val index = if (keypointsFirst) {
+                keypoint * bins + bin
+            } else {
+                bin * keypoints + keypoint
+            }
+            return values.getOrNull(index) ?: Float.NEGATIVE_INFINITY
+        }
+
+        companion object {
+            fun fromShape(shape: LongArray, totalValues: Int): SimccLayout? {
+                val dims = shape.toList()
+                    .filter { it > 0 }
+                    .dropLeadingBatchDimension()
+                    .map { it.toInt() }
+                    .ifEmpty { inferDims(totalValues) }
+                if (dims.size != 2) return null
+                val first = dims[0]
+                val second = dims[1]
+                return when {
+                    first == WHOLE_BODY_KEYPOINT_COUNT -> SimccLayout(
+                        keypoints = first,
+                        bins = second,
+                        keypointsFirst = true
+                    )
+                    second == WHOLE_BODY_KEYPOINT_COUNT -> SimccLayout(
+                        keypoints = second,
+                        bins = first,
+                        keypointsFirst = false
+                    )
+                    else -> null
+                }
+            }
+
+            private fun inferDims(totalValues: Int): List<Int> =
+                if (totalValues % WHOLE_BODY_KEYPOINT_COUNT == 0) {
+                    listOf(WHOLE_BODY_KEYPOINT_COUNT, totalValues / WHOLE_BODY_KEYPOINT_COUNT)
+                } else {
+                    emptyList()
+                }
+        }
+    }
+
+    private fun List<Long>.dropLeadingBatchDimension(): List<Long> =
+        if (size > 2 && first() == 1L) drop(1) else this
+
+    private const val WHOLE_BODY_KEYPOINT_COUNT = 133
+    private const val SIMCC_SPLIT_RATIO = 2
+    private const val KEYPOINT_SCORE_THRESHOLD = 0.18f
+}
+
+enum class WholeBodyPart {
+    BODY,
+    FOOT,
+    FACE,
+    LEFT_HAND,
+    RIGHT_HAND,
+    UNKNOWN
 }
 
 internal object YoloSceneInferencer {

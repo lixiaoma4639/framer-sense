@@ -45,6 +45,7 @@ fun CameraV2Overlay(
     Box(modifier = modifier.fillMaxSize()) {
         Canvas(modifier = Modifier.fillMaxSize()) {
             val dash = PathEffect.dashPathEffect(floatArrayOf(18f, 14f), 0f)
+            val innerDash = PathEffect.dashPathEffect(floatArrayOf(12f, 10f), 0f)
             val figure = guide.virtualHuman
             if (figure.contourPathPoints.size >= 3) {
                 drawPath(
@@ -56,6 +57,22 @@ fun CameraV2Overlay(
                     path = figure.contourPathPoints.toPath(size.width, size.height),
                     color = guideColor.copy(alpha = 0.98f),
                     style = Stroke(width = 6.2f, pathEffect = dash)
+                )
+            }
+            figure.innerContourLines.sortedBy { it.depth }.forEach { line ->
+                drawLine(
+                    color = Color.Black.copy(alpha = 0.68f),
+                    start = line.start.toOffset(size.width, size.height),
+                    end = line.end.toOffset(size.width, size.height),
+                    strokeWidth = 4.2f,
+                    pathEffect = innerDash
+                )
+                drawLine(
+                    color = guideColor.copy(alpha = 0.88f),
+                    start = line.start.toOffset(size.width, size.height),
+                    end = line.end.toOffset(size.width, size.height),
+                    strokeWidth = 2.4f,
+                    pathEffect = innerDash
                 )
             }
             if (figure.drawHead && figure.headRadius > 0f) {

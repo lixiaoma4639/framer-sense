@@ -10,6 +10,7 @@ class VirtualHumanProjector {
         profile: BodyProfile,
         template: PoseTemplate,
         pose: PoseEstimate = PoseEstimate.Empty,
+        wholeBodyPose: WholeBodyPoseEstimate = WholeBodyPoseEstimate.Empty,
         contourPathPoints: List<V2Point> = emptyList(),
         matchTargetBounds: Boolean = false
     ): VirtualHumanFigure {
@@ -52,6 +53,7 @@ class VirtualHumanProjector {
             bounds = bounds,
             template = template,
             lines = lines,
+            innerContourLines = WholeBodyInnerContourBuilder.build(wholeBodyPose),
             headCenter = projected[Joint.HEAD] ?: V2Point(bounds.centerX, bounds.top + bounds.height * 0.10f),
             headRadius = if (posePoints.drawHead) max(bounds.width * 0.12f, 0.025f) else 0f,
             contourPathPoints = contourPathPoints,

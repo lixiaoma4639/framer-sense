@@ -147,11 +147,26 @@ class CameraV2CompositionEngineTest {
         assertTrue(kotlin.math.abs(guide.virtualHuman.bounds.height - person.bounds.height) < 0.08f)
     }
 
+    @Test
+    fun buildGuide_withWholeBodyPose_addsInnerContourLines() {
+        val guide = engine.buildGuide(
+            analysis = analysis(
+                people = listOf(ScenePerson(V2Rect(0.24f, 0.18f, 0.52f, 0.86f), 0.88f)),
+                pose = completePose(),
+                wholeBodyPose = wholeBodyPose()
+            ),
+            profile = profile
+        )
+
+        assertTrue(guide.virtualHuman.innerContourLines.isNotEmpty())
+    }
+
     private fun analysis(
         people: List<ScenePerson> = emptyList(),
         objects: List<SceneObject> = emptyList(),
         personSegments: List<PersonSegmentation> = emptyList(),
         pose: PoseEstimate = PoseEstimate.Empty,
+        wholeBodyPose: WholeBodyPoseEstimate = WholeBodyPoseEstimate.Empty,
         scene: SemanticScene = SemanticScene("living_room", SceneGroup.INDOOR, 0.8f),
         luminance: Double = 128.0,
         modelAvailability: ModelAvailability = ModelAvailability(
@@ -164,6 +179,7 @@ class CameraV2CompositionEngineTest {
             objects = objects,
             personSegments = personSegments,
             pose = pose,
+            wholeBodyPose = wholeBodyPose,
             semanticScene = scene,
             luminance = luminance,
             modelAvailability = modelAvailability
@@ -191,4 +207,19 @@ class CameraV2CompositionEngineTest {
 
     private fun keypoint(name: PoseKeypointName, x: Float, y: Float): PoseKeypoint =
         PoseKeypoint(name = name, point = V2Point(x, y), confidence = 0.92f)
+
+    private fun wholeBodyPose(): WholeBodyPoseEstimate {
+        val points = mutableListOf<WholeBodyKeypoint>()
+        repeat(133) { index ->
+            points += WholeBodyKeypoint(
+                index = index,
+                point = V2Point(
+                    x = (0.30f + (index % 17) * 0.018f).coerceIn(0f, 1f),
+                    y = (0.16f + (index / 17) * 0.055f).coerceIn(0f, 1f)
+                ),
+                confidence = 0.9f
+            )
+        }
+        return WholeBodyPoseEstimate(points, confidence = 0.86f)
+    }
 }

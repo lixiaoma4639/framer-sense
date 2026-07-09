@@ -15,12 +15,14 @@ class OnnxSessionPool(
     val objectSession: OrtSession? = createSessionIfPresent(OBJECT_MODEL)
     val poseSession: OrtSession? = createSessionIfPresent(POSE_MODEL)
     val segmentationSession: OrtSession? = createSessionIfPresent(SEGMENTATION_MODEL)
+    val wholeBodyPoseSession: OrtSession? = createSessionIfPresent(WHOLE_BODY_POSE_MODEL)
 
     val availability: ModelAvailability =
         ModelAvailability(
             objectDetectorReady = objectSession != null,
             poseDetectorReady = poseSession != null,
-            segmentationReady = segmentationSession != null
+            segmentationReady = segmentationSession != null,
+            wholeBodyPoseReady = wholeBodyPoseSession != null
         )
 
     private fun createSessionIfPresent(assetPath: String): OrtSession? {
@@ -51,11 +53,13 @@ class OnnxSessionPool(
         objectSession?.close()
         poseSession?.close()
         segmentationSession?.close()
+        wholeBodyPoseSession?.close()
     }
 
     companion object {
         const val OBJECT_MODEL = "models/yolov8n.onnx"
         const val POSE_MODEL = "models/yolov8n-pose.onnx"
         const val SEGMENTATION_MODEL = "models/yolov8n-seg.onnx"
+        const val WHOLE_BODY_POSE_MODEL = "models/rtmpose_wholebody_256x192.onnx"
     }
 }

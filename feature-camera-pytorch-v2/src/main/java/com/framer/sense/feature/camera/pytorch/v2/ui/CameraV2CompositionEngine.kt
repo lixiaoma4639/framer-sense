@@ -21,6 +21,7 @@ class CameraV2CompositionEngine(
             profile = profile,
             template = template,
             pose = analysis.pose,
+            wholeBodyPose = analysis.wholeBodyPose,
             contourPathPoints = primarySegment?.contour.orEmpty(),
             matchTargetBounds = primarySegment != null || primaryPerson != null
         )
