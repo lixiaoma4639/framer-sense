@@ -15,10 +15,9 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.res.colorResource
@@ -46,28 +45,47 @@ fun CameraV2Overlay(
     Box(modifier = modifier.fillMaxSize()) {
         Canvas(modifier = Modifier.fillMaxSize()) {
             val dash = PathEffect.dashPathEffect(floatArrayOf(18f, 14f), 0f)
-            val target = guide.targetBounds
-            drawRoundRect(
-                color = guideColor.copy(alpha = 0.46f),
-                topLeft = Offset(target.left * size.width, target.top * size.height),
-                size = Size(target.width * size.width, target.height * size.height),
-                cornerRadius = CornerRadius(26f, 26f),
-                style = Stroke(width = 4.5f, pathEffect = dash)
-            )
-
             val figure = guide.virtualHuman
-            drawCircle(
-                color = guideColor.copy(alpha = 0.88f),
-                radius = figure.headRadius * size.minDimension,
-                center = figure.headCenter.toOffset(size.width, size.height),
-                style = Stroke(width = 5f)
-            )
+            if (figure.contourPathPoints.size >= 3) {
+                drawPath(
+                    path = figure.contourPathPoints.toPath(size.width, size.height),
+                    color = Color.Black.copy(alpha = 0.82f),
+                    style = Stroke(width = 9.4f, pathEffect = dash)
+                )
+                drawPath(
+                    path = figure.contourPathPoints.toPath(size.width, size.height),
+                    color = guideColor.copy(alpha = 0.98f),
+                    style = Stroke(width = 6.2f, pathEffect = dash)
+                )
+            }
+            if (figure.drawHead && figure.headRadius > 0f) {
+                drawCircle(
+                    color = Color.Black.copy(alpha = 0.80f),
+                    radius = figure.headRadius * size.minDimension,
+                    center = figure.headCenter.toOffset(size.width, size.height),
+                    style = Stroke(width = 8.2f)
+                )
+                drawCircle(
+                    color = guideColor.copy(alpha = 0.98f),
+                    radius = figure.headRadius * size.minDimension,
+                    center = figure.headCenter.toOffset(size.width, size.height),
+                    style = Stroke(width = 5.8f)
+                )
+            }
             figure.lines.sortedBy { it.depth }.forEach { line ->
+                val depthFactor = ((line.depth + 0.14f) / 0.28f).coerceIn(0f, 1f)
                 drawLine(
-                    color = guideColor.copy(alpha = (0.70f + line.depth * 0.6f).coerceIn(0.45f, 0.95f)),
+                    color = Color.Black.copy(alpha = 0.78f),
                     start = line.start.toOffset(size.width, size.height),
                     end = line.end.toOffset(size.width, size.height),
-                    strokeWidth = (4.2f - line.depth * 3f).coerceIn(2.4f, 5.2f),
+                    strokeWidth = (5.0f + depthFactor * 3.4f).coerceIn(4.6f, 8.4f),
+                    pathEffect = dash
+                )
+                drawLine(
+                    color = guideColor.copy(alpha = (0.78f + depthFactor * 0.20f).coerceIn(0.76f, 1.0f)),
+                    start = line.start.toOffset(size.width, size.height),
+                    end = line.end.toOffset(size.width, size.height),
+                    strokeWidth = (3.2f + depthFactor * 3.0f).coerceIn(3.0f, 6.4f),
                     pathEffect = dash
                 )
             }
@@ -131,6 +149,16 @@ fun CameraV2Overlay(
 
 private fun V2Point.toOffset(width: Float, height: Float): Offset =
     Offset(x = x * width, y = y * height)
+
+private fun List<V2Point>.toPath(width: Float, height: Float): Path =
+    Path().apply {
+        val first = first()
+        moveTo(first.x * width, first.y * height)
+        drop(1).forEach { point ->
+            lineTo(point.x * width, point.y * height)
+        }
+        close()
+    }
 
 private fun CameraV2Movement.directionTextRes(): Int? =
     when (this) {

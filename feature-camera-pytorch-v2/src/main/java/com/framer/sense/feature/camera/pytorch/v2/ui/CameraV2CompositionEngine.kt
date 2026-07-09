@@ -11,7 +11,19 @@ class CameraV2CompositionEngine(
     ): CameraV2Guide {
         val targetBounds = chooseTargetBounds(analysis)
         val template = poseTemplateSelector.select(analysis.pose, analysis.semanticScene)
-        val figure = projector.project(targetBounds, profile, template)
+        val primaryPerson = analysis.people.maxByOrNull { it.bounds.area * it.confidence }
+        val primarySegment = analysis.personSegments.maxByOrNull { it.bounds.area * it.confidence }
+        val humanOverlayBounds = primarySegment?.bounds
+            ?: primaryPerson?.bounds?.expandedWithPose(analysis.pose)
+            ?: targetBounds
+        val figure = projector.project(
+            targetBounds = humanOverlayBounds,
+            profile = profile,
+            template = template,
+            pose = analysis.pose,
+            contourPathPoints = primarySegment?.contour.orEmpty(),
+            matchTargetBounds = primarySegment != null || primaryPerson != null
+        )
 
         if (!analysis.modelAvailability.allRequiredReady) {
             return guide(
@@ -50,8 +62,7 @@ class CameraV2CompositionEngine(
             )
         }
 
-        val primaryPerson = analysis.people.maxByOrNull { it.bounds.area * it.confidence }
-            ?: return guide(
+        primaryPerson ?: return guide(
                 targetBounds = targetBounds,
                 quality = CameraV2Quality.NEEDS_MOVE,
                 movement = CameraV2Movement.NONE,
@@ -161,6 +172,23 @@ class CameraV2CompositionEngine(
             else -> CameraV2Hint.SCENE_BUSY
         }
 
+    private fun V2Rect.expandedWithPose(pose: PoseEstimate): V2Rect {
+        val posePoints = pose.keypoints
+            .filter { it.confidence >= POSE_BOX_KEYPOINT_THRESHOLD }
+            .map { it.point }
+        if (posePoints.isEmpty()) return expand(PERSON_BOX_PADDING)
+        val poseBounds = V2Rect(
+            left = minOf(left, posePoints.minOf { it.x }),
+            top = minOf(top, posePoints.minOf { it.y }),
+            right = maxOf(right, posePoints.maxOf { it.x }),
+            bottom = maxOf(bottom, posePoints.maxOf { it.y })
+        )
+        return poseBounds.expand(PERSON_BOX_PADDING)
+    }
+
+    private fun V2Rect.expand(padding: Float): V2Rect =
+        V2Rect(left - padding, top - padding, right + padding, bottom + padding).clamped()
+
     private fun guide(
         targetBounds: V2Rect,
         quality: CameraV2Quality,
@@ -187,6 +215,8 @@ class CameraV2CompositionEngine(
         const val CENTER_TOLERANCE_X = 0.065f
         const val CENTER_TOLERANCE_Y = 0.075f
         const val AREA_BIAS = 1.2
+        const val PERSON_BOX_PADDING = 0.025f
+        const val POSE_BOX_KEYPOINT_THRESHOLD = 0.2f
 
         val LEFT_ZONE = V2Rect(0f, 0f, 0.5f, 1f)
         val RIGHT_ZONE = V2Rect(0.5f, 0f, 1f, 1f)

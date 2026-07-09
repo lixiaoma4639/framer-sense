@@ -121,8 +121,39 @@ class YoloOutputParserTest {
     }
 
     @Test
+    fun parsePersonSegments_supportsRawYolov8SegOutput() {
+        val prediction = MutableList(116) { 0f }
+        prediction[0] = 320f
+        prediction[1] = 320f
+        prediction[2] = 640f
+        prediction[3] = 640f
+        prediction[4] = 0.92f
+        prediction[84] = 10f
+
+        val proto = MutableList(32 * 4 * 4) { -1f }
+        for (y in 1..2) {
+            for (x in 1..2) {
+                proto[y * 4 + x] = 1f
+            }
+        }
+
+        val segments = YoloSegmentationParser.parsePersonSegments(
+            outputs = listOf(
+                YoloOnnxOutput(values = prediction, shape = longArrayOf(1, 1, 116)),
+                YoloOnnxOutput(values = proto, shape = longArrayOf(1, 32, 4, 4))
+            ),
+            transform = squareTransform
+        )
+
+        assertEquals(1, segments.size)
+        assertTrue(segments.first().contour.size >= 4)
+        assertTrue(segments.first().contour.all { it.x in 0f..1f && it.y in 0f..1f })
+    }
+
+    @Test
     fun modelAvailability_requiresOnlyObjectAndPoseModels() {
         assertTrue(ModelAvailability(objectDetectorReady = true, poseDetectorReady = true).allRequiredReady)
+        assertTrue(ModelAvailability(objectDetectorReady = true, poseDetectorReady = true, segmentationReady = false).allRequiredReady)
         assertTrue(!ModelAvailability(objectDetectorReady = true, poseDetectorReady = false).allRequiredReady)
     }
 

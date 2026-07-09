@@ -1,5 +1,6 @@
 package com.framer.sense.feature.camera.pytorch.v2.ui
 
+import kotlin.math.abs
 import kotlin.math.max
 
 class VirtualHumanProjector {
@@ -7,28 +8,35 @@ class VirtualHumanProjector {
     fun project(
         targetBounds: V2Rect,
         profile: BodyProfile,
-        template: PoseTemplate
+        template: PoseTemplate,
+        pose: PoseEstimate = PoseEstimate.Empty,
+        contourPathPoints: List<V2Point> = emptyList(),
+        matchTargetBounds: Boolean = false
     ): VirtualHumanFigure {
-        val figureHeight = (targetBounds.height * profile.heightScale).coerceIn(
-            targetBounds.height * 0.86f,
-            minOf(0.82f, targetBounds.height * 1.08f)
-        )
-        val centerY = targetBounds.bottom - figureHeight / 2f
-        val top = (centerY - figureHeight / 2f).coerceAtLeast(0.06f)
-        val bottom = (top + figureHeight).coerceAtMost(0.96f)
-        val width = (targetBounds.width * profile.widthScale).coerceIn(0.20f, 0.48f)
-        val left = (targetBounds.centerX - width / 2f).coerceIn(0.04f, 0.96f - width)
-        val bounds = V2Rect(left, top, left + width, bottom)
+        val bounds = if (matchTargetBounds) {
+            targetBounds.clamped().ensureMinimumSize()
+        } else {
+            val figureHeight = (targetBounds.height * profile.heightScale).coerceIn(
+                targetBounds.height * 0.86f,
+                minOf(0.82f, targetBounds.height * 1.08f)
+            )
+            val centerY = targetBounds.bottom - figureHeight / 2f
+            val top = (centerY - figureHeight / 2f).coerceAtLeast(0.06f)
+            val bottom = (top + figureHeight).coerceAtMost(0.96f)
+            val width = (targetBounds.width * profile.widthScale).coerceIn(0.20f, 0.48f)
+            val left = (targetBounds.centerX - width / 2f).coerceIn(0.04f, 0.96f - width)
+            V2Rect(left, top, left + width, bottom)
+        }
 
-        val points = buildPosePoints(template, profile)
-        val projected = points.mapValues { (_, point) ->
+        val posePoints = buildPosePoints(template, profile, pose, bounds)
+        val projected = posePoints.points.mapValues { (_, point) ->
             projectPoint(bounds, point)
         }
         val lines = SKELETON.mapNotNull { bone ->
             val start = projected[bone.first]
             val end = projected[bone.second]
-            val start3d = points[bone.first]
-            val end3d = points[bone.second]
+            val start3d = posePoints.points[bone.first]
+            val end3d = posePoints.points[bone.second]
             if (start == null || end == null || start3d == null || end3d == null) {
                 null
             } else {
@@ -44,12 +52,41 @@ class VirtualHumanProjector {
             bounds = bounds,
             template = template,
             lines = lines,
-            headCenter = projected.getValue(Joint.HEAD),
-            headRadius = max(bounds.width * 0.12f, 0.025f)
+            headCenter = projected[Joint.HEAD] ?: V2Point(bounds.centerX, bounds.top + bounds.height * 0.10f),
+            headRadius = if (posePoints.drawHead) max(bounds.width * 0.12f, 0.025f) else 0f,
+            contourPathPoints = contourPathPoints,
+            drawHead = posePoints.drawHead && !posePoints.poseDriven && !matchTargetBounds && contourPathPoints.isEmpty(),
+            poseDriven = posePoints.poseDriven
         )
     }
 
-    private fun buildPosePoints(template: PoseTemplate, profile: BodyProfile): Map<Joint, Point3> {
+    private fun V2Rect.ensureMinimumSize(): V2Rect {
+        val adjustedWidth = width.coerceAtLeast(MIN_MATCHED_WIDTH)
+        val adjustedHeight = height.coerceAtLeast(MIN_MATCHED_HEIGHT)
+        val left = (centerX - adjustedWidth / 2f).coerceIn(0f, 1f - adjustedWidth)
+        val top = (centerY - adjustedHeight / 2f).coerceIn(0f, 1f - adjustedHeight)
+        return V2Rect(left, top, left + adjustedWidth, top + adjustedHeight)
+    }
+
+    private fun buildPosePoints(
+        template: PoseTemplate,
+        profile: BodyProfile,
+        pose: PoseEstimate,
+        bounds: V2Rect
+    ): PosePointSet {
+        val posePoints = buildPoseAwarePoints(pose, bounds)
+        return if (posePoints == null) {
+            PosePointSet(
+                points = buildTemplatePosePoints(template, profile),
+                drawHead = true,
+                poseDriven = false
+            )
+        } else {
+            posePoints
+        }
+    }
+
+    private fun buildTemplatePosePoints(template: PoseTemplate, profile: BodyProfile): Map<Joint, Point3> {
         val shoulderHalf = 0.24f * profile.widthScale
         val hipHalf = 0.17f * profile.widthScale
         val sideOffset = if (template == PoseTemplate.SIDE_STANCE) 0.06f else 0f
@@ -73,6 +110,82 @@ class VirtualHumanProjector {
         )
     }
 
+    private fun buildPoseAwarePoints(pose: PoseEstimate, bounds: V2Rect): PosePointSet? {
+        if (pose.confidence < POSE_CONFIDENCE_THRESHOLD) return null
+
+        val namedPoints = PoseKeypointName.entries.associateWith { pose.point(it) }
+        val leftShoulder = namedPoints[PoseKeypointName.LEFT_SHOULDER] ?: return null
+        val rightShoulder = namedPoints[PoseKeypointName.RIGHT_SHOULDER] ?: return null
+        val leftHip = namedPoints[PoseKeypointName.LEFT_HIP]
+        val rightHip = namedPoints[PoseKeypointName.RIGHT_HIP]
+        val visibleKeypointCount = namedPoints.values.count { it != null }
+        val hasUsefulBodyPoint = listOf(
+            PoseKeypointName.NOSE,
+            PoseKeypointName.LEFT_EYE,
+            PoseKeypointName.RIGHT_EYE,
+            PoseKeypointName.LEFT_ELBOW,
+            PoseKeypointName.RIGHT_ELBOW,
+            PoseKeypointName.LEFT_WRIST,
+            PoseKeypointName.RIGHT_WRIST,
+            PoseKeypointName.LEFT_HIP,
+            PoseKeypointName.RIGHT_HIP
+        ).any { namedPoints[it] != null }
+        if (visibleKeypointCount < MIN_KEYPOINTS_FOR_POSE || !hasUsefulBodyPoint) return null
+
+        val headAnchor = firstAvailable(
+            namedPoints,
+            PoseKeypointName.NOSE,
+            PoseKeypointName.LEFT_EYE,
+            PoseKeypointName.RIGHT_EYE,
+            PoseKeypointName.LEFT_EAR,
+            PoseKeypointName.RIGHT_EAR
+        )
+        val mappedPoints = mapOf(
+            Joint.HEAD to headAnchor,
+            Joint.NECK to midpoint(leftShoulder, rightShoulder),
+            Joint.LEFT_SHOULDER to leftShoulder,
+            Joint.RIGHT_SHOULDER to rightShoulder,
+            Joint.LEFT_ELBOW to namedPoints[PoseKeypointName.LEFT_ELBOW],
+            Joint.RIGHT_ELBOW to namedPoints[PoseKeypointName.RIGHT_ELBOW],
+            Joint.LEFT_HAND to namedPoints[PoseKeypointName.LEFT_WRIST],
+            Joint.RIGHT_HAND to namedPoints[PoseKeypointName.RIGHT_WRIST],
+            Joint.LEFT_HIP to leftHip,
+            Joint.RIGHT_HIP to rightHip,
+            Joint.LEFT_KNEE to namedPoints[PoseKeypointName.LEFT_KNEE],
+            Joint.RIGHT_KNEE to namedPoints[PoseKeypointName.RIGHT_KNEE],
+            Joint.LEFT_FOOT to namedPoints[PoseKeypointName.LEFT_ANKLE],
+            Joint.RIGHT_FOOT to namedPoints[PoseKeypointName.RIGHT_ANKLE]
+        )
+
+        val leftDepth = estimateSideDepth(
+            shoulder = leftShoulder,
+            hip = leftHip,
+            foot = namedPoints[PoseKeypointName.LEFT_ANKLE],
+            oppositeShoulder = rightShoulder,
+            oppositeHip = rightHip,
+            oppositeFoot = namedPoints[PoseKeypointName.RIGHT_ANKLE]
+        )
+        val rightDepth = -leftDepth
+
+        val points = mappedPoints.mapValues { (joint, point) ->
+            point?.toPoint3(bounds, joint.depthForSide(leftDepth, rightDepth))
+        }.toMutableMap()
+        points[Joint.LEFT_ELBOW] = points[Joint.LEFT_ELBOW] ?: interpolate(points[Joint.LEFT_SHOULDER], points[Joint.LEFT_HAND], 0.55f)
+        points[Joint.RIGHT_ELBOW] = points[Joint.RIGHT_ELBOW] ?: interpolate(points[Joint.RIGHT_SHOULDER], points[Joint.RIGHT_HAND], 0.55f)
+        points[Joint.LEFT_HAND] = points[Joint.LEFT_HAND] ?: extend(points[Joint.LEFT_SHOULDER], points[Joint.LEFT_ELBOW], 0.72f)
+        points[Joint.RIGHT_HAND] = points[Joint.RIGHT_HAND] ?: extend(points[Joint.RIGHT_SHOULDER], points[Joint.RIGHT_ELBOW], 0.72f)
+        points[Joint.LEFT_KNEE] = points[Joint.LEFT_KNEE] ?: interpolate(points[Joint.LEFT_HIP], points[Joint.LEFT_FOOT], 0.54f)
+        points[Joint.RIGHT_KNEE] = points[Joint.RIGHT_KNEE] ?: interpolate(points[Joint.RIGHT_HIP], points[Joint.RIGHT_FOOT], 0.54f)
+        points[Joint.LEFT_FOOT] = points[Joint.LEFT_FOOT] ?: extend(points[Joint.LEFT_HIP], points[Joint.LEFT_KNEE], 0.78f)
+        points[Joint.RIGHT_FOOT] = points[Joint.RIGHT_FOOT] ?: extend(points[Joint.RIGHT_HIP], points[Joint.RIGHT_KNEE], 0.78f)
+
+        return PosePointSet(
+            points = points.filterValues { it != null }.mapValues { it.value ?: error("Unexpected null pose point") },
+            drawHead = headAnchor != null,
+            poseDriven = true
+        )
+    }
+
     private fun projectPoint(bounds: V2Rect, point: Point3): V2Point {
         val perspective = 1f / (1f + point.z * 0.45f)
         return V2Point(
@@ -81,10 +194,78 @@ class VirtualHumanProjector {
         )
     }
 
+    private fun V2Point.toPoint3(bounds: V2Rect, depth: Float): Point3 {
+        val centerX = bounds.centerX
+        val width = bounds.width.coerceAtLeast(0.001f)
+        val height = bounds.height.coerceAtLeast(0.001f)
+        val x = ((x - centerX) / width * POSE_X_GAIN).coerceIn(-0.68f, 0.68f)
+        val y = ((y - bounds.top) / height * POSE_Y_GAIN).coerceIn(0.02f, 0.99f)
+        return Point3(x = x, y = y, z = depth)
+    }
+
+    private fun Joint.depthForSide(leftDepth: Float, rightDepth: Float): Float =
+        when (this) {
+            Joint.LEFT_SHOULDER, Joint.LEFT_ELBOW, Joint.LEFT_HAND, Joint.LEFT_HIP, Joint.LEFT_KNEE, Joint.LEFT_FOOT -> leftDepth
+            Joint.RIGHT_SHOULDER, Joint.RIGHT_ELBOW, Joint.RIGHT_HAND, Joint.RIGHT_HIP, Joint.RIGHT_KNEE, Joint.RIGHT_FOOT -> rightDepth
+            Joint.HEAD, Joint.NECK -> max(leftDepth, rightDepth) * 0.45f
+        }
+
+    private fun estimateSideDepth(
+        shoulder: V2Point,
+        hip: V2Point?,
+        foot: V2Point?,
+        oppositeShoulder: V2Point,
+        oppositeHip: V2Point?,
+        oppositeFoot: V2Point?
+    ): Float {
+        val ownLower = foot?.y ?: hip?.y ?: shoulder.y
+        val oppositeLower = oppositeFoot?.y ?: oppositeHip?.y ?: oppositeShoulder.y
+        val lowerBias = (ownLower - oppositeLower).coerceIn(-0.08f, 0.08f)
+        val shoulderBias = if (hip != null && oppositeHip != null) {
+            (abs(oppositeShoulder.x - shoulder.x) - abs(oppositeHip.x - hip.x)).coerceIn(-0.06f, 0.06f)
+        } else {
+            0f
+        }
+        return (lowerBias * 1.2f + shoulderBias * 0.7f).coerceIn(-0.12f, 0.12f)
+    }
+
+    private fun midpoint(first: V2Point, second: V2Point): V2Point =
+        V2Point((first.x + second.x) / 2f, (first.y + second.y) / 2f)
+
+    private fun firstAvailable(
+        points: Map<PoseKeypointName, V2Point?>,
+        vararg names: PoseKeypointName
+    ): V2Point? =
+        names.firstNotNullOfOrNull { points[it] }
+
+    private fun interpolate(start: Point3?, end: Point3?, amount: Float): Point3? {
+        if (start == null || end == null) return null
+        return Point3(
+            x = start.x + (end.x - start.x) * amount,
+            y = start.y + (end.y - start.y) * amount,
+            z = start.z + (end.z - start.z) * amount
+        )
+    }
+
+    private fun extend(start: Point3?, end: Point3?, amount: Float): Point3? {
+        if (start == null || end == null) return null
+        return Point3(
+            x = end.x + (end.x - start.x) * amount,
+            y = end.y + (end.y - start.y) * amount,
+            z = end.z + (end.z - start.z) * amount
+        )
+    }
+
     private data class Point3(
         val x: Float,
         val y: Float,
         val z: Float
+    )
+
+    private data class PosePointSet(
+        val points: Map<Joint, Point3>,
+        val drawHead: Boolean,
+        val poseDriven: Boolean
     )
 
     private enum class Joint {
@@ -105,6 +286,13 @@ class VirtualHumanProjector {
     }
 
     private companion object {
+        const val POSE_CONFIDENCE_THRESHOLD = 0.25f
+        const val MIN_KEYPOINTS_FOR_POSE = 4
+        const val POSE_X_GAIN = 1.18f
+        const val POSE_Y_GAIN = 0.90f
+        const val MIN_MATCHED_WIDTH = 0.12f
+        const val MIN_MATCHED_HEIGHT = 0.24f
+
         val SKELETON = listOf(
             Joint.HEAD to Joint.NECK,
             Joint.NECK to Joint.LEFT_SHOULDER,

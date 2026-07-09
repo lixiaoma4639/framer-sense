@@ -1,5 +1,6 @@
 package com.framer.sense.feature.camera.pytorch.v2.ui
 
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -36,4 +37,128 @@ class VirtualHumanProjectorTest {
                 line.end.y in 0f..1f
         })
     }
+
+    @Test
+    fun project_withCompletePose_changesSkeletonFromTemplate() {
+        val target = V2Rect(0.32f, 0.14f, 0.68f, 0.92f)
+        val template = projector.project(
+            targetBounds = target,
+            profile = BodyProfile(170, 60),
+            template = PoseTemplate.RELAXED_STAND
+        )
+        val poseAware = projector.project(
+            targetBounds = target,
+            profile = BodyProfile(170, 60),
+            template = PoseTemplate.RELAXED_STAND,
+            pose = completePose()
+        )
+
+        assertTrue(poseAware.lines.isNotEmpty())
+        assertTrue(lineSignature(template) != lineSignature(poseAware))
+        assertTrue(poseAware.lines.any { it.depth > 0.02f })
+        assertTrue(poseAware.lines.any { it.depth < -0.02f })
+        assertTrue(poseAware.poseDriven)
+        assertTrue(!poseAware.drawHead)
+    }
+
+    @Test
+    fun project_withInsufficientPose_fallsBackToTemplate() {
+        val target = V2Rect(0.32f, 0.14f, 0.68f, 0.92f)
+        val template = projector.project(target, BodyProfile(170, 60), PoseTemplate.SIDE_STANCE)
+        val fallback = projector.project(
+            targetBounds = target,
+            profile = BodyProfile(170, 60),
+            template = PoseTemplate.SIDE_STANCE,
+            pose = PoseEstimate(
+                keypoints = listOf(
+                    keypoint(PoseKeypointName.LEFT_SHOULDER, 0.44f, 0.30f),
+                    keypoint(PoseKeypointName.RIGHT_SHOULDER, 0.56f, 0.30f)
+                ),
+                confidence = 0.9f
+            )
+        )
+
+        assertEquals(template, fallback)
+    }
+
+    @Test
+    fun project_withHalfBodyPose_drawsUpperBodyWithoutTemplateLegs() {
+        val target = V2Rect(0.30f, 0.12f, 0.70f, 0.68f)
+        val figure = projector.project(
+            targetBounds = target,
+            profile = BodyProfile(170, 60),
+            template = PoseTemplate.RELAXED_STAND,
+            pose = halfBodyPose(),
+            matchTargetBounds = true
+        )
+
+        assertTrue(figure.poseDriven)
+        assertTrue(!figure.drawHead)
+        assertTrue(figure.lines.size in 5..8)
+        assertTrue(figure.lines.none { line ->
+            line.start.y > target.top + target.height * 0.82f ||
+                line.end.y > target.top + target.height * 0.82f
+        })
+    }
+
+    @Test
+    fun project_withPose_keepsAllPointsInsidePreview() {
+        val figure = projector.project(
+            targetBounds = V2Rect(0.10f, 0.14f, 0.46f, 0.90f),
+            profile = BodyProfile(190, 90),
+            template = PoseTemplate.WALKING,
+            pose = completePose()
+        )
+
+        assertTrue(figure.headCenter.x in 0f..1f)
+        assertTrue(figure.headCenter.y in 0f..1f)
+        assertTrue(figure.lines.all { line ->
+            line.start.x in 0f..1f &&
+                line.start.y in 0f..1f &&
+                line.end.x in 0f..1f &&
+                line.end.y in 0f..1f
+        })
+    }
+
+    private fun completePose(): PoseEstimate =
+        PoseEstimate(
+            keypoints = listOf(
+                keypoint(PoseKeypointName.NOSE, 0.50f, 0.18f),
+                keypoint(PoseKeypointName.LEFT_SHOULDER, 0.40f, 0.32f),
+                keypoint(PoseKeypointName.RIGHT_SHOULDER, 0.59f, 0.30f),
+                keypoint(PoseKeypointName.LEFT_ELBOW, 0.34f, 0.46f),
+                keypoint(PoseKeypointName.RIGHT_ELBOW, 0.67f, 0.42f),
+                keypoint(PoseKeypointName.LEFT_WRIST, 0.31f, 0.60f),
+                keypoint(PoseKeypointName.RIGHT_WRIST, 0.70f, 0.54f),
+                keypoint(PoseKeypointName.LEFT_HIP, 0.44f, 0.58f),
+                keypoint(PoseKeypointName.RIGHT_HIP, 0.57f, 0.57f),
+                keypoint(PoseKeypointName.LEFT_KNEE, 0.38f, 0.76f),
+                keypoint(PoseKeypointName.RIGHT_KNEE, 0.61f, 0.72f),
+                keypoint(PoseKeypointName.LEFT_ANKLE, 0.34f, 0.94f),
+                keypoint(PoseKeypointName.RIGHT_ANKLE, 0.65f, 0.89f)
+            ),
+            confidence = 0.88f
+        )
+
+    private fun halfBodyPose(): PoseEstimate =
+        PoseEstimate(
+            keypoints = listOf(
+                keypoint(PoseKeypointName.NOSE, 0.50f, 0.18f),
+                keypoint(PoseKeypointName.LEFT_SHOULDER, 0.39f, 0.34f),
+                keypoint(PoseKeypointName.RIGHT_SHOULDER, 0.61f, 0.33f),
+                keypoint(PoseKeypointName.LEFT_ELBOW, 0.34f, 0.48f),
+                keypoint(PoseKeypointName.RIGHT_ELBOW, 0.66f, 0.46f),
+                keypoint(PoseKeypointName.LEFT_WRIST, 0.33f, 0.62f),
+                keypoint(PoseKeypointName.RIGHT_WRIST, 0.68f, 0.58f)
+            ),
+            confidence = 0.84f
+        )
+
+    private fun keypoint(name: PoseKeypointName, x: Float, y: Float): PoseKeypoint =
+        PoseKeypoint(name = name, point = V2Point(x, y), confidence = 0.92f)
+
+    private fun lineSignature(figure: VirtualHumanFigure): List<Pair<Float, Float>> =
+        figure.lines.map { line ->
+            (line.start.x + line.end.x) to (line.start.y + line.end.y)
+        }
 }

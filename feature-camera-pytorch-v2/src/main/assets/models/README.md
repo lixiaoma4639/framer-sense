@@ -4,5 +4,6 @@ Place the runtime model files in this directory:
 
 - `yolov8n.onnx`
 - `yolov8n-pose.onnx`
+- `yolov8n-seg.onnx` (optional, improves person contour wrapping)
 
 The app handles missing files with a recoverable UI state and keeps drawing the 3D composition guide.

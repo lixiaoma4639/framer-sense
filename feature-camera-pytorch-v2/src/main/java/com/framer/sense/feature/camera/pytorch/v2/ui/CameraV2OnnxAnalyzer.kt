@@ -6,6 +6,9 @@ import ai.onnxruntime.OrtSession
 import ai.onnxruntime.TensorInfo
 import androidx.camera.core.ImageProxy
 import java.io.Closeable
+import kotlin.math.atan2
+import kotlin.math.exp
+import kotlin.math.roundToInt
 
 class CameraV2OnnxAnalyzer(
     private val sessions: OnnxSessionPool,
@@ -16,12 +19,18 @@ class CameraV2OnnxAnalyzer(
         val luminance = preprocessor.averageLuminance(imageProxy)
         val objectInput = preprocessor.toYoloRgbFloatBuffer(imageProxy, YOLO_SIZE)
         val detectedObjects = sessions.objectSession?.let { runObjectDetector(it, objectInput) }
-        val people = detectedObjects?.first.orEmpty()
+        val personSegments = sessions.segmentationSession?.let { runSegmentationDetector(it, objectInput) }.orEmpty()
+        val people = if (personSegments.isNotEmpty()) {
+            personSegments.map { ScenePerson(bounds = it.bounds, confidence = it.confidence) }
+        } else {
+            detectedObjects?.first.orEmpty()
+        }
         val objects = detectedObjects?.second.orEmpty()
         val pose = sessions.poseSession?.let { runPoseDetector(it, objectInput) } ?: PoseEstimate.Empty
         return CameraV2Analysis(
             people = people,
             objects = objects,
+            personSegments = personSegments,
             pose = pose,
             semanticScene = YoloSceneInferencer.infer(objects),
             luminance = luminance,
@@ -34,6 +43,7 @@ class CameraV2OnnxAnalyzer(
         yoloInput: YoloInput
     ): Pair<List<ScenePerson>, List<SceneObject>> {
         val inputName = session.inputNames.first()
+        yoloInput.buffer.rewind()
         OnnxTensor.createTensor(
             sessions.environment,
             yoloInput.buffer,
@@ -55,6 +65,7 @@ class CameraV2OnnxAnalyzer(
         yoloInput: YoloInput
     ): PoseEstimate {
         val inputName = session.inputNames.first()
+        yoloInput.buffer.rewind()
         OnnxTensor.createTensor(
             sessions.environment,
             yoloInput.buffer,
@@ -65,6 +76,32 @@ class CameraV2OnnxAnalyzer(
                 return YoloOutputParser.parsePose(
                     values = flattenNumbers(output?.value),
                     shape = output?.tensorShape() ?: LongArray(0),
+                    transform = yoloInput.transform
+                )
+            }
+        }
+    }
+
+    private fun runSegmentationDetector(
+        session: OrtSession,
+        yoloInput: YoloInput
+    ): List<PersonSegmentation> {
+        val inputName = session.inputNames.first()
+        yoloInput.buffer.rewind()
+        OnnxTensor.createTensor(
+            sessions.environment,
+            yoloInput.buffer,
+            longArrayOf(1, RGB_CHANNELS.toLong(), YOLO_SIZE.toLong(), YOLO_SIZE.toLong())
+        ).use { tensor ->
+            session.run(mapOf(inputName to tensor)).use { result ->
+                val outputs = result.iterator().asSequence().map { entry ->
+                    YoloOnnxOutput(
+                        values = flattenNumbers(entry.value.value),
+                        shape = entry.value.tensorShape()
+                    )
+                }.toList()
+                return YoloSegmentationParser.parsePersonSegments(
+                    outputs = outputs,
                     transform = yoloInput.transform
                 )
             }
@@ -86,6 +123,11 @@ class CameraV2OnnxAnalyzer(
         const val RGB_CHANNELS = 3
     }
 }
+
+internal data class YoloOnnxOutput(
+    val values: List<Float>,
+    val shape: LongArray
+)
 
 internal object YoloOutputParser {
 
@@ -285,6 +327,220 @@ internal object YoloOutputParser {
     )
 }
 
+internal object YoloSegmentationParser {
+
+    fun parsePersonSegments(
+        outputs: List<YoloOnnxOutput>,
+        transform: YoloInputTransform
+    ): List<PersonSegmentation> {
+        val predictionOutput = outputs.firstNotNullOfOrNull { output ->
+            val layout = YoloTensorLayout.fromShape(
+                shape = output.shape,
+                totalValues = output.values.size,
+                preferredFeatures = SEGMENT_FEATURES
+            )
+            layout?.let { output to it }
+        } ?: return emptyList()
+        val protoOutput = outputs.firstNotNullOfOrNull { output ->
+            ProtoLayout.fromShape(output.shape)?.let { output to it }
+        } ?: return emptyList()
+
+        val prediction = predictionOutput.first
+        val predictionLayout = predictionOutput.second
+        val proto = protoOutput.first
+        val protoLayout = protoOutput.second
+        val maskDimension = predictionLayout.features - MASK_COEFFICIENT_START
+        if (maskDimension <= 0 || maskDimension != protoLayout.channels) return emptyList()
+
+        val detections = (0 until predictionLayout.candidates).mapNotNull { candidate ->
+            val confidence = predictionLayout.value(prediction.values, candidate, PERSON_SCORE_FEATURE).coerceScore()
+            if (confidence < SEGMENT_SCORE_THRESHOLD) return@mapNotNull null
+            val coefficients = FloatArray(maskDimension) { index ->
+                predictionLayout.value(prediction.values, candidate, MASK_COEFFICIENT_START + index)
+            }
+            SegDetection(
+                bounds = transform.xywhToNormalizedRect(
+                    cx = predictionLayout.value(prediction.values, candidate, 0),
+                    cy = predictionLayout.value(prediction.values, candidate, 1),
+                    width = predictionLayout.value(prediction.values, candidate, 2),
+                    height = predictionLayout.value(prediction.values, candidate, 3)
+                ),
+                confidence = confidence,
+                coefficients = coefficients
+            )
+        }.nms(SEGMENT_IOU_THRESHOLD).take(MAX_SEGMENTS)
+
+        return detections.mapNotNull { detection ->
+            val contour = buildContour(
+                detection = detection,
+                protoValues = proto.values,
+                protoLayout = protoLayout,
+                transform = transform
+            )
+            if (contour.size < MIN_CONTOUR_POINTS) return@mapNotNull null
+            PersonSegmentation(
+                bounds = detection.bounds,
+                contour = contour,
+                confidence = detection.confidence
+            )
+        }
+    }
+
+    private fun buildContour(
+        detection: SegDetection,
+        protoValues: List<Float>,
+        protoLayout: ProtoLayout,
+        transform: YoloInputTransform
+    ): List<V2Point> {
+        val mask = BooleanArray(protoLayout.width * protoLayout.height)
+        for (y in 0 until protoLayout.height) {
+            for (x in 0 until protoLayout.width) {
+                val point = transform.pointToNormalized(
+                    V2Point(
+                        x = (x + 0.5f) * transform.inputSize / protoLayout.width,
+                        y = (y + 0.5f) * transform.inputSize / protoLayout.height
+                    )
+                )
+                if (!point.inside(detection.bounds.expand(CONTOUR_BOUNDS_PADDING))) continue
+                var sum = 0f
+                for (channel in 0 until protoLayout.channels) {
+                    sum += detection.coefficients[channel] * protoLayout.value(protoValues, channel, y, x)
+                }
+                mask[y * protoLayout.width + x] = sigmoid(sum) >= MASK_THRESHOLD
+            }
+        }
+
+        val boundary = mutableListOf<V2Point>()
+        for (y in 1 until protoLayout.height - 1) {
+            for (x in 1 until protoLayout.width - 1) {
+                if (!mask[y * protoLayout.width + x]) continue
+                val isBoundary =
+                    !mask[y * protoLayout.width + x - 1] ||
+                        !mask[y * protoLayout.width + x + 1] ||
+                        !mask[(y - 1) * protoLayout.width + x] ||
+                        !mask[(y + 1) * protoLayout.width + x]
+                if (isBoundary) {
+                    boundary += transform.pointToNormalized(
+                        V2Point(
+                            x = (x + 0.5f) * transform.inputSize / protoLayout.width,
+                            y = (y + 0.5f) * transform.inputSize / protoLayout.height
+                        )
+                    )
+                }
+            }
+        }
+        if (boundary.size < MIN_CONTOUR_POINTS) return detection.bounds.toContour()
+        return boundary
+            .orderClockwise()
+            .sampleEvenly(MAX_CONTOUR_POINTS)
+    }
+
+    private fun List<SegDetection>.nms(iouThreshold: Float): List<SegDetection> {
+        val kept = mutableListOf<SegDetection>()
+        val remaining = sortedByDescending { it.confidence }.toMutableList()
+        while (remaining.isNotEmpty() && kept.size < MAX_SEGMENTS) {
+            val best = remaining.removeAt(0)
+            kept += best
+            remaining.removeAll { best.bounds.iou(it.bounds) > iouThreshold }
+        }
+        return kept
+    }
+
+    private fun V2Rect.iou(other: V2Rect): Float {
+        val intersection = intersectionArea(other)
+        val union = area + other.area - intersection
+        return if (union <= 0f) 0f else intersection / union
+    }
+
+    private fun V2Rect.expand(padding: Float): V2Rect =
+        V2Rect(left - padding, top - padding, right + padding, bottom + padding).clamped()
+
+    private fun V2Rect.toContour(): List<V2Point> =
+        listOf(
+            V2Point(left, top),
+            V2Point(right, top),
+            V2Point(right, bottom),
+            V2Point(left, bottom)
+        )
+
+    private fun V2Point.inside(rect: V2Rect): Boolean =
+        x in rect.left..rect.right && y in rect.top..rect.bottom
+
+    private fun List<V2Point>.orderClockwise(): List<V2Point> {
+        val centerX = sumOf { it.x.toDouble() }.toFloat() / size
+        val centerY = sumOf { it.y.toDouble() }.toFloat() / size
+        return sortedBy { atan2((it.y - centerY).toDouble(), (it.x - centerX).toDouble()) }
+    }
+
+    private fun List<V2Point>.sampleEvenly(maxPoints: Int): List<V2Point> {
+        if (size <= maxPoints) return this
+        val step = size.toFloat() / maxPoints
+        return List(maxPoints) { index -> this[(index * step).roundToInt().coerceIn(0, lastIndex)] }
+    }
+
+    private fun sigmoid(value: Float): Float =
+        (1.0 / (1.0 + exp(-value.toDouble()))).toFloat()
+
+    private fun Float.coerceScore(): Float =
+        coerceIn(0f, 1f)
+
+    private data class SegDetection(
+        val bounds: V2Rect,
+        val confidence: Float,
+        val coefficients: FloatArray
+    )
+
+    private data class ProtoLayout(
+        val channels: Int,
+        val height: Int,
+        val width: Int,
+        val channelsLast: Boolean
+    ) {
+        fun value(values: List<Float>, channel: Int, y: Int, x: Int): Float {
+            val index = if (channelsLast) {
+                (y * width + x) * channels + channel
+            } else {
+                channel * height * width + y * width + x
+            }
+            return values.getOrNull(index) ?: 0f
+        }
+
+        companion object {
+            fun fromShape(shape: LongArray): ProtoLayout? {
+                val dims = shape.toList().mapNotNull { it.takeIf { dim -> dim > 1 }?.toInt() }
+                if (dims.size != 3) return null
+                return when {
+                    dims.first() == MASK_CHANNELS -> ProtoLayout(
+                        channels = dims[0],
+                        height = dims[1],
+                        width = dims[2],
+                        channelsLast = false
+                    )
+                    dims.last() == MASK_CHANNELS -> ProtoLayout(
+                        channels = dims[2],
+                        height = dims[0],
+                        width = dims[1],
+                        channelsLast = true
+                    )
+                    else -> null
+                }
+            }
+        }
+    }
+
+    private const val SEGMENT_FEATURES = 116
+    private const val MASK_CHANNELS = 32
+    private const val MASK_COEFFICIENT_START = 84
+    private const val PERSON_SCORE_FEATURE = 4
+    private const val SEGMENT_SCORE_THRESHOLD = 0.25f
+    private const val SEGMENT_IOU_THRESHOLD = 0.45f
+    private const val MASK_THRESHOLD = 0.50f
+    private const val CONTOUR_BOUNDS_PADDING = 0.04f
+    private const val MIN_CONTOUR_POINTS = 4
+    private const val MAX_CONTOUR_POINTS = 96
+    private const val MAX_SEGMENTS = 3
+}
+
 internal object YoloSceneInferencer {
 
     fun infer(objects: List<SceneObject>): SemanticScene {
@@ -335,7 +591,9 @@ private object YoloTensorLayout {
         preferredFeatures: Int
     ): Layout? {
         val dims = shape.toList()
-            .mapNotNull { it.takeIf { dim -> dim > 1 }?.toInt() }
+            .filter { it > 0 }
+            .dropLeadingBatchDimension()
+            .map { it.toInt() }
             .ifEmpty { inferDims(totalValues, preferredFeatures) }
         if (dims.size < 2) return null
         val first = dims[dims.lastIndex - 1]
@@ -371,6 +629,9 @@ private object YoloTensorLayout {
             preferredFeatures == 84 && totalValues % 85 == 0 -> listOf(85, totalValues / 85)
             else -> emptyList()
         }
+
+    private fun List<Long>.dropLeadingBatchDimension(): List<Long> =
+        if (size > 2 && first() == 1L) drop(1) else this
 
     data class Layout(
         val features: Int,

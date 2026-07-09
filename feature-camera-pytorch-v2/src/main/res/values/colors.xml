@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <color name="camera_v2_good">#5EF2A0</color>
-    <color name="camera_v2_warning">#FFD166</color>
-    <color name="camera_v2_poor">#FF6B6B</color>
+    <color name="camera_v2_good">#00FF66</color>
+    <color name="camera_v2_warning">#FFEA00</color>
+    <color name="camera_v2_poor">#FF1744</color>
 </resources>

@@ -51,6 +51,12 @@ data class ScenePerson(
     val confidence: Float
 )
 
+data class PersonSegmentation(
+    val bounds: V2Rect,
+    val contour: List<V2Point>,
+    val confidence: Float
+)
+
 enum class SceneGroup {
     UNKNOWN,
     INDOOR,
@@ -115,6 +121,7 @@ data class PoseEstimate(
 data class CameraV2Analysis(
     val people: List<ScenePerson>,
     val objects: List<SceneObject>,
+    val personSegments: List<PersonSegmentation>,
     val pose: PoseEstimate,
     val semanticScene: SemanticScene,
     val luminance: Double,
@@ -123,7 +130,8 @@ data class CameraV2Analysis(
 
 data class ModelAvailability(
     val objectDetectorReady: Boolean,
-    val poseDetectorReady: Boolean
+    val poseDetectorReady: Boolean,
+    val segmentationReady: Boolean = false
 ) {
     val allRequiredReady: Boolean =
         objectDetectorReady && poseDetectorReady
@@ -131,7 +139,8 @@ data class ModelAvailability(
     companion object {
         val Missing = ModelAvailability(
             objectDetectorReady = false,
-            poseDetectorReady = false
+            poseDetectorReady = false,
+            segmentationReady = false
         )
     }
 }
@@ -208,7 +217,10 @@ data class VirtualHumanFigure(
     val template: PoseTemplate,
     val lines: List<VirtualHumanLine>,
     val headCenter: V2Point,
-    val headRadius: Float
+    val headRadius: Float,
+    val contourPathPoints: List<V2Point> = emptyList(),
+    val drawHead: Boolean = true,
+    val poseDriven: Boolean = false
 )
 
 data class CameraV2Guide(

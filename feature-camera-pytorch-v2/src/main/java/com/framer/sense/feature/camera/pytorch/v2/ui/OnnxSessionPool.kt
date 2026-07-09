@@ -14,11 +14,13 @@ class OnnxSessionPool(
     val environment: OrtEnvironment = OrtEnvironment.getEnvironment()
     val objectSession: OrtSession? = createSessionIfPresent(OBJECT_MODEL)
     val poseSession: OrtSession? = createSessionIfPresent(POSE_MODEL)
+    val segmentationSession: OrtSession? = createSessionIfPresent(SEGMENTATION_MODEL)
 
     val availability: ModelAvailability =
         ModelAvailability(
             objectDetectorReady = objectSession != null,
-            poseDetectorReady = poseSession != null
+            poseDetectorReady = poseSession != null,
+            segmentationReady = segmentationSession != null
         )
 
     private fun createSessionIfPresent(assetPath: String): OrtSession? {
@@ -48,10 +50,12 @@ class OnnxSessionPool(
     override fun close() {
         objectSession?.close()
         poseSession?.close()
+        segmentationSession?.close()
     }
 
     companion object {
         const val OBJECT_MODEL = "models/yolov8n.onnx"
         const val POSE_MODEL = "models/yolov8n-pose.onnx"
+        const val SEGMENTATION_MODEL = "models/yolov8n-seg.onnx"
     }
 }
