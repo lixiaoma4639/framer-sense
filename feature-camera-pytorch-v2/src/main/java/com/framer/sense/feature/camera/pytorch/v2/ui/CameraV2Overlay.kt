@@ -157,7 +157,6 @@ fun CameraV2Overlay(
                     .fillMaxWidth()
             })
                 .statusBarsPadding()
-                .padding(top = 10.dp)
                 .background(Color.Black.copy(alpha = 0.26f))
                 .padding(horizontal = 18.dp, vertical = 14.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
@@ -175,11 +174,6 @@ fun CameraV2Overlay(
                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp)
                 )
             }
-            Text(
-                text = stringResource(R.string.camera_v2_title),
-                style = MaterialTheme.typography.labelLarge,
-                color = Color.White.copy(alpha = 0.92f)
-            )
             Text(
                 text = stringResource(
                     R.string.camera_v2_scene_status,

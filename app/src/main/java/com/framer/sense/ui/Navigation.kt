@@ -29,6 +29,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -36,6 +37,7 @@ import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.NavigationBarItemDefaults
@@ -245,7 +247,11 @@ private fun BottomNavigationBar(
     cameraCaptureAction: CameraV2CaptureAction?,
     onTabClick: (BottomNavTab) -> Unit
 ) {
-    NavigationBar(modifier = Modifier.testTag("bottom_navigation")) {
+    NavigationBar(
+        modifier = Modifier
+            .height(BOTTOM_NAVIGATION_HEIGHT)
+            .testTag("bottom_navigation")
+    ) {
         BottomNavTab.entries.forEach { tab ->
             val isCaptureAction = tab.isCaptureAction(selectedTab)
             NavigationBarItem(
@@ -254,10 +260,10 @@ private fun BottomNavigationBar(
                     if (isCaptureAction) {
                         CaptureActionContent(tab.icon)
                     } else {
-                        Icon(tab.icon, contentDescription = tab.label)
+                        CompactBottomNavigationTabContent(tab.icon, tab.label)
                     }
                 },
-                label = if (isCaptureAction) null else ({ Text(tab.label) }),
+                label = null,
                 selected = selectedTab == tab,
                 enabled = tab.isEnabled(selectedTab, cameraCaptureAction),
                 colors = if (isCaptureAction) {
@@ -320,7 +326,8 @@ private fun CameraLandscapeNavigationRail(
     }
 }
 
-private val CAMERA_LANDSCAPE_RAIL_WIDTH = 80.dp
+private val BOTTOM_NAVIGATION_HEIGHT = 64.dp
+private val CAMERA_LANDSCAPE_RAIL_WIDTH = 54.dp
 
 private fun BottomNavTab.displayLabel(selectedTab: BottomNavTab): String =
     if (isCaptureAction(selectedTab)) "拍摄" else label
@@ -346,10 +353,33 @@ private fun CaptureActionContent(icon: ImageVector) {
         Icon(
             imageVector = icon,
             contentDescription = "拍摄",
-            tint = Color.White
+            tint = Color.White,
+            modifier = Modifier.size(20.dp)
         )
         Spacer(modifier = Modifier.height(2.dp))
-        Text(text = "拍摄", color = Color.White)
+        Text(
+            text = "拍摄",
+            color = Color.White,
+            style = MaterialTheme.typography.labelSmall
+        )
+    }
+}
+
+@Composable
+private fun CompactBottomNavigationTabContent(
+    icon: ImageVector,
+    label: String
+) {
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = label,
+            modifier = Modifier.size(20.dp)
+        )
+        Spacer(modifier = Modifier.height(2.dp))
+        Text(text = label, style = MaterialTheme.typography.labelSmall)
     }
 }
 

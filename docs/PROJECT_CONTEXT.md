@@ -149,6 +149,7 @@ MyApplication
 - 页面按 MVI 组织，`CameraV2ViewModel` 统一处理 `CameraV2Intent`、归约 `CameraV2State`，并通过 `CameraV2Effect` 触发权限请求等一次性平台动作。
 - 已授权后使用 CameraX `PreviewView` 显示后置摄像头实时预览。
 - 拍照页仅忽略主导航的顶部系统栏内边距，使相机预览延伸至状态栏；首页和“我的”仍保留原有系统栏安全区。
+- 底部导航内容高度为 64dp，并使用紧凑的 20dp 图标、2dp 图文间距和居中小号标签；拍照横屏右侧导航栏宽度为 54dp。系统导航栏安全区保持不变。
 - `ImageAnalysis` 使用 `STRATEGY_KEEP_ONLY_LATEST` 获取实时帧，交给 `CameraV2FrameAnalyzer` 进行端侧分析。
 - `CameraV2FrameAnalyzer` 对实时帧做约 520ms 节流，调用 `CameraV2OnnxAnalyzer` 执行 ONNX 推理。
 - App 启动后会在后台预热四个 ONNX Runtime session；session 在应用进程内共享，拍照 Tab 切换和横竖屏重建只复用已有 session，不重复加载模型。应用进程被系统结束后会在下次启动重新预热。
