@@ -17,6 +17,7 @@
 package com.framer.sense.ui
 
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.test.assertIsDisplayed
@@ -29,6 +30,7 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import com.framer.sense.core.ui.MyApplicationTheme
+import com.framer.sense.feature.camera.pytorch.v2.ui.CameraV2CaptureAction
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Column
 import androidx.compose.material3.Text
@@ -36,6 +38,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import org.junit.Before
+import org.junit.Assert.assertEquals
 import org.junit.Rule
 import org.junit.Test
 
@@ -69,7 +72,7 @@ class NavigationTest {
                             Text("春日限定樱花拍摄攻略")
                         }
                     },
-                    cameraContent = {
+                    cameraContent = { _ ->
                         Text("AI 构图引导")
                     },
                     myModelContent = { onSettingsClick, onMessagesClick, onScanClick ->
@@ -201,6 +204,45 @@ class NavigationTest {
     }
 
     @Test
+    fun selectedCameraTab_becomesCaptureAction_andRestoresCameraLabelAfterLeaving() {
+        composeTestRule.setContent {
+            MyApplicationTheme {
+                var uiState by mutableStateOf(
+                    MainNavigationUiState(selectedTab = BottomNavTab.CAMERA)
+                )
+                var captureCount by mutableStateOf(0)
+                MainNavigationContent(
+                    uiState = uiState,
+                    onTabSelected = { tab -> uiState = uiState.copy(selectedTab = tab) },
+                    homeContent = { Text("拍摄后首页") },
+                    cameraContent = { onCaptureActionChanged ->
+                        LaunchedEffect(Unit) {
+                            onCaptureActionChanged(
+                                CameraV2CaptureAction(
+                                    onClick = { captureCount++ },
+                                    enabled = true
+                                )
+                            )
+                        }
+                        Text("拍摄页")
+                    },
+                    myModelContent = { _, _, _ -> Text("拍摄后我的") },
+                    isLandscape = false
+                )
+            }
+        }
+
+        composeTestRule.onNodeWithText("拍摄").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("bottom_tab_CAMERA").performClick()
+        composeTestRule.runOnIdle { assertEquals(1, captureCount) }
+
+        composeTestRule.onNodeWithTag("bottom_tab_HOME").performClick()
+        composeTestRule.onNodeWithText("拍照").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("bottom_tab_CAMERA").performClick()
+        composeTestRule.onNodeWithText("拍摄页").assertIsDisplayed()
+    }
+
+    @Test
     fun cameraLandscape_usesRightNavigationRail_andKeepsTabSwitchingAvailable() {
         composeTestRule.setContent {
             MyApplicationTheme {
@@ -211,7 +253,7 @@ class NavigationTest {
                     uiState = uiState,
                     onTabSelected = { tab -> uiState = uiState.copy(selectedTab = tab) },
                     homeContent = { Text("横屏首页") },
-                    cameraContent = { Text("横屏相机") },
+                    cameraContent = { _ -> Text("横屏相机") },
                     myModelContent = { _, _, _ -> Text("横屏我的") },
                     isLandscape = true
                 )
@@ -243,7 +285,7 @@ class NavigationTest {
                     uiState = MainNavigationUiState(selectedTab = BottomNavTab.CAMERA),
                     onTabSelected = {},
                     homeContent = { Text("首页") },
-                    cameraContent = { Text("竖屏相机") },
+                    cameraContent = { _ -> Text("竖屏相机") },
                     myModelContent = { _, _, _ -> Text("我的") },
                     isLandscape = false
                 )

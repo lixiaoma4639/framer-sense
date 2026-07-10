@@ -18,7 +18,6 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
@@ -29,6 +28,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -46,17 +46,24 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.framer.sense.core.ui.MyApplicationTheme
 import com.framer.sense.feature.camera.pytorch.v2.R
 
+data class CameraV2CaptureAction(
+    val onClick: () -> Unit,
+    val enabled: Boolean
+)
+
 @Composable
 fun CameraScreen(
     heightCm: Int = BodyProfile.DEFAULT_HEIGHT_CM,
     weightKg: Int = BodyProfile.DEFAULT_WEIGHT_KG,
     modifier: Modifier = Modifier,
-    viewModel: CameraV2ViewModel = viewModel()
+    viewModel: CameraV2ViewModel = viewModel(),
+    onCaptureActionChanged: (CameraV2CaptureAction?) -> Unit = {}
 ) {
     val context = LocalContext.current
     val configuration = LocalConfiguration.current
     val displayRotation = LocalView.current.display?.rotation ?: DisplaySurface.ROTATION_0
     val state by viewModel.state.collectAsStateWithLifecycle()
+    val currentOnCaptureActionChanged by rememberUpdatedState(onCaptureActionChanged)
     EnableCameraAutoRotation(context)
     val cameraPermissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission()
@@ -100,13 +107,28 @@ fun CameraScreen(
         }
     }
 
+    LaunchedEffect(state.screenState, state.captureState) {
+        val captureAction = if (state.screenState == CameraV2ScreenState.Streaming) {
+            CameraV2CaptureAction(
+                onClick = {
+                    viewModel.onIntent(CameraV2Intent.CapturePressed(needsLegacyStoragePermission()))
+                },
+                enabled = state.captureState !is PhotoV2CaptureState.Saving
+            )
+        } else {
+            null
+        }
+        currentOnCaptureActionChanged(captureAction)
+    }
+
+    DisposableEffect(Unit) {
+        onDispose { currentOnCaptureActionChanged(null) }
+    }
+
     CameraV2ScreenContent(
         state = state,
         onRequestPermission = {
             viewModel.onIntent(CameraV2Intent.PermissionButtonClicked(hasCameraPermission()))
-        },
-        onCaptureClick = {
-            viewModel.onIntent(CameraV2Intent.CapturePressed(needsLegacyStoragePermission()))
         },
         onIntent = viewModel::onIntent,
         isLandscape = configuration.orientation == Configuration.ORIENTATION_LANDSCAPE,
@@ -119,7 +141,6 @@ fun CameraScreen(
 internal fun CameraV2ScreenContent(
     state: CameraV2State,
     onRequestPermission: () -> Unit,
-    onCaptureClick: () -> Unit,
     onIntent: (CameraV2Intent) -> Unit,
     modifier: Modifier = Modifier,
     showCameraPreview: Boolean = true,
@@ -164,10 +185,9 @@ internal fun CameraV2ScreenContent(
                     isLandscape = isLandscape,
                     modifier = Modifier.fillMaxSize()
                 )
-                CameraV2CaptureControls(
+                CameraV2CaptureStatus(
                     captureState = state.captureState,
                     bodyProfile = state.bodyProfile,
-                    onCaptureClick = onCaptureClick,
                     isLandscape = isLandscape,
                     modifier = if (isLandscape) {
                         Modifier
@@ -190,10 +210,9 @@ internal fun CameraV2ScreenContent(
 }
 
 @Composable
-private fun CameraV2CaptureControls(
+private fun CameraV2CaptureStatus(
     captureState: PhotoV2CaptureState,
     bodyProfile: BodyProfile,
-    onCaptureClick: () -> Unit,
     isLandscape: Boolean,
     modifier: Modifier = Modifier
 ) {
@@ -232,20 +251,6 @@ private fun CameraV2CaptureControls(
                 color = colorResource(R.color.camera_v2_poor),
                 style = MaterialTheme.typography.bodyMedium,
                 textAlign = TextAlign.Center
-            )
-        }
-        Button(
-            onClick = onCaptureClick,
-            enabled = captureState !is PhotoV2CaptureState.Saving,
-            shape = CircleShape
-        ) {
-            Text(
-                text = if (captureState is PhotoV2CaptureState.Saving) {
-                    stringResource(R.string.camera_v2_capture_saving_short)
-                } else {
-                    stringResource(R.string.camera_v2_capture_action)
-                },
-                modifier = Modifier.padding(horizontal = 18.dp, vertical = 5.dp)
             )
         }
     }
@@ -327,7 +332,6 @@ private fun CameraV2ScreenPreview() {
                 guide = CameraV2Guide.initial()
             ),
             onRequestPermission = {},
-            onCaptureClick = {},
             onIntent = {},
             showCameraPreview = false
         )

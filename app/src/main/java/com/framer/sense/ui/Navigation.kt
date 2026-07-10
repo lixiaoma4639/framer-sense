@@ -19,12 +19,16 @@ package com.framer.sense.ui
 import android.content.res.Configuration
 import androidx.compose.animation.AnimatedContentTransitionScope
 import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.Home
@@ -32,16 +36,22 @@ import androidx.compose.material.icons.filled.Person
 import androidx.compose.material3.Icon
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.NavigationRail
 import androidx.compose.material3.NavigationRailItem
+import androidx.compose.material3.NavigationRailItemDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.SaveableStateHolder
 import androidx.compose.runtime.saveable.rememberSaveableStateHolder
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.testTag
@@ -56,6 +66,7 @@ import androidx.navigation3.runtime.rememberNavBackStack
 import androidx.navigation3.runtime.rememberSaveableStateHolderNavEntryDecorator
 import androidx.navigation3.ui.NavDisplay
 import com.framer.sense.feature.camera.pytorch.v2.ui.CameraScreen
+import com.framer.sense.feature.camera.pytorch.v2.ui.CameraV2CaptureAction
 import com.framer.sense.feature.home.ui.HomeScreen
 import com.framer.sense.feature.mymodel.navigation.Main
 import com.framer.sense.feature.mymodel.navigation.Messages
@@ -101,7 +112,9 @@ internal fun MainNavigationContent(
     uiState: MainNavigationUiState,
     onTabSelected: (BottomNavTab) -> Unit,
     homeContent: @Composable () -> Unit = { HomeScreen() },
-    cameraContent: @Composable () -> Unit = { CameraScreen() },
+    cameraContent: @Composable ((CameraV2CaptureAction?) -> Unit) -> Unit = { onCaptureActionChanged ->
+        CameraScreen(onCaptureActionChanged = onCaptureActionChanged)
+    },
     myModelContent: @Composable (
         onSettingsClick: () -> Unit,
         onMessagesClick: () -> Unit,
@@ -128,6 +141,7 @@ internal fun MainNavigationContent(
 ) {
     val tabStateHolder = rememberSaveableStateHolder()
     val myModelBackStack = rememberNavBackStack(Main)
+    var cameraCaptureAction by remember { mutableStateOf<CameraV2CaptureAction?>(null) }
     val showCameraSideNavigation =
         uiState.showBottomBar && uiState.selectedTab == BottomNavTab.CAMERA && isLandscape
 
@@ -142,13 +156,27 @@ internal fun MainNavigationContent(
         }
     }
 
+    fun onNavigationItemClick(tab: BottomNavTab) {
+        if (
+            tab == BottomNavTab.CAMERA &&
+                uiState.selectedTab == BottomNavTab.CAMERA &&
+                cameraCaptureAction != null
+        ) {
+            cameraCaptureAction?.onClick?.invoke()
+        } else {
+            cameraCaptureAction = null
+            onTabSelected(tab)
+        }
+    }
+
     Box(modifier = modifier.fillMaxSize()) {
         Scaffold(
             bottomBar = {
                 if (uiState.showBottomBar && !showCameraSideNavigation) {
                     BottomNavigationBar(
                         selectedTab = uiState.selectedTab,
-                        onTabSelected = onTabSelected
+                        cameraCaptureAction = cameraCaptureAction,
+                        onTabClick = ::onNavigationItemClick
                     )
                 }
             }
@@ -158,6 +186,7 @@ internal fun MainNavigationContent(
                 tabStateHolder = tabStateHolder,
                 homeContent = homeContent,
                 cameraContent = cameraContent,
+                onCaptureActionChanged = { cameraCaptureAction = it },
                 myModelContent = myModelContent,
                 onSettingsClick = { navigateToMyModelDestination(Settings) },
                 onMessagesClick = { navigateToMyModelDestination(Messages) },
@@ -178,7 +207,8 @@ internal fun MainNavigationContent(
         if (showCameraSideNavigation) {
             CameraLandscapeNavigationRail(
                 selectedTab = uiState.selectedTab,
-                onTabSelected = onTabSelected,
+                cameraCaptureAction = cameraCaptureAction,
+                onTabClick = ::onNavigationItemClick,
                 modifier = Modifier
                     .align(Alignment.CenterEnd)
                     .fillMaxHeight()
@@ -199,16 +229,36 @@ internal fun MainNavigationContent(
 @Composable
 private fun BottomNavigationBar(
     selectedTab: BottomNavTab,
-    onTabSelected: (BottomNavTab) -> Unit
+    cameraCaptureAction: CameraV2CaptureAction?,
+    onTabClick: (BottomNavTab) -> Unit
 ) {
     NavigationBar(modifier = Modifier.testTag("bottom_navigation")) {
         BottomNavTab.entries.forEach { tab ->
+            val isCaptureAction = tab.isCaptureAction(selectedTab)
             NavigationBarItem(
                 modifier = Modifier.testTag("bottom_tab_${tab.name}"),
-                icon = { Icon(tab.icon, contentDescription = tab.label) },
-                label = { Text(tab.label) },
+                icon = {
+                    if (isCaptureAction) {
+                        CaptureActionContent(tab.icon)
+                    } else {
+                        Icon(tab.icon, contentDescription = tab.label)
+                    }
+                },
+                label = if (isCaptureAction) null else ({ Text(tab.label) }),
                 selected = selectedTab == tab,
-                onClick = { onTabSelected(tab) }
+                enabled = tab.isEnabled(selectedTab, cameraCaptureAction),
+                colors = if (isCaptureAction) {
+                    NavigationBarItemDefaults.colors(
+                        selectedIconColor = Color.White,
+                        selectedTextColor = Color.White,
+                        indicatorColor = Color.Transparent,
+                        disabledIconColor = Color.White.copy(alpha = 0.60f),
+                        disabledTextColor = Color.White.copy(alpha = 0.60f)
+                    )
+                } else {
+                    NavigationBarItemDefaults.colors()
+                },
+                onClick = { onTabClick(tab) }
             )
         }
     }
@@ -217,7 +267,8 @@ private fun BottomNavigationBar(
 @Composable
 private fun CameraLandscapeNavigationRail(
     selectedTab: BottomNavTab,
-    onTabSelected: (BottomNavTab) -> Unit,
+    cameraCaptureAction: CameraV2CaptureAction?,
+    onTabClick: (BottomNavTab) -> Unit,
     modifier: Modifier = Modifier
 ) {
     NavigationRail(
@@ -225,12 +276,31 @@ private fun CameraLandscapeNavigationRail(
     ) {
         BottomNavTab.entries.forEach { tab ->
             Spacer(modifier = Modifier.weight(1f))
+            val isCaptureAction = tab.isCaptureAction(selectedTab)
             NavigationRailItem(
                 modifier = Modifier.testTag("bottom_tab_${tab.name}"),
-                icon = { Icon(tab.icon, contentDescription = tab.label) },
-                label = { Text(tab.label) },
+                icon = {
+                    if (isCaptureAction) {
+                        CaptureActionContent(tab.icon)
+                    } else {
+                        Icon(tab.icon, contentDescription = tab.label)
+                    }
+                },
+                label = if (isCaptureAction) null else ({ Text(tab.label) }),
                 selected = selectedTab == tab,
-                onClick = { onTabSelected(tab) }
+                enabled = tab.isEnabled(selectedTab, cameraCaptureAction),
+                colors = if (isCaptureAction) {
+                    NavigationRailItemDefaults.colors(
+                        selectedIconColor = Color.White,
+                        selectedTextColor = Color.White,
+                        indicatorColor = Color.Transparent,
+                        disabledIconColor = Color.White.copy(alpha = 0.60f),
+                        disabledTextColor = Color.White.copy(alpha = 0.60f)
+                    )
+                } else {
+                    NavigationRailItemDefaults.colors()
+                },
+                onClick = { onTabClick(tab) }
             )
         }
         Spacer(modifier = Modifier.weight(1f))
@@ -239,12 +309,46 @@ private fun CameraLandscapeNavigationRail(
 
 private val CAMERA_LANDSCAPE_RAIL_WIDTH = 80.dp
 
+private fun BottomNavTab.displayLabel(selectedTab: BottomNavTab): String =
+    if (isCaptureAction(selectedTab)) "拍摄" else label
+
+private fun BottomNavTab.isCaptureAction(selectedTab: BottomNavTab): Boolean =
+    this == BottomNavTab.CAMERA && selectedTab == BottomNavTab.CAMERA
+
+private fun BottomNavTab.isEnabled(
+    selectedTab: BottomNavTab,
+    cameraCaptureAction: CameraV2CaptureAction?
+): Boolean =
+    this != BottomNavTab.CAMERA || selectedTab != BottomNavTab.CAMERA ||
+        cameraCaptureAction?.enabled == true
+
+@Composable
+private fun CaptureActionContent(icon: ImageVector) {
+    Column(
+        modifier = Modifier
+            .background(CAPTURE_ACTION_BLUE, RoundedCornerShape(10.dp))
+            .padding(5.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = "拍摄",
+            tint = Color.White
+        )
+        Spacer(modifier = Modifier.height(2.dp))
+        Text(text = "拍摄", color = Color.White)
+    }
+}
+
+private val CAPTURE_ACTION_BLUE = Color(0xFF075967)
+
 @Composable
 private fun MainNavigationDestination(
     selectedTab: BottomNavTab,
     tabStateHolder: SaveableStateHolder,
     homeContent: @Composable () -> Unit,
-    cameraContent: @Composable () -> Unit,
+    cameraContent: @Composable ((CameraV2CaptureAction?) -> Unit) -> Unit,
+    onCaptureActionChanged: (CameraV2CaptureAction?) -> Unit,
     myModelContent: @Composable (
         onSettingsClick: () -> Unit,
         onMessagesClick: () -> Unit,
@@ -259,7 +363,7 @@ private fun MainNavigationDestination(
         tabStateHolder.SaveableStateProvider(selectedTab.name) {
             when (selectedTab) {
                 BottomNavTab.HOME -> homeContent()
-                BottomNavTab.CAMERA -> cameraContent()
+                BottomNavTab.CAMERA -> cameraContent(onCaptureActionChanged)
                 BottomNavTab.MY_MODEL -> myModelContent(
                     onSettingsClick,
                     onMessagesClick,
@@ -310,7 +414,7 @@ private fun MainNavigationPreview() {
         uiState = MainNavigationUiState(),
         onTabSelected = {},
         homeContent = { Text("推荐") },
-        cameraContent = { Text("AI 构图引导") },
+        cameraContent = { _ -> Text("AI 构图引导") },
         myModelContent = { _, _, _ -> Text("用户名称") },
         settingsContent = { Text("设置") },
         messageListContent = { Text("消息") },

@@ -1,6 +1,7 @@
 package com.framer.sense.feature.camera.pytorch.v2.ui
 
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertDoesNotExist
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithText
 import com.framer.sense.core.ui.MyApplicationTheme
@@ -19,7 +20,6 @@ class CameraV2ScreenTest {
                 CameraV2ScreenContent(
                     state = CameraV2State(screenState = CameraV2ScreenState.PermissionRequired),
                     onRequestPermission = {},
-                    onCaptureClick = {},
                     onIntent = {},
                     showCameraPreview = false
                 )
@@ -31,7 +31,7 @@ class CameraV2ScreenTest {
     }
 
     @Test
-    fun streaming_showsGuideAndCaptureStatus() {
+    fun streaming_showsGuideWithoutInlineCaptureButton() {
         composeTestRule.setContent {
             MyApplicationTheme {
                 CameraV2ScreenContent(
@@ -40,7 +40,6 @@ class CameraV2ScreenTest {
                         guide = CameraV2Guide.initial().copy(hint = CameraV2Hint.ENTER_GUIDE)
                     ),
                     onRequestPermission = {},
-                    onCaptureClick = {},
                     onIntent = {},
                     showCameraPreview = false
                 )
@@ -48,7 +47,7 @@ class CameraV2ScreenTest {
         }
 
         composeTestRule.onNodeWithText("请让人物走进 3D 虚拟人像区域").assertIsDisplayed()
-        composeTestRule.onNodeWithText("拍摄").assertIsDisplayed()
+        composeTestRule.onNodeWithText("拍摄").assertDoesNotExist()
     }
 
     @Test
@@ -60,7 +59,6 @@ class CameraV2ScreenTest {
                         screenState = CameraV2ScreenState.Failure(CameraV2Hint.CAMERA_ERROR)
                     ),
                     onRequestPermission = {},
-                    onCaptureClick = {},
                     onIntent = {},
                     showCameraPreview = false
                 )

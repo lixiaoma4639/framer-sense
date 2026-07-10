@@ -9,7 +9,7 @@
 - 根据场景类别、障碍物、亮度、人物位置和三分线候选区域生成推荐站位。
 - 根据传入的身高体重生成线条式 3D 虚拟人像；检测到人体 pose 时优先跟随真实姿势，检测到 segmentation mask 时按人物轮廓绘制包裹虚线，检测到 WholeBody landmark 时绘制脸、手、脚和肢体内轮廓。
 - 构图不满足要求时提示移动手机或调整距离；即使不满足要求，也持续绘制 3D 虚拟人像。
-- 点击拍摄后保存照片到系统相册。
+- 进入拍照 Tab 后，主导航中当前选中的“拍照”Tab 显示为带蓝色背景的“拍摄”；点击后保存照片到系统相册，离开后恢复“拍照”Tab，预览内不再提供独立拍摄按钮。
 - 进入拍照 Tab 时启用设备全方向传感器；`MainActivity` 在同一实例内处理方向配置变化，横竖屏切换后会重绑 CameraX 的 Preview、ImageAnalysis 和 ImageCapture，并同步更新三者的目标旋转角度，避免窗口销毁期间的预览缓冲区错配。
 - ONNX 输入统一按 `ImageProxy.rotationDegrees` 转为当前展示方向；覆盖层使用与 `PreviewView.FILL_CENTER` 相同的比例裁切映射，因此 YOLO、YOLO Pose、YOLO Seg 和 WholeBody 结果在横竖屏下均与预览对齐。
 
