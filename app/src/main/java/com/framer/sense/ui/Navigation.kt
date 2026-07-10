@@ -47,9 +47,11 @@ import androidx.compose.material3.NavigationRailItemDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.SaveableStateHolder
 import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.runtime.setValue
@@ -91,7 +93,7 @@ enum class BottomNavTab(
     val icon: ImageVector
 ) {
     HOME("首页", Icons.Default.Home),
-    CAMERA("拍照", Icons.Default.CameraAlt),
+    CAMERA("相机", Icons.Default.CameraAlt),
     MY_MODEL("我的", Icons.Default.Person)
 }
 
@@ -147,9 +149,19 @@ internal fun MainNavigationContent(
     val tabStateHolder = rememberSaveableStateHolder()
     val myModelBackStack = rememberNavBackStack(Main)
     val layoutDirection = LocalLayoutDirection.current
+    val currentUiState by rememberUpdatedState(uiState)
     var cameraCaptureAction by remember { mutableStateOf<CameraV2CaptureAction?>(null) }
+    val currentCameraCaptureAction by rememberUpdatedState(cameraCaptureAction)
+    var pendingCameraCaptureClick by remember { mutableStateOf(false) }
     val showCameraSideNavigation =
         uiState.showBottomBar && uiState.selectedTab == BottomNavTab.CAMERA && isLandscape
+
+    LaunchedEffect(uiState.selectedTab) {
+        if (uiState.selectedTab != BottomNavTab.CAMERA) {
+            cameraCaptureAction = null
+            pendingCameraCaptureClick = false
+        }
+    }
 
     fun navigateToMyModelDestination(destination: MyModelNavKey) {
         onTabSelected(BottomNavTab.MY_MODEL)
@@ -163,15 +175,27 @@ internal fun MainNavigationContent(
     }
 
     fun onNavigationItemClick(tab: BottomNavTab) {
-        if (
-            tab == BottomNavTab.CAMERA &&
-                uiState.selectedTab == BottomNavTab.CAMERA &&
-                cameraCaptureAction != null
-        ) {
-            cameraCaptureAction?.onClick?.invoke()
-        } else {
-            cameraCaptureAction = null
-            onTabSelected(tab)
+        val latestUiState = currentUiState
+        val latestCaptureAction = currentCameraCaptureAction
+        if (tab == BottomNavTab.CAMERA && latestUiState.selectedTab == BottomNavTab.CAMERA) {
+            if (latestCaptureAction?.enabled == true) {
+                latestCaptureAction.onClick()
+            } else {
+                pendingCameraCaptureClick = true
+            }
+            return
+        }
+
+        pendingCameraCaptureClick = false
+        cameraCaptureAction = null
+        onTabSelected(tab)
+    }
+
+    fun onCameraCaptureActionChanged(action: CameraV2CaptureAction?) {
+        cameraCaptureAction = action
+        if (pendingCameraCaptureClick && action?.enabled == true) {
+            pendingCameraCaptureClick = false
+            action.onClick()
         }
     }
 
@@ -192,7 +216,7 @@ internal fun MainNavigationContent(
                 tabStateHolder = tabStateHolder,
                 homeContent = homeContent,
                 cameraContent = cameraContent,
-                onCaptureActionChanged = { cameraCaptureAction = it },
+                onCaptureActionChanged = ::onCameraCaptureActionChanged,
                 myModelContent = myModelContent,
                 onSettingsClick = { navigateToMyModelDestination(Settings) },
                 onMessagesClick = { navigateToMyModelDestination(Messages) },
@@ -340,7 +364,7 @@ private fun BottomNavTab.isEnabled(
     cameraCaptureAction: CameraV2CaptureAction?
 ): Boolean =
     this != BottomNavTab.CAMERA || selectedTab != BottomNavTab.CAMERA ||
-        cameraCaptureAction?.enabled == true
+        cameraCaptureAction?.enabled != false
 
 @Composable
 private fun CaptureActionContent(icon: ImageVector) {

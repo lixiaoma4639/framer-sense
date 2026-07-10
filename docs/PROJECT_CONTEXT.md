@@ -159,7 +159,7 @@ MyApplication
 - `VirtualHumanProjector` 根据传入身高体重、pose 模板、可用人体关键点、可选 WholeBody 内轮廓和人物轮廓生成线条式伪 3D 虚拟人像；pose、segmentation 或 WholeBody 不足时按可用能力降级。
 - 缺少可用人体 pose、人物分割轮廓和 WholeBody 内轮廓时，虚拟人像回退为可缩放的汉服女性虚线模板；一旦真实检测结果可用，继续使用对应的现有渲染。
 - `CameraV2Overlay` 在预览上使用 Compose `Canvas` 按深度绘制 3D 虚拟人像、人物外轮廓虚线、人物内轮廓虚线和移动提示。
-- 进入拍照 Tab 后，主导航中当前选中的“拍照”Tab 显示为带蓝色背景的“拍摄”，点击后使用 CameraX `ImageCapture` 拍照，并通过 `MediaStore` 保存到系统相册；离开拍照 Tab 后立即恢复无蓝色背景的“拍照”导航项。预览内保留身高体重与保存结果提示，但不再提供独立拍摄按钮。
+- 进入“相机”Tab 后，主导航中当前选中的“相机”Tab 显示为带蓝色背景的“拍摄”，点击后使用 CameraX `ImageCapture` 拍照，并通过 `MediaStore` 保存到系统相册；离开相机 Tab 后立即恢复无蓝色背景的“相机”导航项。预览内保留身高体重与保存结果提示，但不再提供独立拍摄按钮。
 
 ONNX v2 相机构图功能的详细设计、数据流、模型来源和扩展方向见 `docs/FEATURE_CAMERA_PYTORCH_V2.md`。上一版 ONNX 方案见 `docs/FEATURE_CAMERA_PYTORCH.md`，旧 ML Kit 方案见 `docs/CAMERA_COMPOSITION_GUIDE.md`。后续拍照保存、滤镜或自定义模型能力应优先在 `feature-camera-pytorch-v2` 内实现。
 

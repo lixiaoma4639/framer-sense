@@ -205,12 +205,13 @@ class NavigationTest {
 
     @Test
     fun selectedCameraTab_becomesCaptureAction_andRestoresCameraLabelAfterLeaving() {
+        val captureCount = mutableStateOf(0)
+
         composeTestRule.setContent {
             MyApplicationTheme {
                 var uiState by mutableStateOf(
                     MainNavigationUiState(selectedTab = BottomNavTab.CAMERA)
                 )
-                var captureCount by mutableStateOf(0)
                 MainNavigationContent(
                     uiState = uiState,
                     onTabSelected = { tab -> uiState = uiState.copy(selectedTab = tab) },
@@ -219,7 +220,7 @@ class NavigationTest {
                         LaunchedEffect(Unit) {
                             onCaptureActionChanged(
                                 CameraV2CaptureAction(
-                                    onClick = { captureCount++ },
+                                    onClick = { captureCount.value++ },
                                     enabled = true
                                 )
                             )
@@ -234,12 +235,57 @@ class NavigationTest {
 
         composeTestRule.onNodeWithText("拍摄").assertIsDisplayed()
         composeTestRule.onNodeWithTag("bottom_tab_CAMERA").performClick()
-        composeTestRule.runOnIdle { assertEquals(1, captureCount) }
+        composeTestRule.runOnIdle { assertEquals(1, captureCount.value) }
 
         composeTestRule.onNodeWithTag("bottom_tab_HOME").performClick()
-        composeTestRule.onNodeWithText("拍照").assertIsDisplayed()
+        composeTestRule.onNodeWithText("相机").assertIsDisplayed()
         composeTestRule.onNodeWithTag("bottom_tab_CAMERA").performClick()
         composeTestRule.onNodeWithText("拍摄页").assertIsDisplayed()
+
+        composeTestRule.onNodeWithTag("bottom_tab_CAMERA").performClick()
+        composeTestRule.runOnIdle { assertEquals(2, captureCount.value) }
+    }
+
+    @Test
+    fun selectedCameraTab_clickBeforeCaptureActionReady_runsWhenActionArrives() {
+        val publishCaptureAction = mutableStateOf(false)
+        val captureCount = mutableStateOf(0)
+
+        composeTestRule.setContent {
+            MyApplicationTheme {
+                var uiState by mutableStateOf(MainNavigationUiState())
+                MainNavigationContent(
+                    uiState = uiState,
+                    onTabSelected = { tab -> uiState = uiState.copy(selectedTab = tab) },
+                    homeContent = { Text("延迟拍摄首页") },
+                    cameraContent = { onCaptureActionChanged ->
+                        if (publishCaptureAction.value) {
+                            LaunchedEffect(Unit) {
+                                onCaptureActionChanged(
+                                    CameraV2CaptureAction(
+                                        onClick = { captureCount.value++ },
+                                        enabled = true
+                                    )
+                                )
+                            }
+                        }
+                        Text("延迟拍摄页")
+                    },
+                    myModelContent = { _, _, _ -> Text("延迟拍摄我的") },
+                    isLandscape = false
+                )
+            }
+        }
+
+        composeTestRule.onNodeWithTag("bottom_tab_CAMERA").performClick()
+        composeTestRule.onNodeWithText("拍摄").assertIsDisplayed()
+
+        composeTestRule.onNodeWithTag("bottom_tab_CAMERA").performClick()
+        composeTestRule.runOnIdle {
+            assertEquals(0, captureCount.value)
+            publishCaptureAction.value = true
+        }
+        composeTestRule.runOnIdle { assertEquals(1, captureCount.value) }
     }
 
     @Test
@@ -379,7 +425,7 @@ class NavigationTest {
     fun allThreeTabs_areAlwaysVisibleInNavigationBar() {
         // 底部导航栏始终显示3个Tab
         composeTestRule.onNodeWithText("首页").assertIsDisplayed()
-        composeTestRule.onNodeWithText("拍照").assertIsDisplayed()
+        composeTestRule.onNodeWithText("相机").assertIsDisplayed()
         composeTestRule.onNodeWithText("我的").assertIsDisplayed()
     }
 }
