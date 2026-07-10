@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -29,6 +30,7 @@ import com.framer.sense.feature.camera.pytorch.v2.R
 @Composable
 fun CameraV2Overlay(
     guide: CameraV2Guide,
+    isLandscape: Boolean = false,
     modifier: Modifier = Modifier
 ) {
     val guideColor = when (guide.quality) {
@@ -44,17 +46,22 @@ fun CameraV2Overlay(
 
     Box(modifier = modifier.fillMaxSize()) {
         Canvas(modifier = Modifier.fillMaxSize()) {
+            val previewTransform = CameraV2PreviewTransform(
+                frameAspectRatio = guide.frameAspectRatio,
+                viewportWidth = size.width,
+                viewportHeight = size.height
+            )
             val dash = PathEffect.dashPathEffect(floatArrayOf(18f, 14f), 0f)
             val innerDash = PathEffect.dashPathEffect(floatArrayOf(12f, 10f), 0f)
             val figure = guide.virtualHuman
             if (figure.contourPathPoints.size >= 3) {
                 drawPath(
-                    path = figure.contourPathPoints.toPath(size.width, size.height),
+                    path = figure.contourPathPoints.toPath(size.width, size.height, previewTransform),
                     color = Color.Black.copy(alpha = 0.82f),
                     style = Stroke(width = 9.4f, pathEffect = dash)
                 )
                 drawPath(
-                    path = figure.contourPathPoints.toPath(size.width, size.height),
+                    path = figure.contourPathPoints.toPath(size.width, size.height, previewTransform),
                     color = guideColor.copy(alpha = 0.98f),
                     style = Stroke(width = 6.2f, pathEffect = dash)
                 )
@@ -62,15 +69,15 @@ fun CameraV2Overlay(
             figure.innerContourLines.sortedBy { it.depth }.forEach { line ->
                 drawLine(
                     color = Color.Black.copy(alpha = 0.68f),
-                    start = line.start.toOffset(size.width, size.height),
-                    end = line.end.toOffset(size.width, size.height),
+                    start = line.start.toOffset(size.width, size.height, previewTransform),
+                    end = line.end.toOffset(size.width, size.height, previewTransform),
                     strokeWidth = 4.2f,
                     pathEffect = innerDash
                 )
                 drawLine(
                     color = guideColor.copy(alpha = 0.88f),
-                    start = line.start.toOffset(size.width, size.height),
-                    end = line.end.toOffset(size.width, size.height),
+                    start = line.start.toOffset(size.width, size.height, previewTransform),
+                    end = line.end.toOffset(size.width, size.height, previewTransform),
                     strokeWidth = 2.4f,
                     pathEffect = innerDash
                 )
@@ -78,14 +85,14 @@ fun CameraV2Overlay(
             if (figure.drawHead && figure.headRadius > 0f) {
                 drawCircle(
                     color = Color.Black.copy(alpha = 0.80f),
-                    radius = figure.headRadius * size.minDimension,
-                    center = figure.headCenter.toOffset(size.width, size.height),
+                    radius = previewTransform.mapFrameWidth(figure.headRadius),
+                    center = figure.headCenter.toOffset(size.width, size.height, previewTransform),
                     style = Stroke(width = 8.2f)
                 )
                 drawCircle(
                     color = guideColor.copy(alpha = 0.98f),
-                    radius = figure.headRadius * size.minDimension,
-                    center = figure.headCenter.toOffset(size.width, size.height),
+                    radius = previewTransform.mapFrameWidth(figure.headRadius),
+                    center = figure.headCenter.toOffset(size.width, size.height, previewTransform),
                     style = Stroke(width = 5.8f)
                 )
             }
@@ -93,15 +100,15 @@ fun CameraV2Overlay(
                 val depthFactor = ((line.depth + 0.14f) / 0.28f).coerceIn(0f, 1f)
                 drawLine(
                     color = Color.Black.copy(alpha = 0.78f),
-                    start = line.start.toOffset(size.width, size.height),
-                    end = line.end.toOffset(size.width, size.height),
+                    start = line.start.toOffset(size.width, size.height, previewTransform),
+                    end = line.end.toOffset(size.width, size.height, previewTransform),
                     strokeWidth = (5.0f + depthFactor * 3.4f).coerceIn(4.6f, 8.4f),
                     pathEffect = dash
                 )
                 drawLine(
                     color = guideColor.copy(alpha = (0.78f + depthFactor * 0.20f).coerceIn(0.76f, 1.0f)),
-                    start = line.start.toOffset(size.width, size.height),
-                    end = line.end.toOffset(size.width, size.height),
+                    start = line.start.toOffset(size.width, size.height, previewTransform),
+                    end = line.end.toOffset(size.width, size.height, previewTransform),
                     strokeWidth = (3.2f + depthFactor * 3.0f).coerceIn(3.0f, 6.4f),
                     pathEffect = dash
                 )
@@ -109,9 +116,15 @@ fun CameraV2Overlay(
         }
 
         Column(
-            modifier = Modifier
-                .align(Alignment.TopCenter)
-                .fillMaxWidth()
+            modifier = (if (isLandscape) {
+                Modifier
+                    .align(Alignment.TopStart)
+                    .widthIn(max = 340.dp)
+            } else {
+                Modifier
+                    .align(Alignment.TopCenter)
+                    .fillMaxWidth()
+            })
                 .background(Color.Black.copy(alpha = 0.26f))
                 .padding(horizontal = 18.dp, vertical = 14.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
@@ -164,15 +177,25 @@ fun CameraV2Overlay(
     }
 }
 
-private fun V2Point.toOffset(width: Float, height: Float): Offset =
-    Offset(x = x * width, y = y * height)
+private fun V2Point.toOffset(
+    width: Float,
+    height: Float,
+    previewTransform: CameraV2PreviewTransform
+): Offset =
+    previewTransform.map(this).let { point -> Offset(x = point.x * width, y = point.y * height) }
 
-private fun List<V2Point>.toPath(width: Float, height: Float): Path =
+private fun List<V2Point>.toPath(
+    width: Float,
+    height: Float,
+    previewTransform: CameraV2PreviewTransform
+): Path =
     Path().apply {
-        val first = first()
+        val first = previewTransform.map(first())
         moveTo(first.x * width, first.y * height)
         drop(1).forEach { point ->
-            lineTo(point.x * width, point.y * height)
+            previewTransform.map(point).let { mapped ->
+                lineTo(mapped.x * width, mapped.y * height)
+            }
         }
         close()
     }

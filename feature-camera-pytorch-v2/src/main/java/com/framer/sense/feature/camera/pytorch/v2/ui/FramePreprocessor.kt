@@ -6,6 +6,13 @@ import kotlin.math.roundToInt
 
 class FramePreprocessor {
 
+    fun orientedFrameAspectRatio(imageProxy: ImageProxy): Float {
+        val rotation = imageProxy.imageInfo.rotationDegrees
+        val width = if (rotation == 90 || rotation == 270) imageProxy.height else imageProxy.width
+        val height = if (rotation == 90 || rotation == 270) imageProxy.width else imageProxy.height
+        return width.toFloat() / height.coerceAtLeast(1)
+    }
+
     fun averageLuminance(imageProxy: ImageProxy): Double {
         val buffer = imageProxy.planes.firstOrNull()?.buffer?.duplicate() ?: return DEFAULT_LUMINANCE
         if (!buffer.hasRemaining()) return DEFAULT_LUMINANCE

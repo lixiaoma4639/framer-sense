@@ -1,8 +1,14 @@
 package com.framer.sense.feature.camera.pytorch.v2.ui
 
 import android.Manifest
+import android.app.Activity
+import android.content.Context
+import android.content.ContextWrapper
+import android.content.pm.ActivityInfo
 import android.content.pm.PackageManager
+import android.content.res.Configuration
 import android.os.Build
+import android.view.Surface as DisplaySurface
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
@@ -20,12 +26,15 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.colorResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
@@ -45,7 +54,10 @@ fun CameraScreen(
     viewModel: CameraV2ViewModel = viewModel()
 ) {
     val context = LocalContext.current
+    val configuration = LocalConfiguration.current
+    val displayRotation = LocalView.current.display?.rotation ?: DisplaySurface.ROTATION_0
     val state by viewModel.state.collectAsStateWithLifecycle()
+    EnableCameraAutoRotation(context)
     val cameraPermissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission()
     ) { granted ->
@@ -97,6 +109,8 @@ fun CameraScreen(
             viewModel.onIntent(CameraV2Intent.CapturePressed(needsLegacyStoragePermission()))
         },
         onIntent = viewModel::onIntent,
+        isLandscape = configuration.orientation == Configuration.ORIENTATION_LANDSCAPE,
+        targetRotation = displayRotation,
         modifier = modifier
     )
 }
@@ -108,7 +122,9 @@ internal fun CameraV2ScreenContent(
     onCaptureClick: () -> Unit,
     onIntent: (CameraV2Intent) -> Unit,
     modifier: Modifier = Modifier,
-    showCameraPreview: Boolean = true
+    showCameraPreview: Boolean = true,
+    isLandscape: Boolean = false,
+    targetRotation: Int = DisplaySurface.ROTATION_0
 ) {
     Box(
         modifier = modifier
@@ -139,18 +155,27 @@ internal fun CameraV2ScreenContent(
                         onPhotoSaved = { onIntent(CameraV2Intent.PhotoSaved) },
                         onPhotoError = { onIntent(CameraV2Intent.PhotoSaveFailed(it)) },
                         onCameraError = { onIntent(CameraV2Intent.CameraIssue(it)) },
+                        targetRotation = targetRotation,
                         modifier = Modifier.fillMaxSize()
                     )
                 }
                 CameraV2Overlay(
                     guide = state.guide,
+                    isLandscape = isLandscape,
                     modifier = Modifier.fillMaxSize()
                 )
                 CameraV2CaptureControls(
                     captureState = state.captureState,
                     bodyProfile = state.bodyProfile,
                     onCaptureClick = onCaptureClick,
-                    modifier = Modifier.align(Alignment.BottomCenter)
+                    isLandscape = isLandscape,
+                    modifier = if (isLandscape) {
+                        Modifier
+                            .align(Alignment.CenterEnd)
+                            .padding(end = 16.dp)
+                    } else {
+                        Modifier.align(Alignment.BottomCenter)
+                    }
                 )
             }
 
@@ -169,11 +194,13 @@ private fun CameraV2CaptureControls(
     captureState: PhotoV2CaptureState,
     bodyProfile: BodyProfile,
     onCaptureClick: () -> Unit,
+    isLandscape: Boolean,
     modifier: Modifier = Modifier
 ) {
     Column(
-        modifier = modifier
-            .fillMaxWidth()
+        modifier = modifier.then(
+            if (isLandscape) Modifier.padding(horizontal = 8.dp) else Modifier.fillMaxWidth()
+        )
             .background(Color.Black.copy(alpha = 0.30f))
             .padding(horizontal = 22.dp, vertical = 12.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -223,6 +250,27 @@ private fun CameraV2CaptureControls(
         }
     }
 }
+
+@Composable
+private fun EnableCameraAutoRotation(context: Context) {
+    val activity = context.findActivity() ?: return
+    DisposableEffect(activity) {
+        val previousOrientation = activity.requestedOrientation
+        activity.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_FULL_SENSOR
+        onDispose {
+            if (activity.requestedOrientation == ActivityInfo.SCREEN_ORIENTATION_FULL_SENSOR) {
+                activity.requestedOrientation = previousOrientation
+            }
+        }
+    }
+}
+
+private tailrec fun Context.findActivity(): Activity? =
+    when (this) {
+        is Activity -> this
+        is ContextWrapper -> baseContext.findActivity()
+        else -> null
+    }
 
 @Composable
 private fun CameraV2Message(

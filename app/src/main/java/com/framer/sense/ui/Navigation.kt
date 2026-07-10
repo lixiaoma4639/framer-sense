@@ -16,11 +16,15 @@
 
 package com.framer.sense.ui
 
+import android.content.res.Configuration
 import androidx.compose.animation.AnimatedContentTransitionScope
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.Home
@@ -28,15 +32,21 @@ import androidx.compose.material.icons.filled.Person
 import androidx.compose.material3.Icon
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.NavigationRail
+import androidx.compose.material3.NavigationRailItem
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.saveable.SaveableStateHolder
 import androidx.compose.runtime.saveable.rememberSaveableStateHolder
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.tooling.preview.Preview
+import androidx.compose.ui.unit.dp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.navigation3.rememberViewModelStoreNavEntryDecorator
@@ -112,10 +122,14 @@ internal fun MainNavigationContent(
     scanContent: @Composable (() -> Unit) -> Unit = { onBackClick ->
         ScanScreen(onBackClick = onBackClick)
     },
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    isLandscape: Boolean =
+        LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
 ) {
     val tabStateHolder = rememberSaveableStateHolder()
     val myModelBackStack = rememberNavBackStack(Main)
+    val showCameraSideNavigation =
+        uiState.showBottomBar && uiState.selectedTab == BottomNavTab.CAMERA && isLandscape
 
     fun navigateToMyModelDestination(destination: MyModelNavKey) {
         onTabSelected(BottomNavTab.MY_MODEL)
@@ -129,43 +143,47 @@ internal fun MainNavigationContent(
     }
 
     Box(modifier = modifier.fillMaxSize()) {
-        // 主内容：外层 Scaffold 提供底部导航栏
         Scaffold(
             bottomBar = {
-                if (uiState.showBottomBar) {
-                    NavigationBar {
-                        BottomNavTab.entries.forEach { tab ->
-                            NavigationBarItem(
-                                modifier = Modifier.testTag("bottom_tab_${tab.name}"),
-                                icon = { Icon(tab.icon, contentDescription = tab.label) },
-                                label = { Text(tab.label) },
-                                selected = uiState.selectedTab == tab,
-                                onClick = {
-                                    onTabSelected(tab)
-                                }
-                            )
-                        }
-                    }
+                if (uiState.showBottomBar && !showCameraSideNavigation) {
+                    BottomNavigationBar(
+                        selectedTab = uiState.selectedTab,
+                        onTabSelected = onTabSelected
+                    )
                 }
             }
         ) { innerPadding ->
-            Box(
+            MainNavigationDestination(
+                selectedTab = uiState.selectedTab,
+                tabStateHolder = tabStateHolder,
+                homeContent = homeContent,
+                cameraContent = cameraContent,
+                myModelContent = myModelContent,
+                onSettingsClick = { navigateToMyModelDestination(Settings) },
+                onMessagesClick = { navigateToMyModelDestination(Messages) },
+                onScanClick = { navigateToMyModelDestination(Scan) },
                 modifier = Modifier
                     .fillMaxSize()
                     .padding(innerPadding)
-            ) {
-                tabStateHolder.SaveableStateProvider(uiState.selectedTab.name) {
-                    when (uiState.selectedTab) {
-                        BottomNavTab.HOME -> homeContent()
-                        BottomNavTab.CAMERA -> cameraContent()
-                        BottomNavTab.MY_MODEL -> myModelContent(
-                            { navigateToMyModelDestination(Settings) },
-                            { navigateToMyModelDestination(Messages) },
-                            { navigateToMyModelDestination(Scan) }
-                        )
-                    }
-                }
-            }
+                    .then(
+                        if (showCameraSideNavigation) {
+                            Modifier.padding(end = CAMERA_LANDSCAPE_RAIL_WIDTH)
+                        } else {
+                            Modifier
+                        }
+                    )
+            )
+        }
+
+        if (showCameraSideNavigation) {
+            CameraLandscapeNavigationRail(
+                selectedTab = uiState.selectedTab,
+                onTabSelected = onTabSelected,
+                modifier = Modifier
+                    .align(Alignment.CenterEnd)
+                    .fillMaxHeight()
+                    .width(CAMERA_LANDSCAPE_RAIL_WIDTH)
+            )
         }
 
         MyModelNavigationHost(
@@ -175,6 +193,80 @@ internal fun MainNavigationContent(
             messageListContent = messageListContent,
             scanContent = scanContent
         )
+    }
+}
+
+@Composable
+private fun BottomNavigationBar(
+    selectedTab: BottomNavTab,
+    onTabSelected: (BottomNavTab) -> Unit
+) {
+    NavigationBar(modifier = Modifier.testTag("bottom_navigation")) {
+        BottomNavTab.entries.forEach { tab ->
+            NavigationBarItem(
+                modifier = Modifier.testTag("bottom_tab_${tab.name}"),
+                icon = { Icon(tab.icon, contentDescription = tab.label) },
+                label = { Text(tab.label) },
+                selected = selectedTab == tab,
+                onClick = { onTabSelected(tab) }
+            )
+        }
+    }
+}
+
+@Composable
+private fun CameraLandscapeNavigationRail(
+    selectedTab: BottomNavTab,
+    onTabSelected: (BottomNavTab) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    NavigationRail(
+        modifier = modifier.testTag("camera_landscape_navigation")
+    ) {
+        BottomNavTab.entries.forEach { tab ->
+            Spacer(modifier = Modifier.weight(1f))
+            NavigationRailItem(
+                modifier = Modifier.testTag("bottom_tab_${tab.name}"),
+                icon = { Icon(tab.icon, contentDescription = tab.label) },
+                label = { Text(tab.label) },
+                selected = selectedTab == tab,
+                onClick = { onTabSelected(tab) }
+            )
+        }
+        Spacer(modifier = Modifier.weight(1f))
+    }
+}
+
+private val CAMERA_LANDSCAPE_RAIL_WIDTH = 80.dp
+
+@Composable
+private fun MainNavigationDestination(
+    selectedTab: BottomNavTab,
+    tabStateHolder: SaveableStateHolder,
+    homeContent: @Composable () -> Unit,
+    cameraContent: @Composable () -> Unit,
+    myModelContent: @Composable (
+        onSettingsClick: () -> Unit,
+        onMessagesClick: () -> Unit,
+        onScanClick: () -> Unit
+    ) -> Unit,
+    onSettingsClick: () -> Unit,
+    onMessagesClick: () -> Unit,
+    onScanClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Box(modifier = modifier) {
+        tabStateHolder.SaveableStateProvider(selectedTab.name) {
+            when (selectedTab) {
+                BottomNavTab.HOME -> homeContent()
+                BottomNavTab.CAMERA -> cameraContent()
+                BottomNavTab.MY_MODEL -> myModelContent(
+                    onSettingsClick,
+                    onMessagesClick,
+                    onScanClick
+                )
+            }
+        }
     }
 }
 

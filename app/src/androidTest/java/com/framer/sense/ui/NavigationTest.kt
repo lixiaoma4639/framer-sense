@@ -22,6 +22,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsNotSelected
 import androidx.compose.ui.test.assertIsSelected
+import androidx.compose.ui.test.assertDoesNotExist
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
@@ -197,6 +198,61 @@ class NavigationTest {
         composeTestRule.onNodeWithTag("bottom_tab_CAMERA").performClick()
 
         composeTestRule.onNodeWithText("春日限定樱花拍摄攻略").assertDoesNotExist()
+    }
+
+    @Test
+    fun cameraLandscape_usesRightNavigationRail_andKeepsTabSwitchingAvailable() {
+        composeTestRule.setContent {
+            MyApplicationTheme {
+                var uiState by mutableStateOf(
+                    MainNavigationUiState(selectedTab = BottomNavTab.CAMERA)
+                )
+                MainNavigationContent(
+                    uiState = uiState,
+                    onTabSelected = { tab -> uiState = uiState.copy(selectedTab = tab) },
+                    homeContent = { Text("横屏首页") },
+                    cameraContent = { Text("横屏相机") },
+                    myModelContent = { _, _, _ -> Text("横屏我的") },
+                    isLandscape = true
+                )
+            }
+        }
+
+        composeTestRule.onNodeWithTag("camera_landscape_navigation").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("bottom_navigation").assertDoesNotExist()
+        composeTestRule.onNodeWithTag("bottom_tab_CAMERA").assertIsSelected()
+
+        composeTestRule.onNodeWithTag("bottom_tab_HOME").performClick()
+        composeTestRule.onNodeWithTag("bottom_navigation").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("bottom_tab_HOME").assertIsSelected()
+
+        composeTestRule.onNodeWithTag("bottom_tab_MY_MODEL").performClick()
+        composeTestRule.onNodeWithTag("bottom_navigation").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("bottom_tab_MY_MODEL").assertIsSelected()
+
+        composeTestRule.onNodeWithTag("bottom_tab_CAMERA").performClick()
+        composeTestRule.onNodeWithTag("camera_landscape_navigation").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("bottom_tab_CAMERA").assertIsSelected()
+    }
+
+    @Test
+    fun cameraPortrait_keepsBottomNavigationBar() {
+        composeTestRule.setContent {
+            MyApplicationTheme {
+                MainNavigationContent(
+                    uiState = MainNavigationUiState(selectedTab = BottomNavTab.CAMERA),
+                    onTabSelected = {},
+                    homeContent = { Text("首页") },
+                    cameraContent = { Text("竖屏相机") },
+                    myModelContent = { _, _, _ -> Text("我的") },
+                    isLandscape = false
+                )
+            }
+        }
+
+        composeTestRule.onNodeWithTag("bottom_navigation").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("camera_landscape_navigation").assertDoesNotExist()
+        composeTestRule.onNodeWithTag("bottom_tab_CAMERA").assertIsSelected()
     }
 
     // ========== 我的 Tab 测试 ==========

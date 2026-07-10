@@ -160,7 +160,8 @@ data class CameraV2Analysis(
     val wholeBodyPose: WholeBodyPoseEstimate = WholeBodyPoseEstimate.Empty,
     val semanticScene: SemanticScene,
     val luminance: Double,
-    val modelAvailability: ModelAvailability
+    val modelAvailability: ModelAvailability,
+    val frameAspectRatio: Float = CameraV2PreviewTransform.DEFAULT_FRAME_ASPECT_RATIO
 )
 
 data class ModelAvailability(
@@ -268,7 +269,8 @@ data class CameraV2Guide(
     val hint: CameraV2Hint,
     val semanticScene: SemanticScene,
     val virtualHuman: VirtualHumanFigure,
-    val modelAvailability: ModelAvailability
+    val modelAvailability: ModelAvailability,
+    val frameAspectRatio: Float = CameraV2PreviewTransform.DEFAULT_FRAME_ASPECT_RATIO
 ) {
     companion object {
         fun initial(profile: BodyProfile = BodyProfile(BodyProfile.DEFAULT_HEIGHT_CM, BodyProfile.DEFAULT_WEIGHT_KG)): CameraV2Guide {

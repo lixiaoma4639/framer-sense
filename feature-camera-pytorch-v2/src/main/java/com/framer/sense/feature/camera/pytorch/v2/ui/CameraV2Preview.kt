@@ -5,6 +5,7 @@ import android.content.Context
 import android.net.Uri
 import android.os.Build
 import android.os.Environment
+import android.view.Surface
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageCapture
@@ -17,8 +18,11 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.viewinterop.AndroidView
@@ -37,8 +41,10 @@ fun CameraV2Preview(
     onPhotoSaved: (Uri) -> Unit,
     onPhotoError: (Throwable) -> Unit,
     onCameraError: (Throwable) -> Unit,
+    targetRotation: Int = Surface.ROTATION_0,
     modifier: Modifier = Modifier
 ) {
+    var lastHandledCaptureToken by rememberSaveable { mutableIntStateOf(0) }
     key(bodyProfile.safeHeightCm, bodyProfile.safeWeightKg) {
         CameraV2PreviewInstance(
             bodyProfile = bodyProfile,
@@ -47,6 +53,9 @@ fun CameraV2Preview(
             onPhotoSaved = onPhotoSaved,
             onPhotoError = onPhotoError,
             onCameraError = onCameraError,
+            lastHandledCaptureToken = lastHandledCaptureToken,
+            onCaptureTokenHandled = { lastHandledCaptureToken = it },
+            targetRotation = targetRotation,
             modifier = modifier
         )
     }
@@ -60,6 +69,9 @@ private fun CameraV2PreviewInstance(
     onPhotoSaved: (Uri) -> Unit,
     onPhotoError: (Throwable) -> Unit,
     onCameraError: (Throwable) -> Unit,
+    lastHandledCaptureToken: Int,
+    onCaptureTokenHandled: (Int) -> Unit,
+    targetRotation: Int,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -74,9 +86,10 @@ private fun CameraV2PreviewInstance(
             scaleType = PreviewView.ScaleType.FILL_CENTER
         }
     }
-    val imageCapture = remember {
+    val imageCapture = remember(targetRotation) {
         ImageCapture.Builder()
             .setCaptureMode(ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY)
+            .setTargetRotation(targetRotation)
             .build()
     }
     val analysisExecutor = remember { Executors.newSingleThreadExecutor() }
@@ -96,14 +109,16 @@ private fun CameraV2PreviewInstance(
         modifier = modifier
     )
 
-    LaunchedEffect(context, lifecycleOwner, previewView, analyzer) {
+    LaunchedEffect(context, lifecycleOwner, previewView, analyzer, imageCapture, targetRotation) {
         try {
             val provider = context.awaitCameraProvider()
             val preview = Preview.Builder()
+                .setTargetRotation(targetRotation)
                 .build()
                 .also { it.setSurfaceProvider(previewView.surfaceProvider) }
             val imageAnalysis = ImageAnalysis.Builder()
                 .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+                .setTargetRotation(targetRotation)
                 .build()
                 .also { it.setAnalyzer(analysisExecutor, analyzer) }
 
@@ -121,7 +136,8 @@ private fun CameraV2PreviewInstance(
     }
 
     LaunchedEffect(captureToken) {
-        if (captureToken > 0) {
+        if (captureToken > lastHandledCaptureToken) {
+            onCaptureTokenHandled(captureToken)
             imageCapture.saveToGallery(
                 context = context,
                 onSaved = currentOnPhotoSaved,

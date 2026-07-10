@@ -22,7 +22,7 @@ Framer_Sense 是一个基于 Android 官方多模块架构模板演进而来的 
 
 当前源码基准包名和 app `applicationId` 为 `com.framer.sense`。各 module 的 Gradle `namespace` 默认以 `com.framer.sense` 为前缀，并按模块边界追加 `core.*`、`feature.*`、`test.*` 等后缀。
 
-当前应用主体验是一个三栏底部导航 App：
+当前应用主体验是一个三栏导航 App；拍照 Tab 在横屏时改用右侧竖向导航栏，其余状态保持底部导航：
 
 - 首页：推荐流和系统相册。
 - 拍照：CameraX 实时预览、ONNX Runtime 端侧 3D 构图引导和拍摄保存到系统相册。
@@ -37,7 +37,7 @@ Framer_Sense 是一个基于 Android 官方多模块架构模板演进而来的 
 主应用模块，负责应用入口、主题装配和主导航组装。
 
 - `MainActivity`：Activity 入口，启用 edge-to-edge，注入 `MyApplicationTheme`，渲染 `MainNavigation`。
-- `Navigation.kt`：当前主 UI 入口，收集 `MainNavigationViewModel` 状态并组装底部导航。
+- `Navigation.kt`：当前主 UI 入口，收集 `MainNavigationViewModel` 状态并组装自适应主导航；仅拍照横屏使用右侧竖向导航栏。
 - `MainNavigationViewModel`：管理底部 Tab、“我的”模块内部路由和底部栏显隐状态。
 - `MyApplication`：Hilt Application 入口。
 
@@ -93,7 +93,7 @@ MyApplication
   -> MainNavigation
 ```
 
-`MainNavigation` 收集 `MainNavigationViewModel` 暴露的 `MainNavigationUiState`，并使用 `Scaffold` 和 `NavigationBar` 组织底部导航。当前包含 3 个固定 Tab：
+`MainNavigation` 收集 `MainNavigationViewModel` 暴露的 `MainNavigationUiState`，默认使用 `Scaffold` 和 `NavigationBar` 组织底部导航。当前包含 3 个固定 Tab：
 
 | Tab | Composable |
 | --- | --- |
@@ -101,7 +101,7 @@ MyApplication
 | 拍照 | `CameraScreen()` |
 | 我的 | `MyModelMainScreen()` |
 
-底部导航状态不会因“我的”模块内部页面而移除。当用户进入“我的 -> 扫一扫”“我的 -> 设置”或“我的 -> 消息”页面时，app 层使用 Navigation3 `NavDisplay` 和 `MyModelNavKey` 维护内部返回栈，内部页面作为全屏覆盖层盖住上一页全部内容，物理返回键会从 Navigation3 back stack 返回我的主页。主导航 ViewModel 只管理底部 Tab 状态，Compose 侧使用 `rememberSaveableStateHolder` 保存各 Tab 页面状态。
+当当前 Tab 为“拍照”且设备横屏时，主导航改为屏幕右侧的竖向 `NavigationRail`，相机预览占用左侧剩余区域；三个 Tab 沿右侧高度均匀分布，不使用默认的紧凑连续排列。两个横屏方向均固定在当前界面右侧，图标与文字保持正向。拍照竖屏、首页和“我的”继续使用底部导航。底部导航状态不会因“我的”模块内部页面而移除。当用户进入“我的 -> 扫一扫”“我的 -> 设置”或“我的 -> 消息”页面时，app 层使用 Navigation3 `NavDisplay` 和 `MyModelNavKey` 维护内部返回栈，内部页面作为全屏覆盖层盖住上一页全部内容，物理返回键会从 Navigation3 back stack 返回我的主页。主导航 ViewModel 只管理底部 Tab 状态，Compose 侧使用 `rememberSaveableStateHolder` 保存各 Tab 页面状态。
 
 ### 首页模块
 

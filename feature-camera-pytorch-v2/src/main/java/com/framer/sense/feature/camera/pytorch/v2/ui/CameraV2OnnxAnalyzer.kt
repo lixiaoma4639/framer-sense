@@ -51,7 +51,8 @@ class CameraV2OnnxAnalyzer(
             wholeBodyPose = wholeBodyPose,
             semanticScene = YoloSceneInferencer.infer(objects),
             luminance = luminance,
-            modelAvailability = sessions.availability
+            modelAvailability = sessions.availability,
+            frameAspectRatio = preprocessor.orientedFrameAspectRatio(imageProxy)
         )
     }
 

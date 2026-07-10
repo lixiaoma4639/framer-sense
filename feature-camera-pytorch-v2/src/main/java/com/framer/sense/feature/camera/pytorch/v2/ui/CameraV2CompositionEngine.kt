@@ -205,7 +205,8 @@ class CameraV2CompositionEngine(
             hint = hint,
             semanticScene = analysis.semanticScene,
             virtualHuman = figure,
-            modelAvailability = analysis.modelAvailability
+            modelAvailability = analysis.modelAvailability,
+            frameAspectRatio = analysis.frameAspectRatio
         )
 
     private companion object {
