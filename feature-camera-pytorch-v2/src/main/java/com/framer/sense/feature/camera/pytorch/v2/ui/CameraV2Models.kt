@@ -251,6 +251,29 @@ data class VirtualHumanLine(
     val depth: Float
 )
 
+enum class VirtualHumanVisualStyle {
+    SKELETON,
+    HANFU_GUIDE
+}
+
+enum class VirtualHumanPathRole {
+    OUTLINE,
+    HAIR,
+    FACE,
+    HANDS,
+    SLEEVE,
+    WAIST_ORNAMENT,
+    SKIRT_FOLD
+}
+
+data class VirtualHumanStrokePath(
+    val role: VirtualHumanPathRole,
+    val points: List<V2Point>,
+    val closed: Boolean = false,
+    val depth: Float = 0f,
+    val smooth: Boolean = false
+)
+
 data class VirtualHumanFigure(
     val bounds: V2Rect,
     val template: PoseTemplate,
@@ -260,7 +283,9 @@ data class VirtualHumanFigure(
     val headRadius: Float,
     val contourPathPoints: List<V2Point> = emptyList(),
     val drawHead: Boolean = true,
-    val poseDriven: Boolean = false
+    val poseDriven: Boolean = false,
+    val visualStyle: VirtualHumanVisualStyle = VirtualHumanVisualStyle.SKELETON,
+    val decorativePaths: List<VirtualHumanStrokePath> = emptyList()
 )
 
 data class CameraV2Guide(
@@ -282,10 +307,9 @@ data class CameraV2Guide(
                 movement = CameraV2Movement.NONE,
                 hint = CameraV2Hint.CAMERA_STARTING,
                 semanticScene = SemanticScene.Unknown,
-                virtualHuman = VirtualHumanProjector().project(
+                virtualHuman = VirtualHumanProjector().projectDefaultHanfuGuide(
                     targetBounds = bounds,
-                    profile = profile,
-                    template = PoseTemplate.RELAXED_STAND
+                    profile = profile
                 ),
                 modelAvailability = ModelAvailability.Missing
             )

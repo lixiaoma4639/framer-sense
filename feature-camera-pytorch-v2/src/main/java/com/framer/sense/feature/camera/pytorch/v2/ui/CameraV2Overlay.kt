@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
@@ -53,8 +54,37 @@ fun CameraV2Overlay(
                 viewportHeight = size.height
             )
             val dash = PathEffect.dashPathEffect(floatArrayOf(18f, 14f), 0f)
+            val hanfuDash = PathEffect.dashPathEffect(floatArrayOf(15f, 8f), 0f)
             val innerDash = PathEffect.dashPathEffect(floatArrayOf(12f, 10f), 0f)
             val figure = guide.virtualHuman
+            if (figure.visualStyle == VirtualHumanVisualStyle.HANFU_GUIDE) {
+                figure.decorativePaths.sortedBy { it.depth }.forEach { path ->
+                    val depthFactor = ((path.depth + 0.14f) / 0.28f).coerceIn(0f, 1f)
+                    val renderedPath = path.points.toPath(
+                        width = size.width,
+                        height = size.height,
+                        previewTransform = previewTransform,
+                        closed = path.closed,
+                        smooth = path.smooth
+                    )
+                    drawPath(
+                        path = renderedPath,
+                        color = Color.Black.copy(alpha = 0.80f),
+                        style = Stroke(
+                            width = (5.0f + depthFactor * 3.0f).coerceIn(4.6f, 8.0f),
+                            pathEffect = hanfuDash
+                        )
+                    )
+                    drawPath(
+                        path = renderedPath,
+                        color = guideColor.copy(alpha = (0.80f + depthFactor * 0.18f).coerceIn(0.78f, 0.98f)),
+                        style = Stroke(
+                            width = (3.0f + depthFactor * 2.6f).coerceIn(2.8f, 5.6f),
+                            pathEffect = hanfuDash
+                        )
+                    )
+                }
+            }
             if (figure.contourPathPoints.size >= 3) {
                 drawPath(
                     path = figure.contourPathPoints.toPath(size.width, size.height, previewTransform),
@@ -126,6 +156,8 @@ fun CameraV2Overlay(
                     .align(Alignment.TopCenter)
                     .fillMaxWidth()
             })
+                .statusBarsPadding()
+                .padding(top = 10.dp)
                 .background(Color.Black.copy(alpha = 0.26f))
                 .padding(horizontal = 18.dp, vertical = 14.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
@@ -188,17 +220,34 @@ private fun V2Point.toOffset(
 private fun List<V2Point>.toPath(
     width: Float,
     height: Float,
-    previewTransform: CameraV2PreviewTransform
+    previewTransform: CameraV2PreviewTransform,
+    closed: Boolean = true,
+    smooth: Boolean = false
 ): Path =
     Path().apply {
-        val first = previewTransform.map(first())
-        moveTo(first.x * width, first.y * height)
-        drop(1).forEach { point ->
+        val mappedPoints = map { point ->
             previewTransform.map(point).let { mapped ->
-                lineTo(mapped.x * width, mapped.y * height)
+                Offset(mapped.x * width, mapped.y * height)
             }
         }
-        close()
+        val first = mappedPoints.first()
+        moveTo(first.x, first.y)
+        if (!smooth || mappedPoints.size < 3) {
+            mappedPoints.drop(1).forEach { point -> lineTo(point.x, point.y) }
+        } else {
+            mappedPoints.drop(1).dropLast(1).forEachIndexed { index, control ->
+                val next = mappedPoints[index + 2]
+                quadraticBezierTo(
+                    control.x,
+                    control.y,
+                    (control.x + next.x) / 2f,
+                    (control.y + next.y) / 2f
+                )
+            }
+            val last = mappedPoints.last()
+            lineTo(last.x, last.y)
+        }
+        if (closed) close()
     }
 
 private fun CameraV2Movement.directionTextRes(): Int? =

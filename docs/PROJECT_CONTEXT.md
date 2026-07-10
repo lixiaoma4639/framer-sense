@@ -148,6 +148,7 @@ MyApplication
 - 首次进入先检查 `CAMERA` 权限，未授权时展示权限说明和重新授权按钮。
 - 页面按 MVI 组织，`CameraV2ViewModel` 统一处理 `CameraV2Intent`、归约 `CameraV2State`，并通过 `CameraV2Effect` 触发权限请求等一次性平台动作。
 - 已授权后使用 CameraX `PreviewView` 显示后置摄像头实时预览。
+- 拍照页仅忽略主导航的顶部系统栏内边距，使相机预览延伸至状态栏；首页和“我的”仍保留原有系统栏安全区。
 - `ImageAnalysis` 使用 `STRATEGY_KEEP_ONLY_LATEST` 获取实时帧，交给 `CameraV2FrameAnalyzer` 进行端侧分析。
 - `CameraV2FrameAnalyzer` 对实时帧做约 520ms 节流，调用 `CameraV2OnnxAnalyzer` 执行 ONNX 推理。
 - App 启动后会在后台预热四个 ONNX Runtime session；session 在应用进程内共享，拍照 Tab 切换和横竖屏重建只复用已有 session，不重复加载模型。应用进程被系统结束后会在下次启动重新预热。
@@ -155,6 +156,7 @@ MyApplication
 - `CameraV2OnnxAnalyzer` 约定加载 assets 中的 YOLO 检测、YOLO Pose、可选 YOLO Seg 和可选 RTMPose WholeBody ONNX 模型；Seg 缺失时退化为 person box + pose 包裹，WholeBody 缺失时退化为 YOLO Pose 骨架，基础模型缺失时显示可恢复提示并继续绘制 3D 构图占位。
 - `CameraV2CompositionEngine` 根据场景类别、亮度、人物框、障碍物和候选站位输出构图建议。
 - `VirtualHumanProjector` 根据传入身高体重、pose 模板、可用人体关键点、可选 WholeBody 内轮廓和人物轮廓生成线条式伪 3D 虚拟人像；pose、segmentation 或 WholeBody 不足时按可用能力降级。
+- 缺少可用人体 pose、人物分割轮廓和 WholeBody 内轮廓时，虚拟人像回退为可缩放的汉服女性虚线模板；一旦真实检测结果可用，继续使用对应的现有渲染。
 - `CameraV2Overlay` 在预览上使用 Compose `Canvas` 按深度绘制 3D 虚拟人像、人物外轮廓虚线、人物内轮廓虚线和移动提示。
 - 进入拍照 Tab 后，主导航中当前选中的“拍照”Tab 显示为带蓝色背景的“拍摄”，点击后使用 CameraX `ImageCapture` 拍照，并通过 `MediaStore` 保存到系统相册；离开拍照 Tab 后立即恢复无蓝色背景的“拍照”导航项。预览内保留身高体重与保存结果提示，但不再提供独立拍摄按钮。
 

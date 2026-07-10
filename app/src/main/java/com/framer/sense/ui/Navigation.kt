@@ -23,6 +23,8 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.calculateEndPadding
+import androidx.compose.foundation.layout.calculateStartPadding
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
@@ -54,6 +56,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
@@ -141,6 +144,7 @@ internal fun MainNavigationContent(
 ) {
     val tabStateHolder = rememberSaveableStateHolder()
     val myModelBackStack = rememberNavBackStack(Main)
+    val layoutDirection = LocalLayoutDirection.current
     var cameraCaptureAction by remember { mutableStateOf<CameraV2CaptureAction?>(null) }
     val showCameraSideNavigation =
         uiState.showBottomBar && uiState.selectedTab == BottomNavTab.CAMERA && isLandscape
@@ -193,7 +197,16 @@ internal fun MainNavigationContent(
                 onScanClick = { navigateToMyModelDestination(Scan) },
                 modifier = Modifier
                     .fillMaxSize()
-                    .padding(innerPadding)
+                    .padding(
+                        start = innerPadding.calculateStartPadding(layoutDirection),
+                        top = if (uiState.selectedTab == BottomNavTab.CAMERA) {
+                            0.dp
+                        } else {
+                            innerPadding.calculateTopPadding()
+                        },
+                        end = innerPadding.calculateEndPadding(layoutDirection),
+                        bottom = innerPadding.calculateBottomPadding()
+                    )
                     .then(
                         if (showCameraSideNavigation) {
                             Modifier.padding(end = CAMERA_LANDSCAPE_RAIL_WIDTH)

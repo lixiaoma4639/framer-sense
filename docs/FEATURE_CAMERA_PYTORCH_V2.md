@@ -8,6 +8,7 @@
 - 使用 ONNX Runtime 在端侧分析实时帧，组合人物/物体检测、人体 pose 关键点和可选 WholeBody landmark，并基于检测到的物体推断场景类型。
 - 根据场景类别、障碍物、亮度、人物位置和三分线候选区域生成推荐站位。
 - 根据传入的身高体重生成线条式 3D 虚拟人像；检测到人体 pose 时优先跟随真实姿势，检测到 segmentation mask 时按人物轮廓绘制包裹虚线，检测到 WholeBody landmark 时绘制脸、手、脚和肢体内轮廓。
+- 所有尚未具备可用人体 pose 的虚线人像回退场景，均展示可随身高体重缩放的汉服女性引导模板：盘发、微侧低首、双手交叠、宽袖与垂地长裙；已有真实 pose、人物分割轮廓或 WholeBody 结果时保持现有渲染。
 - 构图不满足要求时提示移动手机或调整距离；即使不满足要求，也持续绘制 3D 虚拟人像。
 - 进入拍照 Tab 后，主导航中当前选中的“拍照”Tab 显示为带蓝色背景的“拍摄”；点击后保存照片到系统相册，离开后恢复“拍照”Tab，预览内不再提供独立拍摄按钮。
 - 进入拍照 Tab 时启用设备全方向传感器；`MainActivity` 在同一实例内处理方向配置变化，横竖屏切换后会重绑 CameraX 的 Preview、ImageAnalysis 和 ImageCapture，并同步更新三者的目标旋转角度，避免窗口销毁期间的预览缓冲区错配。
@@ -70,15 +71,15 @@ CameraX ImageCapture
 - `CameraV2OnnxSessionManager`：应用进程级 ONNX session 管理器，后台预热并向各相机分析器提供同一组模型 session。
 - `CameraV2OnnxAnalyzer`：运行 ONNX Runtime session，解析检测、pose、可选 segmentation 和可选 WholeBody landmark 结果，并根据 COCO 物体类别推断室内、城市、户外或未知场景。
 - `CameraV2CompositionEngine`：纯 Kotlin 构图规则，不依赖 Android UI。
-- `VirtualHumanProjector`：根据身高体重、pose 模板、可用人体关键点、WholeBody 内轮廓和人物轮廓生成伪 3D 线框投影。
-- `CameraV2Overlay`：按深度排序绘制 3D 虚拟人像、人物外轮廓虚线、人物内轮廓虚线、移动提示和模型状态。
+- `VirtualHumanProjector`：根据身高体重、pose 模板、可用人体关键点、WholeBody 内轮廓和人物轮廓生成伪 3D 线框投影，并提供默认汉服女性虚线引导模板。
+- `CameraV2Overlay`：按深度排序绘制默认汉服女性虚线路径或 ONNX 驱动的 3D 虚拟人像、人物外轮廓虚线、人物内轮廓虚线、移动提示和模型状态。
 
 ## 测试
 
 新增测试覆盖：
 
 - `CameraV2CompositionEngineTest`：构图评分、暗光、场景偏好、模型缺失降级、人物轮廓/人框跟随、WholeBody 内轮廓接入。
-- `VirtualHumanProjectorTest`：不同身高体重下的人像比例、pose-aware 骨架、WholeBody 内轮廓、深度和边界 clamp。
+- `VirtualHumanProjectorTest`：默认汉服女性模板、不同身高体重下的人像比例、pose-aware 骨架、WholeBody 内轮廓、深度和边界 clamp。
 - `PoseTemplateSelectorTest`：pose 模板选择。
 - `CameraV2ViewModelTest`：MVI 状态归约、权限/拍摄 effect 和 ONNX 加载状态同步。
 - `CameraV2ScreenTest`：权限、Ready、错误 UI，以及 ONNX 加载与相机启动文案的区分。

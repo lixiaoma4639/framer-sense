@@ -9,6 +9,60 @@ class VirtualHumanProjectorTest {
     private val projector = VirtualHumanProjector()
 
     @Test
+    fun projectDefaultHanfuGuide_containsReferencePoseDetailsInsidePreview() {
+        val figure = projector.projectDefaultHanfuGuide(
+            targetBounds = V2Rect(0.32f, 0.14f, 0.68f, 0.92f),
+            profile = BodyProfile(170, 60)
+        )
+
+        assertEquals(VirtualHumanVisualStyle.HANFU_GUIDE, figure.visualStyle)
+        assertTrue(figure.lines.isEmpty())
+        assertTrue(figure.decorativePaths.any { it.role == VirtualHumanPathRole.HAIR })
+        assertTrue(figure.decorativePaths.any { it.role == VirtualHumanPathRole.HANDS })
+        assertTrue(figure.decorativePaths.any { it.role == VirtualHumanPathRole.SKIRT_FOLD })
+        assertTrue(figure.decorativePaths.flatMap { it.points }.all { point ->
+            point.x in 0f..1f && point.y in 0f..1f
+        })
+    }
+
+    @Test
+    fun projectDefaultHanfuGuide_scalesWithBodyProfile() {
+        val target = V2Rect(0.32f, 0.14f, 0.68f, 0.92f)
+        val slim = projector.projectDefaultHanfuGuide(target, BodyProfile(185, 58))
+        val heavy = projector.projectDefaultHanfuGuide(target, BodyProfile(160, 110))
+
+        assertTrue(heavy.bounds.width > slim.bounds.width)
+    }
+
+    @Test
+    fun projectDefaultHanfuGuide_isSlightlyWiderThanPoseDrivenFigure() {
+        val target = V2Rect(0.32f, 0.14f, 0.68f, 0.92f)
+        val hanfuGuide = projector.projectDefaultHanfuGuide(target, BodyProfile(170, 60))
+        val fallbackTemplate = projector.project(
+            targetBounds = target,
+            profile = BodyProfile(170, 60),
+            template = PoseTemplate.RELAXED_STAND
+        )
+        val poseDriven = projector.project(
+            targetBounds = target,
+            profile = BodyProfile(170, 60),
+            template = PoseTemplate.RELAXED_STAND,
+            pose = completePose()
+        )
+
+        assertTrue(hanfuGuide.bounds.width > poseDriven.bounds.width)
+        assertTrue(hanfuGuide.bounds.width > fallbackTemplate.bounds.width)
+    }
+
+    @Test
+    fun initialGuide_usesHanfuVisualStyle() {
+        assertEquals(
+            VirtualHumanVisualStyle.HANFU_GUIDE,
+            CameraV2Guide.initial().virtualHuman.visualStyle
+        )
+    }
+
+    @Test
     fun project_forDifferentBodyProfiles_keepsHumanInsidePreview() {
         val target = V2Rect(0.32f, 0.14f, 0.68f, 0.92f)
         val slim = projector.project(target, BodyProfile(185, 58), PoseTemplate.RELAXED_STAND)
@@ -26,7 +80,8 @@ class VirtualHumanProjectorTest {
         val figure = projector.project(
             targetBounds = V2Rect(0.32f, 0.14f, 0.68f, 0.92f),
             profile = BodyProfile(170, 60),
-            template = PoseTemplate.WALKING
+            template = PoseTemplate.WALKING,
+            pose = completePose()
         )
 
         assertTrue(figure.lines.size >= 10)
@@ -59,6 +114,7 @@ class VirtualHumanProjectorTest {
         assertTrue(poseAware.lines.any { it.depth < -0.02f })
         assertTrue(poseAware.poseDriven)
         assertTrue(!poseAware.drawHead)
+        assertEquals(VirtualHumanVisualStyle.SKELETON, poseAware.visualStyle)
     }
 
     @Test
@@ -79,6 +135,7 @@ class VirtualHumanProjectorTest {
         )
 
         assertEquals(template, fallback)
+        assertEquals(VirtualHumanVisualStyle.HANFU_GUIDE, fallback.visualStyle)
     }
 
     @Test

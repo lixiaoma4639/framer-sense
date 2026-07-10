@@ -17,7 +17,8 @@ class CameraV2CompositionEngineTest {
         )
 
         assertEquals(CameraV2Hint.MODEL_ASSETS_MISSING, guide.hint)
-        assertTrue(guide.virtualHuman.lines.isNotEmpty())
+        assertEquals(VirtualHumanVisualStyle.HANFU_GUIDE, guide.virtualHuman.visualStyle)
+        assertTrue(guide.virtualHuman.decorativePaths.isNotEmpty())
         assertTrue(guide.targetBounds.centerX in 0.30f..0.70f)
     }
 
@@ -109,7 +110,8 @@ class CameraV2CompositionEngineTest {
             profile = profile
         )
 
-        assertTrue(guide.virtualHuman.lines.isNotEmpty())
+        assertEquals(VirtualHumanVisualStyle.HANFU_GUIDE, guide.virtualHuman.visualStyle)
+        assertTrue(guide.virtualHuman.decorativePaths.isNotEmpty())
     }
 
     @Test
@@ -132,6 +134,7 @@ class CameraV2CompositionEngineTest {
 
         assertEquals(segment.contour, guide.virtualHuman.contourPathPoints)
         assertEquals(segment.bounds.height, guide.virtualHuman.bounds.height, 0.001f)
+        assertEquals(VirtualHumanVisualStyle.SKELETON, guide.virtualHuman.visualStyle)
     }
 
     @Test

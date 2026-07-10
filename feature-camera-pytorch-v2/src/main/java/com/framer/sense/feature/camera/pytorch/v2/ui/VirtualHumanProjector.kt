@@ -5,6 +5,18 @@ import kotlin.math.max
 
 class VirtualHumanProjector {
 
+    /** 无可用人体 pose、分割轮廓或 WholeBody 内轮廓时使用的汉服女性虚线引导模板。 */
+    fun projectDefaultHanfuGuide(
+        targetBounds: V2Rect,
+        profile: BodyProfile
+    ): VirtualHumanFigure =
+        project(
+            targetBounds = targetBounds,
+            profile = profile,
+            template = PoseTemplate.RELAXED_STAND,
+            hanfuGuideWidthScale = INITIAL_HANFU_GUIDE_WIDTH_SCALE
+        )
+
     fun project(
         targetBounds: V2Rect,
         profile: BodyProfile,
@@ -12,7 +24,8 @@ class VirtualHumanProjector {
         pose: PoseEstimate = PoseEstimate.Empty,
         wholeBodyPose: WholeBodyPoseEstimate = WholeBodyPoseEstimate.Empty,
         contourPathPoints: List<V2Point> = emptyList(),
-        matchTargetBounds: Boolean = false
+        matchTargetBounds: Boolean = false,
+        hanfuGuideWidthScale: Float = HANFU_GUIDE_WIDTH_SCALE
     ): VirtualHumanFigure {
         val bounds = if (matchTargetBounds) {
             targetBounds.clamped().ensureMinimumSize()
@@ -48,17 +61,33 @@ class VirtualHumanProjector {
                 )
             }
         }
+        val hasWholeBodyContour = wholeBodyPose.confidence >= WHOLE_BODY_CONFIDENCE_THRESHOLD &&
+            wholeBodyPose.keypoints.isNotEmpty()
+        val useHanfuGuide = !posePoints.poseDriven &&
+            contourPathPoints.isEmpty() &&
+            !hasWholeBodyContour
+        val visualBounds = if (useHanfuGuide) {
+            bounds.widenedForHanfuGuide(hanfuGuideWidthScale)
+        } else {
+            bounds
+        }
 
         return VirtualHumanFigure(
-            bounds = bounds,
+            bounds = visualBounds,
             template = template,
-            lines = lines,
+            lines = if (posePoints.poseDriven) lines else emptyList(),
             innerContourLines = WholeBodyInnerContourBuilder.build(wholeBodyPose),
-            headCenter = projected[Joint.HEAD] ?: V2Point(bounds.centerX, bounds.top + bounds.height * 0.10f),
-            headRadius = if (posePoints.drawHead) max(bounds.width * 0.12f, 0.025f) else 0f,
+            headCenter = projected[Joint.HEAD] ?: V2Point(visualBounds.centerX, visualBounds.top + visualBounds.height * 0.10f),
+            headRadius = if (posePoints.drawHead) max(visualBounds.width * 0.12f, 0.025f) else 0f,
             contourPathPoints = contourPathPoints,
-            drawHead = posePoints.drawHead && !posePoints.poseDriven && !matchTargetBounds && contourPathPoints.isEmpty(),
-            poseDriven = posePoints.poseDriven
+            drawHead = false,
+            poseDriven = posePoints.poseDriven,
+            visualStyle = if (useHanfuGuide) {
+                VirtualHumanVisualStyle.HANFU_GUIDE
+            } else {
+                VirtualHumanVisualStyle.SKELETON
+            },
+            decorativePaths = if (useHanfuGuide) buildHanfuGuidePaths(visualBounds) else emptyList()
         )
     }
 
@@ -68,6 +97,132 @@ class VirtualHumanProjector {
         val left = (centerX - adjustedWidth / 2f).coerceIn(0f, 1f - adjustedWidth)
         val top = (centerY - adjustedHeight / 2f).coerceIn(0f, 1f - adjustedHeight)
         return V2Rect(left, top, left + adjustedWidth, top + adjustedHeight)
+    }
+
+    private fun V2Rect.widenedForHanfuGuide(widthScale: Float): V2Rect {
+        val widenedWidth = (width * widthScale).coerceAtMost(MAX_HANFU_GUIDE_WIDTH)
+        val widenedLeft = (centerX - widenedWidth / 2f).coerceIn(0.02f, 0.98f - widenedWidth)
+        return V2Rect(widenedLeft, top, widenedLeft + widenedWidth, bottom)
+    }
+
+    private fun buildHanfuGuidePaths(bounds: V2Rect): List<VirtualHumanStrokePath> {
+        fun point(x: Float, y: Float): V2Point =
+            V2Point(
+                x = (bounds.left + bounds.width * x).coerceIn(0f, 1f),
+                y = (bounds.top + bounds.height * y).coerceIn(0f, 1f)
+            )
+
+        fun path(
+            role: VirtualHumanPathRole,
+            vararg coordinates: Pair<Float, Float>,
+            closed: Boolean = false,
+            depth: Float = 0f,
+            smooth: Boolean = true
+        ): VirtualHumanStrokePath =
+            VirtualHumanStrokePath(
+                role = role,
+                points = coordinates.map { (x, y) -> point(x, y) },
+                closed = closed,
+                depth = depth,
+                smooth = smooth
+            )
+
+        return listOf(
+            path(
+                VirtualHumanPathRole.OUTLINE,
+                0.49f to 0.13f, 0.39f to 0.18f, 0.25f to 0.27f, 0.16f to 0.40f,
+                0.11f to 0.54f, 0.17f to 0.65f, 0.10f to 0.79f, 0.02f to 0.93f,
+                0.14f to 0.98f, 0.36f to 0.96f, 0.48f to 0.93f, 0.61f to 0.98f,
+                0.91f to 0.96f, 0.98f to 0.90f, 0.88f to 0.79f, 0.89f to 0.60f,
+                0.83f to 0.44f, 0.74f to 0.29f, 0.60f to 0.20f, 0.53f to 0.14f,
+                closed = true
+            ),
+            path(
+                VirtualHumanPathRole.HAIR,
+                0.38f to 0.16f, 0.29f to 0.12f, 0.31f to 0.05f, 0.41f to 0.01f,
+                0.54f to 0.02f, 0.63f to 0.08f, 0.60f to 0.15f, 0.53f to 0.18f,
+                0.44f to 0.18f, closed = true, depth = 0.03f
+            ),
+            path(
+                VirtualHumanPathRole.HAIR,
+                0.34f to 0.14f, 0.28f to 0.18f, 0.34f to 0.21f, 0.43f to 0.19f,
+                0.54f to 0.18f, 0.61f to 0.15f, depth = 0.04f
+            ),
+            path(
+                VirtualHumanPathRole.HAIR,
+                0.35f to 0.10f, 0.40f to 0.06f, 0.49f to 0.06f, 0.57f to 0.10f,
+                0.56f to 0.14f, 0.49f to 0.12f, 0.42f to 0.14f, depth = 0.05f
+            ),
+            path(
+                VirtualHumanPathRole.HAIR,
+                0.29f to 0.15f, 0.22f to 0.16f, 0.20f to 0.19f, 0.29f to 0.20f,
+                0.35f to 0.18f, depth = 0.02f
+            ),
+            path(
+                VirtualHumanPathRole.FACE,
+                0.43f to 0.18f, 0.39f to 0.23f, 0.40f to 0.31f, 0.46f to 0.35f,
+                0.52f to 0.34f, 0.55f to 0.28f, 0.54f to 0.21f, 0.50f to 0.18f,
+                closed = true, depth = 0.06f
+            ),
+            path(
+                VirtualHumanPathRole.FACE,
+                0.45f to 0.25f, 0.48f to 0.25f, 0.51f to 0.27f, depth = 0.08f
+            ),
+            path(
+                VirtualHumanPathRole.FACE,
+                0.49f to 0.30f, 0.52f to 0.30f, depth = 0.08f
+            ),
+            path(
+                VirtualHumanPathRole.FACE,
+                0.45f to 0.33f, 0.48f to 0.34f, 0.51f to 0.33f, depth = 0.08f
+            ),
+            path(
+                VirtualHumanPathRole.SLEEVE,
+                0.43f to 0.34f, 0.38f to 0.39f, 0.45f to 0.45f, 0.50f to 0.40f,
+                0.54f to 0.34f, depth = 0.04f
+            ),
+            path(
+                VirtualHumanPathRole.SLEEVE,
+                0.36f to 0.32f, 0.23f to 0.43f, 0.20f to 0.56f, 0.32f to 0.64f,
+                0.47f to 0.54f, 0.42f to 0.42f, closed = true, depth = -0.03f
+            ),
+            path(
+                VirtualHumanPathRole.SLEEVE,
+                0.58f to 0.33f, 0.76f to 0.43f, 0.81f to 0.57f, 0.68f to 0.65f,
+                0.52f to 0.54f, 0.56f to 0.42f, closed = true, depth = 0.03f
+            ),
+            path(
+                VirtualHumanPathRole.SLEEVE,
+                0.25f to 0.46f, 0.34f to 0.51f, 0.41f to 0.54f, 0.34f to 0.60f,
+                0.22f to 0.57f, depth = -0.04f
+            ),
+            path(
+                VirtualHumanPathRole.SLEEVE,
+                0.75f to 0.46f, 0.66f to 0.51f, 0.59f to 0.54f, 0.66f to 0.60f,
+                0.78f to 0.57f, depth = 0.04f
+            ),
+            path(
+                VirtualHumanPathRole.HANDS,
+                0.43f to 0.46f, 0.49f to 0.49f, 0.55f to 0.44f, 0.58f to 0.48f,
+                0.51f to 0.55f, 0.44f to 0.52f, closed = true, depth = 0.09f
+            ),
+            path(
+                VirtualHumanPathRole.WAIST_ORNAMENT,
+                0.37f to 0.40f, 0.50f to 0.38f, 0.64f to 0.41f, 0.54f to 0.44f,
+                0.45f to 0.44f, closed = true, depth = 0.02f
+            ),
+            path(
+                VirtualHumanPathRole.WAIST_ORNAMENT,
+                0.50f to 0.42f, 0.47f to 0.50f, 0.51f to 0.57f, 0.55f to 0.50f,
+                0.52f to 0.43f, closed = true, depth = 0.05f
+            ),
+            path(VirtualHumanPathRole.SKIRT_FOLD, 0.35f to 0.54f, 0.26f to 0.82f, 0.18f to 0.94f, depth = -0.02f),
+            path(VirtualHumanPathRole.SKIRT_FOLD, 0.43f to 0.54f, 0.39f to 0.82f, 0.36f to 0.95f, depth = 0f),
+            path(VirtualHumanPathRole.SKIRT_FOLD, 0.52f to 0.54f, 0.53f to 0.82f, 0.50f to 0.95f, depth = 0.03f),
+            path(VirtualHumanPathRole.SKIRT_FOLD, 0.60f to 0.54f, 0.68f to 0.81f, 0.77f to 0.94f, depth = 0.01f),
+            path(VirtualHumanPathRole.SKIRT_FOLD, 0.31f to 0.67f, 0.46f to 0.71f, 0.64f to 0.69f, 0.75f to 0.63f, depth = 0.04f),
+            path(VirtualHumanPathRole.SKIRT_FOLD, 0.21f to 0.85f, 0.37f to 0.89f, 0.52f to 0.88f, 0.70f to 0.91f, 0.85f to 0.86f, depth = -0.01f)
+        )
     }
 
     private fun buildPosePoints(
@@ -292,6 +447,10 @@ class VirtualHumanProjector {
         const val MIN_KEYPOINTS_FOR_POSE = 4
         const val POSE_X_GAIN = 1.18f
         const val POSE_Y_GAIN = 0.90f
+        const val WHOLE_BODY_CONFIDENCE_THRESHOLD = 0.18f
+        const val HANFU_GUIDE_WIDTH_SCALE = 1.08f
+        const val INITIAL_HANFU_GUIDE_WIDTH_SCALE = 1.28f
+        const val MAX_HANFU_GUIDE_WIDTH = 0.52f
         const val MIN_MATCHED_WIDTH = 0.12f
         const val MIN_MATCHED_HEIGHT = 0.24f
 
