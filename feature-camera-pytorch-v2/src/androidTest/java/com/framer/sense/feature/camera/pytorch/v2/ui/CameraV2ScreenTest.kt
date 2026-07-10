@@ -51,6 +51,44 @@ class CameraV2ScreenTest {
     }
 
     @Test
+    fun streaming_showsOnnxLoadingCopyOnlyWhileSessionsLoad() {
+        composeTestRule.setContent {
+            MyApplicationTheme {
+                CameraV2ScreenContent(
+                    state = CameraV2State(
+                        screenState = CameraV2ScreenState.Streaming,
+                        onnxLoadState = OnnxSessionLoadState.LOADING
+                    ),
+                    onRequestPermission = {},
+                    onIntent = {},
+                    showCameraPreview = false
+                )
+            }
+        }
+
+        composeTestRule.onNodeWithText("正在加载 ONNX 人物、物体和姿态模型").assertIsDisplayed()
+    }
+
+    @Test
+    fun streaming_showsCameraStartingCopyAfterSessionsAreReady() {
+        composeTestRule.setContent {
+            MyApplicationTheme {
+                CameraV2ScreenContent(
+                    state = CameraV2State(
+                        screenState = CameraV2ScreenState.Streaming,
+                        onnxLoadState = OnnxSessionLoadState.READY
+                    ),
+                    onRequestPermission = {},
+                    onIntent = {},
+                    showCameraPreview = false
+                )
+            }
+        }
+
+        composeTestRule.onNodeWithText("正在启动相机分析").assertIsDisplayed()
+    }
+
+    @Test
     fun failure_showsRetryAction() {
         composeTestRule.setContent {
             MyApplicationTheme {

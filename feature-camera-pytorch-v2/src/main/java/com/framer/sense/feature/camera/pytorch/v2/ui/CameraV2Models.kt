@@ -200,7 +200,8 @@ enum class CameraV2Movement {
 }
 
 enum class CameraV2Hint(@StringRes val messageRes: Int) {
-    STARTING(R.string.camera_v2_hint_starting),
+    CAMERA_STARTING(R.string.camera_v2_hint_camera_starting),
+    ONNX_LOADING(R.string.camera_v2_hint_onnx_loading),
     PERMISSION_REQUIRED(R.string.camera_v2_permission_message),
     MODEL_ASSETS_MISSING(R.string.camera_v2_hint_model_assets_missing),
     ENTER_GUIDE(R.string.camera_v2_hint_enter_guide),
@@ -279,7 +280,7 @@ data class CameraV2Guide(
                 targetBounds = bounds,
                 quality = CameraV2Quality.NEEDS_MOVE,
                 movement = CameraV2Movement.NONE,
-                hint = CameraV2Hint.STARTING,
+                hint = CameraV2Hint.CAMERA_STARTING,
                 semanticScene = SemanticScene.Unknown,
                 virtualHuman = VirtualHumanProjector().project(
                     targetBounds = bounds,

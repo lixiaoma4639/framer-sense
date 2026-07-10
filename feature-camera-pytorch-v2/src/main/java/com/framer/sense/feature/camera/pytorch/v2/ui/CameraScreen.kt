@@ -63,6 +63,7 @@ fun CameraScreen(
     val configuration = LocalConfiguration.current
     val displayRotation = LocalView.current.display?.rotation ?: DisplaySurface.ROTATION_0
     val state by viewModel.state.collectAsStateWithLifecycle()
+    val onnxLoadState by CameraV2OnnxSessionManager.loadState.collectAsStateWithLifecycle()
     val currentOnCaptureActionChanged by rememberUpdatedState(onCaptureActionChanged)
     EnableCameraAutoRotation(context)
     val cameraPermissionLauncher = rememberLauncherForActivityResult(
@@ -94,6 +95,10 @@ fun CameraScreen(
                 weightKg = weightKg
             )
         )
+    }
+
+    LaunchedEffect(onnxLoadState) {
+        viewModel.onIntent(CameraV2Intent.OnnxLoadStateChanged(onnxLoadState))
     }
 
     LaunchedEffect(viewModel) {
@@ -156,7 +161,13 @@ internal fun CameraV2ScreenContent(
         when (val screenState = state.screenState) {
             CameraV2ScreenState.Booting -> CameraV2Message(
                 title = stringResource(R.string.camera_v2_title),
-                message = stringResource(R.string.camera_v2_booting_message),
+                message = stringResource(
+                    if (state.onnxLoadState == OnnxSessionLoadState.LOADING) {
+                        R.string.camera_v2_hint_onnx_loading
+                    } else {
+                        R.string.camera_v2_booting_message
+                    }
+                ),
                 showProgress = true
             )
 
@@ -182,6 +193,7 @@ internal fun CameraV2ScreenContent(
                 }
                 CameraV2Overlay(
                     guide = state.guide,
+                    hint = state.displayHint(),
                     isLandscape = isLandscape,
                     modifier = Modifier.fillMaxSize()
                 )
@@ -208,6 +220,16 @@ internal fun CameraV2ScreenContent(
         }
     }
 }
+
+private fun CameraV2State.displayHint(): CameraV2Hint =
+    if (
+        guide.hint == CameraV2Hint.CAMERA_STARTING &&
+            onnxLoadState == OnnxSessionLoadState.LOADING
+    ) {
+        CameraV2Hint.ONNX_LOADING
+    } else {
+        guide.hint
+    }
 
 @Composable
 private fun CameraV2CaptureStatus(

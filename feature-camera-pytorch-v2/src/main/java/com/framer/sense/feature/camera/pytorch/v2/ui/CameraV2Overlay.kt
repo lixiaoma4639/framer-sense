@@ -30,6 +30,7 @@ import com.framer.sense.feature.camera.pytorch.v2.R
 @Composable
 fun CameraV2Overlay(
     guide: CameraV2Guide,
+    hint: CameraV2Hint = guide.hint,
     isLandscape: Boolean = false,
     modifier: Modifier = Modifier
 ) {
@@ -136,7 +137,7 @@ fun CameraV2Overlay(
                 shape = RoundedCornerShape(8.dp)
             ) {
                 Text(
-                    text = stringResource(guide.hint.messageRes),
+                    text = stringResource(hint.messageRes),
                     style = MaterialTheme.typography.titleMedium,
                     textAlign = TextAlign.Center,
                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp)

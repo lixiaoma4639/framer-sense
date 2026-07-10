@@ -12,6 +12,8 @@
 - 进入拍照 Tab 后，主导航中当前选中的“拍照”Tab 显示为带蓝色背景的“拍摄”；点击后保存照片到系统相册，离开后恢复“拍照”Tab，预览内不再提供独立拍摄按钮。
 - 进入拍照 Tab 时启用设备全方向传感器；`MainActivity` 在同一实例内处理方向配置变化，横竖屏切换后会重绑 CameraX 的 Preview、ImageAnalysis 和 ImageCapture，并同步更新三者的目标旋转角度，避免窗口销毁期间的预览缓冲区错配。
 - ONNX 输入统一按 `ImageProxy.rotationDegrees` 转为当前展示方向；覆盖层使用与 `PreviewView.FILL_CENTER` 相同的比例裁切映射，因此 YOLO、YOLO Pose、YOLO Seg 和 WholeBody 结果在横竖屏下均与预览对齐。
+- `MyApplication` 创建后会在后台预热四个 ONNX Runtime session。预热、首次相机分析、Tab 切换和页面重建共享同一加载任务与 session；预览销毁不会关闭 session，直到应用进程结束才由系统回收。若预热失败，会在当前进程内复用同一失败结果，避免反复加载失败模型。
+- `OnnxSessionLoadState` 明确表达模型的未启动、加载中、就绪和失败状态；拍照页仅在加载中展示 ONNX 加载文案，其余相机预览重建阶段展示“正在启动相机分析”。
 
 ## 模型资产
 
@@ -65,6 +67,7 @@ CameraX ImageCapture
 - `CameraV2ViewModel`：处理 `CameraV2Intent`，归约 `CameraV2State`，发出一次性 `CameraV2Effect`。
 - `CameraV2Preview`：绑定 CameraX 生命周期、预览、帧分析和拍照保存；屏幕旋转时以当前显示方向重绑三个 CameraX use case，保证预览、分析帧和输出照片使用同一方向。
 - `CameraV2FrameAnalyzer`：对实时帧节流，调用 ONNX 分析器并输出构图状态。
+- `CameraV2OnnxSessionManager`：应用进程级 ONNX session 管理器，后台预热并向各相机分析器提供同一组模型 session。
 - `CameraV2OnnxAnalyzer`：运行 ONNX Runtime session，解析检测、pose、可选 segmentation 和可选 WholeBody landmark 结果，并根据 COCO 物体类别推断室内、城市、户外或未知场景。
 - `CameraV2CompositionEngine`：纯 Kotlin 构图规则，不依赖 Android UI。
 - `VirtualHumanProjector`：根据身高体重、pose 模板、可用人体关键点、WholeBody 内轮廓和人物轮廓生成伪 3D 线框投影。
@@ -77,9 +80,10 @@ CameraX ImageCapture
 - `CameraV2CompositionEngineTest`：构图评分、暗光、场景偏好、模型缺失降级、人物轮廓/人框跟随、WholeBody 内轮廓接入。
 - `VirtualHumanProjectorTest`：不同身高体重下的人像比例、pose-aware 骨架、WholeBody 内轮廓、深度和边界 clamp。
 - `PoseTemplateSelectorTest`：pose 模板选择。
-- `CameraV2ViewModelTest`：MVI 状态归约和权限/拍摄 effect。
-- `CameraV2ScreenTest`：权限、Ready 和错误 UI。
+- `CameraV2ViewModelTest`：MVI 状态归约、权限/拍摄 effect 和 ONNX 加载状态同步。
+- `CameraV2ScreenTest`：权限、Ready、错误 UI，以及 ONNX 加载与相机启动文案的区分。
 - `CameraV2PreviewTransformTest`：横竖屏下 `FILL_CENTER` 预览裁切与 ONNX 归一化坐标的映射一致性。
+- `SingleFlightValueLoaderTest`：ONNX session 预热、并发获取和加载失败结果均只执行一次加载。
 - `NavigationTest`：App 默认拍照入口显示 v2 页面标识。
 
 按仓库规则，开发中只新增或更新测试代码，不主动运行 Gradle/Android 自动化测试。

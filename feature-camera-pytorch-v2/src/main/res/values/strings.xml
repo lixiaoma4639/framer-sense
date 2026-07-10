@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="camera_v2_title">AI 3D 构图引导 V2</string>
-    <string name="camera_v2_booting_message">正在启动相机和 ONNX 构图模型</string>
+    <string name="camera_v2_booting_message">正在启动相机分析</string>
     <string name="camera_v2_permission_message">需要相机权限，才能实时识别场景并绘制 3D 虚拟人像</string>
     <string name="camera_v2_permission_action">重新授权</string>
     <string name="camera_v2_camera_error_title">相机启动失败</string>
@@ -21,7 +21,8 @@
     <string name="camera_v2_scene_outdoor">户外</string>
     <string name="camera_v2_scene_nature">户外自然</string>
     <string name="camera_v2_scene_urban">城市</string>
-    <string name="camera_v2_hint_starting">正在加载 ONNX 人物、物体和姿态模型</string>
+    <string name="camera_v2_hint_camera_starting">正在启动相机分析</string>
+    <string name="camera_v2_hint_onnx_loading">正在加载 ONNX 人物、物体和姿态模型</string>
     <string name="camera_v2_hint_model_assets_missing">请放入 YOLO 和 YOLO-Pose ONNX 模型；当前先展示实时 3D 构图占位</string>
     <string name="camera_v2_hint_enter_guide">请让人物走进 3D 虚拟人像区域</string>
     <string name="camera_v2_hint_good">构图良好，保持当前手机位置</string>

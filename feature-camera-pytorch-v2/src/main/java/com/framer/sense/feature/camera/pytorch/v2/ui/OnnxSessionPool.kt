@@ -3,12 +3,11 @@ package com.framer.sense.feature.camera.pytorch.v2.ui
 import ai.onnxruntime.OrtEnvironment
 import ai.onnxruntime.OrtSession
 import android.content.Context
-import java.io.Closeable
 import java.io.File
 
 class OnnxSessionPool(
     context: Context
-) : Closeable {
+) {
 
     private val appContext = context.applicationContext
     val environment: OrtEnvironment = OrtEnvironment.getEnvironment()
@@ -47,13 +46,6 @@ class OnnxSessionPool(
             target.outputStream().use { output -> input.copyTo(output) }
         }
         return target
-    }
-
-    override fun close() {
-        objectSession?.close()
-        poseSession?.close()
-        segmentationSession?.close()
-        wholeBodyPoseSession?.close()
     }
 
     companion object {

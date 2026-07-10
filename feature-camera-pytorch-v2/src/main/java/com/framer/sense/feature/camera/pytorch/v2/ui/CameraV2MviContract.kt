@@ -10,6 +10,7 @@ sealed interface CameraV2ScreenState {
 data class CameraV2State(
     val screenState: CameraV2ScreenState = CameraV2ScreenState.Booting,
     val guide: CameraV2Guide = CameraV2Guide.initial(),
+    val onnxLoadState: OnnxSessionLoadState = OnnxSessionLoadState.NOT_STARTED,
     val captureState: PhotoV2CaptureState = PhotoV2CaptureState.Idle,
     val captureToken: Int = 0,
     val bodyProfile: BodyProfile = BodyProfile(
@@ -28,6 +29,7 @@ sealed interface CameraV2Intent {
     data class PermissionButtonClicked(val hasCameraPermission: Boolean) : CameraV2Intent
     data class CameraPermissionResult(val granted: Boolean) : CameraV2Intent
     data class GuideProduced(val guide: CameraV2Guide) : CameraV2Intent
+    data class OnnxLoadStateChanged(val state: OnnxSessionLoadState) : CameraV2Intent
     data class CapturePressed(val needsLegacyStoragePermission: Boolean) : CameraV2Intent
     data class LegacyStoragePermissionResult(val granted: Boolean) : CameraV2Intent
     data object PhotoSaved : CameraV2Intent

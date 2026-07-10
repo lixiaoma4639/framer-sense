@@ -5,7 +5,6 @@ import ai.onnxruntime.OnnxValue
 import ai.onnxruntime.OrtSession
 import ai.onnxruntime.TensorInfo
 import androidx.camera.core.ImageProxy
-import java.io.Closeable
 import kotlin.math.atan2
 import kotlin.math.exp
 import kotlin.math.roundToInt
@@ -13,7 +12,7 @@ import kotlin.math.roundToInt
 class CameraV2OnnxAnalyzer(
     private val sessions: OnnxSessionPool,
     private val preprocessor: FramePreprocessor = FramePreprocessor()
-) : Closeable {
+) {
 
     fun analyze(imageProxy: ImageProxy): CameraV2Analysis {
         val luminance = preprocessor.averageLuminance(imageProxy)
@@ -164,10 +163,6 @@ class CameraV2OnnxAnalyzer(
 
     private fun OnnxValue.tensorShape(): LongArray =
         (info as? TensorInfo)?.shape ?: LongArray(0)
-
-    override fun close() {
-        sessions.close()
-    }
 
     private companion object {
         const val YOLO_SIZE = 640

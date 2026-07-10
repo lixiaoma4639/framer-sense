@@ -57,4 +57,13 @@ class CameraV2ViewModelTest {
 
         assertTrue(viewModel.state.value.screenState is CameraV2ScreenState.Failure)
     }
+
+    @Test
+    fun onnxLoadStateChanged_updatesMviState() {
+        val viewModel = CameraV2ViewModel()
+
+        viewModel.onIntent(CameraV2Intent.OnnxLoadStateChanged(OnnxSessionLoadState.LOADING))
+
+        assertEquals(OnnxSessionLoadState.LOADING, viewModel.state.value.onnxLoadState)
+    }
 }

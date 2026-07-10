@@ -150,6 +150,8 @@ MyApplication
 - 已授权后使用 CameraX `PreviewView` 显示后置摄像头实时预览。
 - `ImageAnalysis` 使用 `STRATEGY_KEEP_ONLY_LATEST` 获取实时帧，交给 `CameraV2FrameAnalyzer` 进行端侧分析。
 - `CameraV2FrameAnalyzer` 对实时帧做约 520ms 节流，调用 `CameraV2OnnxAnalyzer` 执行 ONNX 推理。
+- App 启动后会在后台预热四个 ONNX Runtime session；session 在应用进程内共享，拍照 Tab 切换和横竖屏重建只复用已有 session，不重复加载模型。应用进程被系统结束后会在下次启动重新预热。
+- 拍照页根据应用级 `OnnxSessionLoadState` 区分“正在加载 ONNX”和“正在启动相机分析”，避免相机预览重建时误报模型重新加载。
 - `CameraV2OnnxAnalyzer` 约定加载 assets 中的 YOLO 检测、YOLO Pose、可选 YOLO Seg 和可选 RTMPose WholeBody ONNX 模型；Seg 缺失时退化为 person box + pose 包裹，WholeBody 缺失时退化为 YOLO Pose 骨架，基础模型缺失时显示可恢复提示并继续绘制 3D 构图占位。
 - `CameraV2CompositionEngine` 根据场景类别、亮度、人物框、障碍物和候选站位输出构图建议。
 - `VirtualHumanProjector` 根据传入身高体重、pose 模板、可用人体关键点、可选 WholeBody 内轮廓和人物轮廓生成线条式伪 3D 虚拟人像；pose、segmentation 或 WholeBody 不足时按可用能力降级。

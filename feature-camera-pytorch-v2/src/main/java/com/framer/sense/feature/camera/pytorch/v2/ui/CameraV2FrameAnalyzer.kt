@@ -17,7 +17,7 @@ class CameraV2FrameAnalyzer(
 
     private val closed = AtomicBoolean(false)
     private val onnxAnalyzer = lazy {
-        CameraV2OnnxAnalyzer(OnnxSessionPool(context.applicationContext))
+        CameraV2OnnxAnalyzer(CameraV2OnnxSessionManager.awaitSessionPool(context))
     }
     private val compositionEngine = CameraV2CompositionEngine()
     private var lastAnalysisTimestamp = 0L
@@ -46,9 +46,7 @@ class CameraV2FrameAnalyzer(
     }
 
     override fun close() {
-        if (closed.compareAndSet(false, true) && onnxAnalyzer.isInitialized()) {
-            onnxAnalyzer.value.close()
-        }
+        closed.compareAndSet(false, true)
     }
 
     private companion object {

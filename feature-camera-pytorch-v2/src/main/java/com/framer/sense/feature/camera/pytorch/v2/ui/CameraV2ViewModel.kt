@@ -23,6 +23,7 @@ class CameraV2ViewModel : ViewModel() {
             is CameraV2Intent.PermissionButtonClicked -> onPermissionButtonClicked(intent.hasCameraPermission)
             is CameraV2Intent.CameraPermissionResult -> onCameraPermissionResult(intent.granted)
             is CameraV2Intent.GuideProduced -> onGuideProduced(intent.guide)
+            is CameraV2Intent.OnnxLoadStateChanged -> onOnnxLoadStateChanged(intent.state)
             is CameraV2Intent.CapturePressed -> onCapturePressed(intent.needsLegacyStoragePermission)
             is CameraV2Intent.LegacyStoragePermissionResult -> onLegacyStoragePermissionResult(intent.granted)
             CameraV2Intent.PhotoSaved -> onPhotoSaved()
@@ -74,6 +75,10 @@ class CameraV2ViewModel : ViewModel() {
                 guide = guide
             )
         }
+    }
+
+    private fun onOnnxLoadStateChanged(state: OnnxSessionLoadState) {
+        _state.update { it.copy(onnxLoadState = state) }
     }
 
     private fun onCapturePressed(needsLegacyStoragePermission: Boolean) {
