@@ -52,9 +52,9 @@ data class ScenePerson(
 )
 
 data class PersonSegmentation(
-    val bounds: V2Rect,
-    val contour: List<V2Point>,
-    val confidence: Float
+    val bounds: V2Rect, //人体矩形边框
+    val contour: List<V2Point>, //人体mask集合
+    val confidence: Float //评分
 )
 
 enum class SceneGroup {
@@ -85,25 +85,30 @@ data class PoseKeypoint(
     val confidence: Float
 )
 
+/**
+ * 人体姿态关键点枚举
+ * 对应人体17个骨骼关键点标准序号定义（通用姿态识别COCO数据集关键点排布）
+ */
 enum class PoseKeypointName {
-    NOSE,
-    LEFT_EYE,
-    RIGHT_EYE,
-    LEFT_EAR,
-    RIGHT_EAR,
-    LEFT_SHOULDER,
-    RIGHT_SHOULDER,
-    LEFT_ELBOW,
-    RIGHT_ELBOW,
-    LEFT_WRIST,
-    RIGHT_WRIST,
-    LEFT_HIP,
-    RIGHT_HIP,
-    LEFT_KNEE,
-    RIGHT_KNEE,
-    LEFT_ANKLE,
-    RIGHT_ANKLE
+    NOSE,               // 鼻子
+    LEFT_EYE,           // 左眼
+    RIGHT_EYE,          // 右眼
+    LEFT_EAR,           // 左耳
+    RIGHT_EAR,          // 右耳
+    LEFT_SHOULDER,      // 左肩
+    RIGHT_SHOULDER,     // 右肩
+    LEFT_ELBOW,         // 左肘
+    RIGHT_ELBOW,        // 右肘
+    LEFT_WRIST,         // 左手腕
+    RIGHT_WRIST,        // 右手腕
+    LEFT_HIP,           // 左髋
+    RIGHT_HIP,          // 右髋
+    LEFT_KNEE,          // 左膝盖
+    RIGHT_KNEE,         // 右膝盖
+    LEFT_ANKLE,         // 左脚踝
+    RIGHT_ANKLE         // 右脚踝
 }
+
 
 data class PoseEstimate(
     val keypoints: List<PoseKeypoint>,
