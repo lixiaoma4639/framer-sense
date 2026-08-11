@@ -96,6 +96,14 @@ fun MyModelMainScreen(
     )
 }
 
+/**
+ * Compose 没有 React Class Component 那样严格对应的,
+ * 因为 Composable 只是一个函数，不是长期存在的 View 对象。Compose 更准确的概念是：组合生命周期（Composition lifecycle）。
+ * 进入 Composition
+ * → 首次执行 Composable
+ * → 发生 0 到多次重组
+ * → 离开 Composition
+ */
 @Composable
 internal fun MyModelMainContent(
     uiState: MyModelMainUiState,
@@ -106,11 +114,21 @@ internal fun MyModelMainContent(
     onScanClick: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
+    //在同一个 Composable 发生重组（recomposition）时，保留某个值，不重新创建。
+    //remember 不是存在 ViewModel，也不是持久化到磁盘。它由 Compose 在当前 Composable 所在的组合树中保存。
+    //因此它只适合短暂的 UI 局部状态
     val pagerState = rememberPagerState(
         initialPage = uiState.selectedTab.ordinal,
         pageCount = { MyModelTab.entries.size }
     )
 
+    //Compose 的 Composable 会因为状态变化反复执行，称为“重组”
+    //LaunchedEffect 的作用是：
+    //在 Composable 进入组合时启动协程；
+    //依赖的 key 变化时，取消旧协程并启动新协程；
+    //Composable 离开组合时，自动取消协程；
+    //避免重组时重复启动副作用。
+    //只要这个 pagerState 实例不变，就只启动一个监听协程。
     LaunchedEffect(pagerState) {
         snapshotFlow { pagerState.currentPage }
             .distinctUntilChanged()
