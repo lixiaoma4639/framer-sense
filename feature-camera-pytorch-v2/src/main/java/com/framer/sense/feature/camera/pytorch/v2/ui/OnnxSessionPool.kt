@@ -17,8 +17,8 @@ class OnnxSessionPool(
     val environment: OrtEnvironment = OrtEnvironment.getEnvironment()
     // 尝试创建目标检测模型 session；模型不存在时为 null。
     val objectSession: OrtSession? = createSessionIfPresent(OBJECT_MODEL)
-    // 尝试创建普通人体姿态模型 session；模型不存在时为 null。
-    val poseSession: OrtSession? = createSessionIfPresent(POSE_MODEL)
+    // 保留 YOLO Pose 的兼容字段，但当前拍照业务不再创建或使用该模型 session。
+    val poseSession: OrtSession? = null
     // 尝试创建人体分割模型 session；模型不存在时为 null。
     val segmentationSession: OrtSession? = createSessionIfPresent(SEGMENTATION_MODEL)
     // 尝试创建 whole-body 姿态模型 session；模型不存在时为 null。
@@ -30,8 +30,8 @@ class OnnxSessionPool(
         ModelAvailability(
             // 目标检测 session 非空表示物体/人体检测可用。
             objectDetectorReady = objectSession != null,
-            // 普通姿态 session 非空表示 YOLO pose 可用。
-            poseDetectorReady = poseSession != null,
+            // YOLO Pose 已退出当前业务链路，兼容状态固定为不可用。
+            poseDetectorReady = false,
             // 分割 session 非空表示人体分割可用。
             segmentationReady = segmentationSession != null,
             // whole-body session 非空表示 133 点全身姿态可用。

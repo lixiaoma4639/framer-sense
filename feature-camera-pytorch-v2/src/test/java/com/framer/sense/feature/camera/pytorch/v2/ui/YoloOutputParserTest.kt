@@ -151,18 +151,30 @@ class YoloOutputParserTest {
     }
 
     @Test
-    fun modelAvailability_requiresOnlyObjectAndPoseModels() {
-        assertTrue(ModelAvailability(objectDetectorReady = true, poseDetectorReady = true).allRequiredReady)
-        assertTrue(ModelAvailability(objectDetectorReady = true, poseDetectorReady = true, segmentationReady = false).allRequiredReady)
+    fun modelAvailability_requiresOnlyObjectAndWholeBodyModels() {
         assertTrue(
             ModelAvailability(
                 objectDetectorReady = true,
-                poseDetectorReady = true,
-                segmentationReady = false,
-                wholeBodyPoseReady = false
+                poseDetectorReady = false,
+                wholeBodyPoseReady = true
             ).allRequiredReady
         )
-        assertTrue(!ModelAvailability(objectDetectorReady = true, poseDetectorReady = false).allRequiredReady)
+        assertTrue(
+            ModelAvailability(
+                objectDetectorReady = true,
+                poseDetectorReady = false,
+                segmentationReady = false,
+                wholeBodyPoseReady = true
+            ).allRequiredReady
+        )
+        assertTrue(!ModelAvailability(objectDetectorReady = true, poseDetectorReady = true).allRequiredReady)
+        assertTrue(
+            !ModelAvailability(
+                objectDetectorReady = false,
+                poseDetectorReady = false,
+                wholeBodyPoseReady = true
+            ).allRequiredReady
+        )
     }
 
     @Test

@@ -2,6 +2,19 @@ package com.framer.sense.feature.camera.pytorch.v2.ui
 
 internal object WholeBodyInnerContourBuilder {
 
+    /** 返回全部通过置信度筛选的 WholeBody 节点，供覆盖层逐点绘制。 */
+    fun points(pose: WholeBodyPoseEstimate): List<V2Point> =
+        if (pose.confidence < POSE_CONFIDENCE_THRESHOLD) {
+            emptyList()
+        } else {
+            pose.keypoints
+                .asSequence()
+                .filter { it.confidence >= KEYPOINT_CONFIDENCE_THRESHOLD }
+                .sortedBy { it.index }
+                .map { it.point.clamped() }
+                .toList()
+        }
+
     fun build(pose: WholeBodyPoseEstimate): List<VirtualHumanLine> {
         if (pose.confidence < POSE_CONFIDENCE_THRESHOLD) return emptyList()
         return buildList {
@@ -62,6 +75,9 @@ internal object WholeBodyInnerContourBuilder {
     ) {
         val start = pose.validPoint(startIndex) ?: return
         val end = pose.validPoint(endIndex) ?: return
+        val deltaX = start.point.x - end.point.x
+        val deltaY = start.point.y - end.point.y
+        if (deltaX * deltaX + deltaY * deltaY < MIN_LINE_LENGTH_SQUARED) return
         add(
             VirtualHumanLine(
                 start = start.point.clamped(),
@@ -82,6 +98,7 @@ internal object WholeBodyInnerContourBuilder {
 
     private const val POSE_CONFIDENCE_THRESHOLD = 0.18f
     private const val KEYPOINT_CONFIDENCE_THRESHOLD = 0.20f
+    private const val MIN_LINE_LENGTH_SQUARED = 0.0001f
 
     private const val NOSE = 0
     private const val LEFT_EYE = 1

@@ -84,7 +84,7 @@ class CameraV2CompositionEngineTest {
     }
 
     @Test
-    fun buildGuide_withPose_usesPoseAwareVirtualHuman() {
+    fun buildGuide_withWholeBodyPose_usesPoseAwareVirtualHuman() {
         val guideWithoutPose = engine.buildGuide(
             analysis = analysis(
                 people = listOf(ScenePerson(V2Rect(0.40f, 0.22f, 0.60f, 0.86f), 0.92f))
@@ -94,7 +94,7 @@ class CameraV2CompositionEngineTest {
         val guideWithPose = engine.buildGuide(
             analysis = analysis(
                 people = listOf(ScenePerson(V2Rect(0.40f, 0.22f, 0.60f, 0.86f), 0.92f)),
-                pose = completePose()
+                wholeBodyPose = completePose()
             ),
             profile = profile
         )
@@ -104,14 +104,28 @@ class CameraV2CompositionEngineTest {
     }
 
     @Test
-    fun buildGuide_withoutPose_stillBuildsVirtualHuman() {
+    fun buildGuide_withoutWholeBodyPose_stillBuildsVirtualHuman() {
         val guide = engine.buildGuide(
-            analysis = analysis(pose = PoseEstimate.Empty),
+            analysis = analysis(),
             profile = profile
         )
 
         assertEquals(VirtualHumanVisualStyle.HANFU_GUIDE, guide.virtualHuman.visualStyle)
         assertTrue(guide.virtualHuman.decorativePaths.isNotEmpty())
+    }
+
+    @Test
+    fun buildGuide_doesNotUseLegacyYoloPoseAsWholeBodyFallback() {
+        val guide = engine.buildGuide(
+            analysis = analysis(
+                people = listOf(ScenePerson(V2Rect(0.40f, 0.22f, 0.60f, 0.86f), 0.92f)),
+                pose = legacyPose()
+            ),
+            profile = profile
+        )
+
+        assertEquals(VirtualHumanVisualStyle.HANFU_GUIDE, guide.virtualHuman.visualStyle)
+        assertTrue(!guide.virtualHuman.poseDriven)
     }
 
     @Test
@@ -155,7 +169,6 @@ class CameraV2CompositionEngineTest {
         val guide = engine.buildGuide(
             analysis = analysis(
                 people = listOf(ScenePerson(V2Rect(0.24f, 0.18f, 0.52f, 0.86f), 0.88f)),
-                pose = completePose(),
                 wholeBodyPose = wholeBodyPose()
             ),
             profile = profile
@@ -174,7 +187,8 @@ class CameraV2CompositionEngineTest {
         luminance: Double = 128.0,
         modelAvailability: ModelAvailability = ModelAvailability(
             objectDetectorReady = true,
-            poseDetectorReady = true
+            poseDetectorReady = false,
+            wholeBodyPoseReady = true
         )
     ): CameraV2Analysis =
         CameraV2Analysis(
@@ -188,8 +202,8 @@ class CameraV2CompositionEngineTest {
             modelAvailability = modelAvailability
         )
 
-    private fun completePose(): PoseEstimate =
-        PoseEstimate(
+    private fun completePose(): WholeBodyPoseEstimate =
+        WholeBodyPoseEstimate(
             keypoints = listOf(
                 keypoint(PoseKeypointName.NOSE, 0.50f, 0.18f),
                 keypoint(PoseKeypointName.LEFT_SHOULDER, 0.40f, 0.32f),
@@ -208,8 +222,19 @@ class CameraV2CompositionEngineTest {
             confidence = 0.88f
         )
 
-    private fun keypoint(name: PoseKeypointName, x: Float, y: Float): PoseKeypoint =
-        PoseKeypoint(name = name, point = V2Point(x, y), confidence = 0.92f)
+    private fun keypoint(name: PoseKeypointName, x: Float, y: Float): WholeBodyKeypoint =
+        WholeBodyKeypoint(index = name.ordinal, point = V2Point(x, y), confidence = 0.92f)
+
+    private fun legacyPose(): PoseEstimate =
+        PoseEstimate(
+            keypoints = listOf(
+                PoseKeypoint(PoseKeypointName.LEFT_SHOULDER, V2Point(0.40f, 0.32f), 0.9f),
+                PoseKeypoint(PoseKeypointName.RIGHT_SHOULDER, V2Point(0.60f, 0.32f), 0.9f),
+                PoseKeypoint(PoseKeypointName.LEFT_ANKLE, V2Point(0.35f, 0.90f), 0.9f),
+                PoseKeypoint(PoseKeypointName.RIGHT_ANKLE, V2Point(0.65f, 0.90f), 0.9f)
+            ),
+            confidence = 0.9f
+        )
 
     private fun wholeBodyPose(): WholeBodyPoseEstimate {
         val points = mutableListOf<WholeBodyKeypoint>()

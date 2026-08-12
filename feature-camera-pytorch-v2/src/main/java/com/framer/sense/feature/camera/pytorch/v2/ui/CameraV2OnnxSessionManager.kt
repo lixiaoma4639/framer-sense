@@ -25,7 +25,7 @@ enum class OnnxSessionLoadState {
  * 在应用进程内共享 ONNX Runtime session。
  *
  * 预热和相机分析会复用同一个 Future：首次预热不会阻塞主线程，而首次分析只会等待
- * 已启动的加载任务，不会再次创建四个模型 session。
+ * 已启动的加载任务，不会再次创建三个模型 session。
  */
 // 单例管理器：在整个应用进程内复用一份 ONNX session pool。
 object CameraV2OnnxSessionManager {

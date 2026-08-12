@@ -47,7 +47,7 @@ class VirtualHumanProjectorTest {
             targetBounds = target,
             profile = BodyProfile(170, 60),
             template = PoseTemplate.RELAXED_STAND,
-            pose = completePose()
+            wholeBodyPose = completePose()
         )
 
         assertTrue(hanfuGuide.bounds.width > poseDriven.bounds.width)
@@ -81,7 +81,7 @@ class VirtualHumanProjectorTest {
             targetBounds = V2Rect(0.32f, 0.14f, 0.68f, 0.92f),
             profile = BodyProfile(170, 60),
             template = PoseTemplate.WALKING,
-            pose = completePose()
+            wholeBodyPose = completePose()
         )
 
         assertTrue(figure.lines.size >= 10)
@@ -105,7 +105,7 @@ class VirtualHumanProjectorTest {
             targetBounds = target,
             profile = BodyProfile(170, 60),
             template = PoseTemplate.RELAXED_STAND,
-            pose = completePose()
+            wholeBodyPose = completePose()
         )
 
         assertTrue(poseAware.lines.isNotEmpty())
@@ -125,7 +125,7 @@ class VirtualHumanProjectorTest {
             targetBounds = target,
             profile = BodyProfile(170, 60),
             template = PoseTemplate.SIDE_STANCE,
-            pose = PoseEstimate(
+            wholeBodyPose = WholeBodyPoseEstimate(
                 keypoints = listOf(
                     keypoint(PoseKeypointName.LEFT_SHOULDER, 0.44f, 0.30f),
                     keypoint(PoseKeypointName.RIGHT_SHOULDER, 0.56f, 0.30f)
@@ -145,7 +145,7 @@ class VirtualHumanProjectorTest {
             targetBounds = target,
             profile = BodyProfile(170, 60),
             template = PoseTemplate.RELAXED_STAND,
-            pose = halfBodyPose(),
+            wholeBodyPose = halfBodyPose(),
             matchTargetBounds = true
         )
 
@@ -164,7 +164,7 @@ class VirtualHumanProjectorTest {
             targetBounds = V2Rect(0.10f, 0.14f, 0.46f, 0.90f),
             profile = BodyProfile(190, 90),
             template = PoseTemplate.WALKING,
-            pose = completePose()
+            wholeBodyPose = completePose()
         )
 
         assertTrue(figure.headCenter.x in 0f..1f)
@@ -183,11 +183,11 @@ class VirtualHumanProjectorTest {
             targetBounds = V2Rect(0.18f, 0.12f, 0.72f, 0.92f),
             profile = BodyProfile(170, 60),
             template = PoseTemplate.RELAXED_STAND,
-            pose = completePose(),
             wholeBodyPose = wholeBodyPose()
         )
 
         assertTrue(figure.innerContourLines.size > figure.lines.size)
+        assertEquals(133, figure.innerContourPoints.size)
         assertTrue(figure.innerContourLines.all { line ->
             line.start.x in 0f..1f &&
                 line.start.y in 0f..1f &&
@@ -209,10 +209,11 @@ class VirtualHumanProjectorTest {
         )
 
         assertTrue(figure.innerContourLines.isEmpty())
+        assertTrue(figure.innerContourPoints.isEmpty())
     }
 
-    private fun completePose(): PoseEstimate =
-        PoseEstimate(
+    private fun completePose(): WholeBodyPoseEstimate =
+        WholeBodyPoseEstimate(
             keypoints = listOf(
                 keypoint(PoseKeypointName.NOSE, 0.50f, 0.18f),
                 keypoint(PoseKeypointName.LEFT_SHOULDER, 0.40f, 0.32f),
@@ -231,8 +232,8 @@ class VirtualHumanProjectorTest {
             confidence = 0.88f
         )
 
-    private fun halfBodyPose(): PoseEstimate =
-        PoseEstimate(
+    private fun halfBodyPose(): WholeBodyPoseEstimate =
+        WholeBodyPoseEstimate(
             keypoints = listOf(
                 keypoint(PoseKeypointName.NOSE, 0.50f, 0.18f),
                 keypoint(PoseKeypointName.LEFT_SHOULDER, 0.39f, 0.34f),
@@ -245,8 +246,8 @@ class VirtualHumanProjectorTest {
             confidence = 0.84f
         )
 
-    private fun keypoint(name: PoseKeypointName, x: Float, y: Float): PoseKeypoint =
-        PoseKeypoint(name = name, point = V2Point(x, y), confidence = 0.92f)
+    private fun keypoint(name: PoseKeypointName, x: Float, y: Float): WholeBodyKeypoint =
+        WholeBodyKeypoint(index = name.ordinal, point = V2Point(x, y), confidence = 0.92f)
 
     private fun wholeBodyPose(): WholeBodyPoseEstimate {
         val points = mutableListOf<WholeBodyKeypoint>()

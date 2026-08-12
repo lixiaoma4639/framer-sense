@@ -113,6 +113,19 @@ fun CameraV2Overlay(
                     pathEffect = innerDash
                 )
             }
+            figure.innerContourPoints.forEach { point ->
+                val center = point.toOffset(size.width, size.height, previewTransform)
+                drawCircle(
+                    color = Color.Black.copy(alpha = 0.68f),
+                    radius = 4.2f,
+                    center = center
+                )
+                drawCircle(
+                    color = guideColor.copy(alpha = 0.92f),
+                    radius = 2.5f,
+                    center = center
+                )
+            }
             if (figure.drawHead && figure.headRadius > 0f) {
                 drawCircle(
                     color = Color.Black.copy(alpha = 0.80f),

@@ -58,7 +58,7 @@ class CameraV2OnnxAnalyzer(
                         // 需要做人全身姿态估计的人体边界框。
                         targetBounds = wholeBodyTarget
                     )
-                // 如果 whole-body 推理失败，就返回空姿态，后面还可以退回 YOLO pose。
+                // 如果 whole-body 推理失败，就返回空姿态并由上层显示汉服引导。
                 }.getOrDefault(WholeBodyPoseEstimate.Empty)
             // 模型会话不可用时返回空姿态。
             } ?: WholeBodyPoseEstimate.Empty
@@ -66,10 +66,6 @@ class CameraV2OnnxAnalyzer(
             // 没有检测到人体目标时，whole-body 姿态为空。
             WholeBodyPoseEstimate.Empty
         }
-        // 如果 YOLO pose 模型可用，也运行一次普通姿态估计；不可用时为空。
-        val yoloPose = sessions.poseSession?.let { runPoseDetector(it, objectInput) } ?: PoseEstimate.Empty
-        // 优先把 whole-body 姿态降级转换成普通 PoseEstimate；转换失败时使用 YOLO pose。
-        val pose = wholeBodyPose.toPoseEstimate() ?: yoloPose
         // 汇总这一帧所有模型和推断结果，返回给上层构图引擎。
         return CameraV2Analysis(
             // 当前帧中识别到的人。
@@ -78,8 +74,8 @@ class CameraV2OnnxAnalyzer(
             objects = objects,
             // 当前帧中识别到的人体分割轮廓。
             personSegments = personSegments,
-            // UI 常用的普通姿态点集合。
-            pose = pose,
+            // YOLO Pose 已退出当前业务链路；保留兼容字段但不再写入姿态数据。
+            pose = PoseEstimate.Empty,
             // 更完整的全身姿态点集合，包含身体、脚、脸、手等更多关键点。
             wholeBodyPose = wholeBodyPose,
             // 根据检测到的物体粗略推断室内、城市、户外等场景。
@@ -333,9 +329,9 @@ class CameraV2OnnxAnalyzer(
     }
 }
 
-// 将 whole-body 姿态结果降级转换成普通 PoseEstimate，供已有构图逻辑复用。
+// 保留的历史兼容适配器；当前拍照业务不调用它，也不会把 133 点降级为 17 点。
 private fun WholeBodyPoseEstimate.toPoseEstimate(): PoseEstimate? {
-    // whole-body 总置信度太低时，不使用它，避免错误姿态覆盖 YOLO pose。
+    // whole-body 总置信度太低时，不生成兼容姿态。
     if (confidence < 0.18f) return null
     // 读取 whole-body 原始关键点。
     val sourceKeypoints = keypoints
@@ -355,7 +351,7 @@ private fun WholeBodyPoseEstimate.toPoseEstimate(): PoseEstimate? {
             confidence = keypoint.confidence
         )
     }
-    // 普通姿态点太少时无法支撑构图判断，返回 null 让调用方退回 YOLO pose。
+    // 普通姿态点太少时不生成兼容姿态。
     if (keypoints.size < 4) return null
     // 返回普通 PoseEstimate。
     return PoseEstimate(

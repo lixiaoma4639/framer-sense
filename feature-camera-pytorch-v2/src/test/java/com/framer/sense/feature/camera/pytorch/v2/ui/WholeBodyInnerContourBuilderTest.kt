@@ -7,7 +7,14 @@ import org.junit.Test
 class WholeBodyInnerContourBuilderTest {
 
     @Test
-    fun build_keepsPortraitFeatureLinesAndRemovesDebugMeshLines() {
+    fun points_keepsEveryHighConfidenceWholeBodyLandmark() {
+        val points = WholeBodyInnerContourBuilder.points(fullBodyCloseUpPose())
+
+        assertEquals(133, points.size)
+    }
+
+    @Test
+    fun build_connectsAllWholeBodyGroupsWithSemanticTopology() {
         val lines = WholeBodyInnerContourBuilder.build(fullBodyCloseUpPose())
 
         assertTrue(lines.containsSegment(point(5), point(7)))
@@ -17,31 +24,33 @@ class WholeBodyInnerContourBuilderTest {
         assertTrue(lines.containsSegment(handPoint(91, 0), handPoint(91, 5)))
         assertTrue(lines.containsSegment(point(15), point(17)))
 
-        assertTrue(!lines.containsSegment(facePoint(0), facePoint(1)))
-        assertTrue(!lines.containsSegment(point(5), point(6)))
-        assertTrue(!lines.containsSegment(point(11), point(12)))
-        assertTrue(!lines.containsSegment(point(5), point(11)))
-        assertTrue(!lines.containsSegment(point(0), point(1)))
-        assertTrue(!lines.containsSegment(handPoint(91, 1), handPoint(91, 2)))
+        assertTrue(lines.containsSegment(facePoint(0), facePoint(1)))
+        assertTrue(lines.containsSegment(point(5), point(6)))
+        assertTrue(lines.containsSegment(point(11), point(12)))
+        assertTrue(lines.containsSegment(point(5), point(11)))
+        assertTrue(lines.containsSegment(point(0), point(1)))
+        assertTrue(lines.containsSegment(handPoint(91, 1), handPoint(91, 2)))
     }
 
     @Test
-    fun build_forDistantPerson_skipsFaceAndHandDetails() {
+    fun build_forDistantPerson_keepsHighConfidenceFaceAndHandDetails() {
         val lines = WholeBodyInnerContourBuilder.build(distantFullBodyPose())
 
         assertTrue(lines.containsSegment(point(5), point(7)))
         assertTrue(lines.containsSegment(point(11), point(13)))
-        assertTrue(!lines.containsSegment(facePoint(36), facePoint(37)))
-        assertTrue(!lines.containsSegment(handPoint(91, 0), handPoint(91, 5)))
+        assertTrue(lines.containsSegment(facePoint(36), facePoint(37)))
+        assertTrue(lines.containsSegment(handPoint(91, 0), handPoint(91, 5)))
     }
 
     @Test
-    fun build_forHalfBody_skipsLegsAndFeet() {
+    fun build_forHalfBody_keepsAvailableUpperBodyDetails() {
         val lines = WholeBodyInnerContourBuilder.build(halfBodyPose())
 
         assertTrue(lines.containsSegment(point(5), point(7)))
         assertTrue(!lines.containsSegment(point(11), point(13)))
         assertTrue(!lines.containsSegment(point(15), point(17)))
+        assertTrue(lines.containsSegment(facePoint(36), facePoint(37)))
+        assertTrue(lines.containsSegment(handPoint(91, 0), handPoint(91, 5)))
     }
 
     @Test
@@ -58,6 +67,21 @@ class WholeBodyInnerContourBuilderTest {
         )
 
         assertTrue(lines.isEmpty())
+    }
+
+    @Test
+    fun points_filtersLowConfidenceLandmarks() {
+        val points = WholeBodyInnerContourBuilder.points(
+            WholeBodyPoseEstimate(
+                keypoints = listOf(
+                    WholeBodyKeypoint(0, V2Point(0.4f, 0.2f), 0.95f),
+                    WholeBodyKeypoint(23, V2Point(0.5f, 0.2f), 0.10f)
+                ),
+                confidence = 0.9f
+            )
+        )
+
+        assertEquals(1, points.size)
     }
 
     @Test
@@ -158,6 +182,9 @@ class WholeBodyInnerContourBuilderTest {
         val BODY_POINTS = mapOf(
             0 to V2Point(0.50f, 0.16f),
             1 to V2Point(0.47f, 0.15f),
+            2 to V2Point(0.53f, 0.15f),
+            3 to V2Point(0.45f, 0.16f),
+            4 to V2Point(0.55f, 0.16f),
             5 to V2Point(0.38f, 0.30f),
             6 to V2Point(0.62f, 0.30f),
             7 to V2Point(0.32f, 0.44f),
@@ -171,8 +198,10 @@ class WholeBodyInnerContourBuilderTest {
             15 to V2Point(0.36f, 0.90f),
             16 to V2Point(0.64f, 0.90f),
             17 to V2Point(0.34f, 0.94f),
+            18 to V2Point(0.31f, 0.95f),
             19 to V2Point(0.39f, 0.94f),
             20 to V2Point(0.66f, 0.94f),
+            21 to V2Point(0.69f, 0.95f),
             22 to V2Point(0.61f, 0.94f)
         )
 

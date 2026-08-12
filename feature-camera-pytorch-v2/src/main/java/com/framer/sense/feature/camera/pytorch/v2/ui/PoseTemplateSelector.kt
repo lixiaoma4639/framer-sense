@@ -5,15 +5,15 @@ package com.framer.sense.feature.camera.pytorch.v2.ui
 class PoseTemplateSelector {
 
     // 选择当前帧应该使用的虚拟人姿态模板。
-    fun select(pose: PoseEstimate, scene: SemanticScene): PoseTemplate {
+    fun select(pose: WholeBodyPoseEstimate, scene: SemanticScene): PoseTemplate {
         // 读取左肩关键点；为空表示模型没有识别到或置信度不足。
-        val leftShoulder = pose.point(PoseKeypointName.LEFT_SHOULDER)
+        val leftShoulder = pose.point(WholeBodyKeypointIndex.LEFT_SHOULDER)
         // 读取右肩关键点。
-        val rightShoulder = pose.point(PoseKeypointName.RIGHT_SHOULDER)
+        val rightShoulder = pose.point(WholeBodyKeypointIndex.RIGHT_SHOULDER)
         // 读取左脚踝关键点。
-        val leftAnkle = pose.point(PoseKeypointName.LEFT_ANKLE)
+        val leftAnkle = pose.point(WholeBodyKeypointIndex.LEFT_ANKLE)
         // 读取右脚踝关键点。
-        val rightAnkle = pose.point(PoseKeypointName.RIGHT_ANKLE)
+        val rightAnkle = pose.point(WholeBodyKeypointIndex.RIGHT_ANKLE)
 
         // 只有肩膀和脚踝四个点都存在时，才用姿态几何关系判断站姿或走姿。
         if (leftShoulder != null && rightShoulder != null && leftAnkle != null && rightAnkle != null) {

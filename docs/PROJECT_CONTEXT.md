@@ -17,7 +17,7 @@ Framer_Sense 是一个基于 Android 官方多模块架构模板演进而来的 
 | 异步与状态 | Kotlin Coroutines、Flow、Lifecycle Compose |
 | 导航 | 底部导航状态切换、Navigation3 模板能力保留 |
 | 图片加载 | Coil 3 |
-| 相机与端侧 AI | CameraX、ONNX Runtime、YOLO/YOLO Pose/YOLO Seg/可选 WholeBody Landmark ONNX 约定模型、旧 ONNX 与 ML Kit 方案保留 |
+| 相机与端侧 AI | CameraX、ONNX Runtime、YOLO/YOLO Seg/RTMPose WholeBody 133 点 ONNX 约定模型、旧 ONNX 与 ML Kit 方案保留 |
 | 测试 | JUnit、Compose UI Test、Android Instrumented Test、Hilt Test |
 
 当前源码基准包名和 app `applicationId` 为 `com.framer.sense`。各 module 的 Gradle `namespace` 默认以 `com.framer.sense` 为前缀，并按模块边界追加 `core.*`、`feature.*`、`test.*` 等后缀。
@@ -63,7 +63,7 @@ Framer_Sense 是一个基于 Android 官方多模块架构模板演进而来的 
 | `feature-home` | 首页模块，包含推荐流和相册页面；首页 Tab、推荐流、相册读取分别由对应 ViewModel 管理状态。 |
 | `feature-camera` | 旧 ML Kit 拍照模块，包含 CameraX 预览、ML Kit 画面分析、构图引导虚线覆盖层、拍摄保存和相机权限 UI；当前不再作为 app 拍照入口。 |
 | `feature-camera-pytorch` | 上一版 ONNX 拍照模块，包含 CameraX 预览、ONNX Runtime SSD MobileNet 端侧检测、构图引导虚线覆盖层、拍摄保存和相机权限 UI；当前不再作为 app 拍照入口。 |
-| `feature-camera-pytorch-v2` | 当前拍照入口模块，包含 CameraX 预览、ONNX Runtime YOLO/YOLO Pose/可选 YOLO Seg/可选 WholeBody Landmark 约定模型加载、基于物体检测的场景推断、场景构图评分、线条式 3D 虚拟人像覆盖层、拍摄保存和相机权限 UI。 |
+| `feature-camera-pytorch-v2` | 当前拍照入口模块，包含 CameraX 预览、ONNX Runtime YOLO/可选 YOLO Seg/RTMPose WholeBody 133 点模型加载、基于物体检测的场景推断、场景构图评分、线条式 3D 虚拟人像覆盖层、拍摄保存和相机权限 UI。 |
 | `feature-mymodel` | 我的模块，包含个人主页、扫一扫说明页、消息列表页和设置页；主页资料、内容 Tab、扫一扫说明、消息列表、设置项列表由 ViewModel 管理状态。 |
 
 ### *-navigation 模块
@@ -152,12 +152,12 @@ MyApplication
 - 底部导航内容高度为 64dp，并使用紧凑的 20dp 图标、2dp 图文间距和居中小号标签；拍照横屏右侧导航栏宽度为 54dp。系统导航栏安全区保持不变。
 - `ImageAnalysis` 使用 `STRATEGY_KEEP_ONLY_LATEST` 获取实时帧，交给 `CameraV2FrameAnalyzer` 进行端侧分析。
 - `CameraV2FrameAnalyzer` 对实时帧做约 520ms 节流，调用 `CameraV2OnnxAnalyzer` 执行 ONNX 推理。
-- App 启动后会在后台预热四个 ONNX Runtime session；session 在应用进程内共享，拍照 Tab 切换和横竖屏重建只复用已有 session，不重复加载模型。应用进程被系统结束后会在下次启动重新预热。
+- App 启动后会在后台预热三个 ONNX Runtime session；session 在应用进程内共享，拍照 Tab 切换和横竖屏重建只复用已有 session，不重复加载模型。应用进程被系统结束后会在下次启动重新预热。
 - 拍照页根据应用级 `OnnxSessionLoadState` 区分“正在加载 ONNX”和“正在启动相机分析”，避免相机预览重建时误报模型重新加载。
-- `CameraV2OnnxAnalyzer` 约定加载 assets 中的 YOLO 检测、YOLO Pose、可选 YOLO Seg 和可选 RTMPose WholeBody ONNX 模型；Seg 缺失时退化为 person box + pose 包裹，WholeBody 缺失时退化为 YOLO Pose 骨架，基础模型缺失时显示可恢复提示并继续绘制 3D 构图占位。
+- `CameraV2OnnxAnalyzer` 约定加载 assets 中的 YOLO 检测、可选 YOLO Seg 和 RTMPose WholeBody ONNX 模型；Seg 缺失时退化为 person box 包裹，WholeBody 缺失或姿态不可靠时显示可恢复提示并继续绘制汉服 3D 构图占位。`yolov8n-pose.onnx` 与旧解析代码保留，但不再参与当前业务。
 - `CameraV2CompositionEngine` 根据场景类别、亮度、人物框、障碍物和候选站位输出构图建议。
-- `VirtualHumanProjector` 根据传入身高体重、pose 模板、可用人体关键点、可选 WholeBody 内轮廓和人物轮廓生成线条式伪 3D 虚拟人像；pose、segmentation 或 WholeBody 不足时按可用能力降级。
-- 缺少可用人体 pose、人物分割轮廓和 WholeBody 内轮廓时，虚拟人像回退为可缩放的汉服女性虚线模板；一旦真实检测结果可用，继续使用对应的现有渲染。
+- `VirtualHumanProjector` 根据传入身高体重、pose 模板、RTMPose WholeBody 133 点和人物轮廓生成线条式伪 3D 虚拟人像；全部高置信度节点参与内轮廓与逐点绘制。
+- RTMPose 缺失或身体锚点不可靠时，虚拟人像回退为可缩放的汉服女性虚线模板；人物分割仅作为可选外轮廓增强。
 - `CameraV2Overlay` 在预览上使用 Compose `Canvas` 按深度绘制 3D 虚拟人像、人物外轮廓虚线、人物内轮廓虚线和移动提示。
 - 进入“相机”Tab 后，主导航中当前选中的“相机”Tab 显示为带蓝色背景的“拍摄”，点击后使用 CameraX `ImageCapture` 拍照，并通过 `MediaStore` 保存到系统相册；离开相机 Tab 后立即恢复无蓝色背景的“相机”导航项。预览内保留身高体重与保存结果提示，但不再提供独立拍摄按钮。
 
@@ -207,7 +207,7 @@ CameraScreen
   -> CameraX Preview + ImageAnalysis
   -> CameraV2FrameAnalyzer
   -> CameraV2OnnxAnalyzer
-  -> ONNX Runtime YOLO / YOLO Pose / YOLO Seg / WholeBody Landmark
+  -> ONNX Runtime YOLO / YOLO Seg / RTMPose WholeBody Landmark
   -> CameraV2CompositionEngine
   -> VirtualHumanProjector
   -> CameraV2Overlay

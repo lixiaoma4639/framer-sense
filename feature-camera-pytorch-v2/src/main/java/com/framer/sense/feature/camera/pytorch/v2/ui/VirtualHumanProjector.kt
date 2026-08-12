@@ -34,8 +34,6 @@ class VirtualHumanProjector {
         profile: BodyProfile,
         // 没有真实姿态可用时使用的姿态模板。
         template: PoseTemplate,
-        // YOLO pose 输出的 17 点人体姿态，默认为空。
-        pose: PoseEstimate = PoseEstimate.Empty,
         // WholeBody 输出的 133 点姿态，默认为空。
         wholeBodyPose: WholeBodyPoseEstimate = WholeBodyPoseEstimate.Empty,
         // 人体分割轮廓点，默认没有。
@@ -71,8 +69,10 @@ class VirtualHumanProjector {
             V2Rect(left, top, left + width, bottom)
         }
 
-        // 构造虚拟人的 3D 姿态点；优先使用真实 pose，不可用时使用模板点。
-        val posePoints: PosePointSet = buildPosePoints(template, profile, pose, bounds)
+        // 仅在身体锚点可靠时使用 RTMPose；否则完整退回汉服构图引导。
+        val wholeBodyGuidePose = wholeBodyPose.takeIf { it.isReliableForGuide() } ?: WholeBodyPoseEstimate.Empty
+        // 构造虚拟人的 3D 姿态点；优先使用 RTMPose 身体点，不可用时使用模板点。
+        val posePoints: PosePointSet = buildPosePoints(template, profile, wholeBodyGuidePose, bounds)
         // 把 3D 姿态点投影成 2D 画面点。
         val projected = posePoints.points.mapValues { (_, point) ->
             // 将一个 3D 关节点投影到归一化屏幕坐标。
@@ -105,9 +105,9 @@ class VirtualHumanProjector {
             }
         }
         // 判断 WholeBody 模型是否提供了可用的 133 点内轮廓信息。
-        val hasWholeBodyContour = wholeBodyPose.confidence >= WHOLE_BODY_CONFIDENCE_THRESHOLD &&
+        val hasWholeBodyContour = wholeBodyGuidePose.confidence >= WHOLE_BODY_CONFIDENCE_THRESHOLD &&
             // 必须有关键点，只有置信度没有点也不能构成轮廓。
-            wholeBodyPose.keypoints.isNotEmpty()
+            wholeBodyGuidePose.keypoints.isNotEmpty()
         // 判断是否使用汉服引导模板。
         val useHanfuGuide = !posePoints.poseDriven &&
             // 没有分割轮廓时才需要汉服兜底轮廓。
@@ -132,7 +132,9 @@ class VirtualHumanProjector {
             // 只有真实姿态驱动时才输出骨架线；模板汉服状态不画骨架。
             lines = if (posePoints.poseDriven) lines else emptyList(),
             // 用 WholeBody 关键点构造内部人体轮廓线。
-            innerContourLines = WholeBodyInnerContourBuilder.build(wholeBodyPose),
+            innerContourLines = WholeBodyInnerContourBuilder.build(wholeBodyGuidePose),
+            // 每个高置信度 WholeBody 点均输出给覆盖层，保证 133 点全量参与引导绘制。
+            innerContourPoints = WholeBodyInnerContourBuilder.points(wholeBodyGuidePose),
             // 头部中心优先使用投影出来的 HEAD 点，否则按边界框顶部估算。
             headCenter = projected[Joint.HEAD] ?: V2Point(visualBounds.centerX, visualBounds.top + visualBounds.height * 0.10f),
             // 如果允许画头部，半径按可视宽度比例计算，并设置最小值。
@@ -401,13 +403,13 @@ class VirtualHumanProjector {
         template: PoseTemplate,
         // 体型配置，用于模板姿态宽度和高度比例。
         profile: BodyProfile,
-        // 模型识别到的真实 17 点姿态。
-        pose: PoseEstimate,
+        // RTMPose 识别到的真实 133 点姿态。
+        wholeBodyPose: WholeBodyPoseEstimate,
         // 当前虚拟人边界框，用于把真实 pose 转换到局部坐标。
         bounds: V2Rect
     ): PosePointSet {
-        // 尝试从真实 pose 构造姿态点。
-        val posePoints = buildPoseAwarePoints(pose, bounds)
+        // 尝试从 RTMPose 身体点构造姿态点。
+        val posePoints = buildPoseAwarePoints(wholeBodyPose, bounds)
         // 如果真实 pose 不可用，就使用模板姿态点。
         return if (posePoints == null) {
             // 构造模板驱动的姿态点集合。
@@ -470,12 +472,12 @@ class VirtualHumanProjector {
     }
 
     // 根据模型识别到的真实 pose 构造虚拟人 3D 关节点。
-    private fun buildPoseAwarePoints(pose: PoseEstimate, bounds: V2Rect): PosePointSet? {
+    private fun buildPoseAwarePoints(pose: WholeBodyPoseEstimate, bounds: V2Rect): PosePointSet? {
         // 姿态整体置信度太低时不使用真实 pose。
         if (pose.confidence < POSE_CONFIDENCE_THRESHOLD) return null
 
-        // 把每个关键点名称映射到对应坐标，缺失点为 null。
-        val namedPoints: Map<PoseKeypointName, V2Point?> = PoseKeypointName.entries.associateWith { pose.point(it) }
+        // 从 WholeBody 的前 17 个身体点读取基础骨架；其余点仍由内轮廓和节点绘制直接使用。
+        val namedPoints: Map<PoseKeypointName, V2Point?> = PoseKeypointName.entries.associateWith { pose.point(it.ordinal) }
         // 左肩是构造身体中心和骨架的必要点，缺失则放弃真实 pose。
         val leftShoulder = namedPoints[PoseKeypointName.LEFT_SHOULDER] ?: return null
         // 右肩也是必要点，缺失则放弃真实 pose。
@@ -526,7 +528,7 @@ class VirtualHumanProjector {
             // 最后使用右耳。
             PoseKeypointName.RIGHT_EAR
         )
-        // 把 YOLO pose 的关键点名称映射到内部 Joint。
+        // 把 RTMPose 的身体关键点映射到内部 Joint。
         val mappedPoints: Map<Joint, V2Point?> = mapOf(
             // 头部使用前面找到的头部锚点。
             Joint.HEAD to headAnchor,
@@ -607,6 +609,14 @@ class VirtualHumanProjector {
             // 标记为真实 pose 驱动。
             poseDriven = true
         )
+    }
+
+    private fun WholeBodyPoseEstimate.isReliableForGuide(): Boolean {
+        if (confidence < WHOLE_BODY_CONFIDENCE_THRESHOLD) return false
+        val bodyPoints = body
+        return point(WholeBodyKeypointIndex.LEFT_SHOULDER) != null &&
+            point(WholeBodyKeypointIndex.RIGHT_SHOULDER) != null &&
+            bodyPoints.size >= MIN_KEYPOINTS_FOR_POSE
     }
 
     // 把内部 3D 点投影到 2D 画面坐标。

@@ -109,6 +109,27 @@ enum class PoseKeypointName {
     RIGHT_ANKLE         // 右脚踝
 }
 
+/** COCO-WholeBody 中与基础身体姿态对应的关键点索引。 */
+internal object WholeBodyKeypointIndex {
+    const val NOSE = 0
+    const val LEFT_EYE = 1
+    const val RIGHT_EYE = 2
+    const val LEFT_EAR = 3
+    const val RIGHT_EAR = 4
+    const val LEFT_SHOULDER = 5
+    const val RIGHT_SHOULDER = 6
+    const val LEFT_ELBOW = 7
+    const val RIGHT_ELBOW = 8
+    const val LEFT_WRIST = 9
+    const val RIGHT_WRIST = 10
+    const val LEFT_HIP = 11
+    const val RIGHT_HIP = 12
+    const val LEFT_KNEE = 13
+    const val RIGHT_KNEE = 14
+    const val LEFT_ANKLE = 15
+    const val RIGHT_ANKLE = 16
+}
+
 
 data class PoseEstimate(
     val keypoints: List<PoseKeypoint>,
@@ -176,7 +197,7 @@ data class ModelAvailability(
     val wholeBodyPoseReady: Boolean = false
 ) {
     val allRequiredReady: Boolean =
-        objectDetectorReady && poseDetectorReady
+        objectDetectorReady && wholeBodyPoseReady
 
     companion object {
         val Missing = ModelAvailability(
@@ -284,6 +305,7 @@ data class VirtualHumanFigure(
     val template: PoseTemplate,
     val lines: List<VirtualHumanLine>,
     val innerContourLines: List<VirtualHumanLine> = emptyList(),
+    val innerContourPoints: List<V2Point> = emptyList(),
     val headCenter: V2Point,
     val headRadius: Float,
     val contourPathPoints: List<V2Point> = emptyList(),

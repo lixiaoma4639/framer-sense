@@ -19,7 +19,7 @@ class CameraV2CompositionEngine(
         // 先从场景和遮挡信息中选择一个推荐站位区域。
         val targetBounds = chooseTargetBounds(analysis)
         // 根据当前人体姿态和语义场景选择虚拟人的姿态模板。
-        val template = poseTemplateSelector.select(analysis.pose, analysis.semanticScene)
+        val template = poseTemplateSelector.select(analysis.wholeBodyPose, analysis.semanticScene)
         // 从检测到的人体框中选出主要人物，面积和置信度乘积越大越可信。
         val primaryPerson = analysis.people.maxByOrNull { it.bounds.area * it.confidence }
         // 从人体分割结果中选出主要人体轮廓，同样优先面积大且置信度高的结果。
@@ -27,7 +27,7 @@ class CameraV2CompositionEngine(
         // 虚拟人叠加区域优先使用分割框，因为分割边界通常比检测框更贴合人体。
         val humanOverlayBounds: V2Rect = primarySegment?.bounds
             // 没有分割时，使用人体检测框并结合姿态关键点向外扩展，避免手脚被框外截断。
-            ?: primaryPerson?.bounds?.expandedWithPose(analysis.pose)
+            ?: primaryPerson?.bounds?.expandedWithWholeBodyPose(analysis.wholeBodyPose)
             // 没有检测到人时，退回使用推荐站位区域，让虚拟人继续提供构图参考。
             ?: targetBounds
         // 根据人体区域、体型、姿态模板和真实关键点生成虚拟人图形。
@@ -38,8 +38,6 @@ class CameraV2CompositionEngine(
             profile = profile,
             // 当前场景下选中的姿态模板。
             template = template,
-            // YOLO pose 产生的普通 17 点姿态。
-            pose = analysis.pose,
             // whole-body 模型产生的 133 点姿态。
             wholeBodyPose = analysis.wholeBodyPose,
             // 人体分割轮廓点，用于更贴合真实人体边缘绘制。
@@ -304,7 +302,7 @@ class CameraV2CompositionEngine(
         }
 
     // 根据姿态关键点扩展人体检测框，让框覆盖手脚等可能超出检测框的部位。
-    private fun V2Rect.expandedWithPose(pose: PoseEstimate): V2Rect {
+    private fun V2Rect.expandedWithWholeBodyPose(pose: WholeBodyPoseEstimate): V2Rect {
         // 取出置信度足够高的姿态关键点，低置信度点不参与框扩展。
         val posePoints = pose.keypoints
             // 过滤低可信关键点，避免异常点把框拉得过大。
