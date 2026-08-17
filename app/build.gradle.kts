@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+import org.gradle.kotlin.dsl.debugImplementation
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 
 plugins {
@@ -93,6 +94,8 @@ dependencies {
     implementation(libs.androidx.lifecycle.runtime.compose)
     implementation(libs.androidx.lifecycle.viewmodel.compose)
     implementation(libs.androidx.hilt.lifecycle.viewmodel.compose)
+
+    debugImplementation(libs.leakcanary.android)
 
     // Hilt Dependency Injection
     implementation(libs.hilt.android)
