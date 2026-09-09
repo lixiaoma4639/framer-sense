@@ -55,11 +55,12 @@ class VirtualHumanProjectorTest {
     }
 
     @Test
-    fun initialGuide_usesHanfuVisualStyle() {
+    fun initialGuide_usesFixedTargetPoseWhenRealtimePoseIsUnavailable() {
         assertEquals(
-            VirtualHumanVisualStyle.HANFU_GUIDE,
+            VirtualHumanVisualStyle.VOLUMETRIC_AVATAR,
             CameraV2Guide.initial().virtualHuman.visualStyle
         )
+        assertTrue(CameraV2Guide.initial().targetPose != null)
     }
 
     @Test
@@ -193,6 +194,27 @@ class VirtualHumanProjectorTest {
                 line.start.y in 0f..1f &&
                 line.end.x in 0f..1f &&
                 line.end.y in 0f..1f
+        })
+    }
+
+    @Test
+    fun project_withTargetPose_drawsCompleteTargetWholeBodyWithoutRealtimePose() {
+        val figure = projector.project(
+            targetBounds = V2Rect(0.18f, 0.12f, 0.72f, 0.92f),
+            profile = BodyProfile(170, 60),
+            template = PoseTemplate.WALKING,
+            targetPose = TargetPoseLibrary.basePoses.first()
+        )
+
+        assertEquals(133, figure.targetContourPoints.size)
+        assertTrue(figure.targetContourLines.isNotEmpty())
+        assertTrue(figure.innerContourPoints.isEmpty())
+        assertTrue(figure.targetContourPoints.all { it.x in 0f..1f && it.y in 0f..1f })
+        assertEquals(VirtualHumanVisualStyle.VOLUMETRIC_AVATAR, figure.visualStyle)
+        val avatar = requireNotNull(figure.volumetricAvatar)
+        assertTrue(avatar.shapes.map { it.part }.containsAll(VirtualHumanAvatarPart.entries))
+        assertTrue(avatar.shapes.all { shape ->
+            shape.points.all { point -> point.x in 0f..1f && point.y in 0f..1f }
         })
     }
 

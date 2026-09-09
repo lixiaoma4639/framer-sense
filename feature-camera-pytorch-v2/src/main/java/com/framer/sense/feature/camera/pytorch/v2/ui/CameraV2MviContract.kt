@@ -29,6 +29,7 @@ sealed interface CameraV2Intent {
     data class PermissionButtonClicked(val hasCameraPermission: Boolean) : CameraV2Intent
     data class CameraPermissionResult(val granted: Boolean) : CameraV2Intent
     data class GuideProduced(val guide: CameraV2Guide) : CameraV2Intent
+    data object NextTargetPose : CameraV2Intent
     data class OnnxLoadStateChanged(val state: OnnxSessionLoadState) : CameraV2Intent
     data class CapturePressed(val needsLegacyStoragePermission: Boolean) : CameraV2Intent
     data class LegacyStoragePermissionResult(val granted: Boolean) : CameraV2Intent

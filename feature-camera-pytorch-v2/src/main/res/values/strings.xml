@@ -23,7 +23,7 @@
     <string name="camera_v2_scene_urban">城市</string>
     <string name="camera_v2_hint_camera_starting">正在启动相机分析</string>
     <string name="camera_v2_hint_onnx_loading">正在加载 ONNX 人物、物体和姿态模型</string>
-    <string name="camera_v2_hint_model_assets_missing">请放入 YOLO 和 YOLO-Pose ONNX 模型；当前先展示实时 3D 构图占位</string>
+    <string name="camera_v2_hint_model_assets_missing">请放入 YOLO 检测和 RTMPose WholeBody ONNX 模型；当前先展示构图与姿势引导</string>
     <string name="camera_v2_hint_enter_guide">请让人物走进 3D 虚拟人像区域</string>
     <string name="camera_v2_hint_good">构图良好，保持当前手机位置</string>
     <string name="camera_v2_hint_low_light">画面偏暗，朝光线更好的方向移动手机</string>
@@ -40,4 +40,6 @@
     <string name="camera_v2_direction_down">↓ 向下移动手机</string>
     <string name="camera_v2_direction_backward">后退一点</string>
     <string name="camera_v2_direction_forward">靠近一点</string>
+    <string name="camera_v2_target_pose">推荐姿势：%1$s\n%2$s</string>
+    <string name="camera_v2_switch_pose">换一个姿势</string>
 </resources>

@@ -279,8 +279,38 @@ data class VirtualHumanLine(
 
 enum class VirtualHumanVisualStyle {
     SKELETON,
-    HANFU_GUIDE
+    HANFU_GUIDE,
+    /** 由完整目标 Pose 生成的半透明 2.5D 人体，而非仅骨架线条。 */
+    VOLUMETRIC_AVATAR
 }
+
+/** 用于相机覆盖层的 2.5D 虚拟人组成部分。所有坐标均为预览画面的归一化坐标。 */
+enum class VirtualHumanAvatarPart {
+    HAIR,
+    FACE,
+    TORSO,
+    LEFT_ARM,
+    RIGHT_ARM,
+    LEFT_LEG,
+    RIGHT_LEG,
+    LEFT_HAND,
+    RIGHT_HAND,
+    LEFT_SHOE,
+    RIGHT_SHOE
+}
+
+data class VirtualHumanAvatarShape(
+    val part: VirtualHumanAvatarPart,
+    val points: List<V2Point>,
+    val depth: Float = 0f,
+    /** 肢体的视觉宽度，0 表示按闭合多边形绘制。 */
+    val widthRatio: Float = 0f,
+    val closed: Boolean = true
+)
+
+data class VirtualHumanAvatar(
+    val shapes: List<VirtualHumanAvatarShape>
+)
 
 enum class VirtualHumanPathRole {
     OUTLINE,
@@ -303,7 +333,13 @@ data class VirtualHumanStrokePath(
 data class VirtualHumanFigure(
     val bounds: V2Rect,
     val template: PoseTemplate,
+    val targetPoseId: String? = null,
+    val targetPoseTitle: String? = null,
     val lines: List<VirtualHumanLine>,
+    /** 固定目标 Pose 的完整 133 点轮廓与节点。 */
+    val targetContourLines: List<VirtualHumanLine> = emptyList(),
+    val targetContourPoints: List<V2Point> = emptyList(),
+    /** 用户实时 RTMPose 的 133 点轮廓与节点。 */
     val innerContourLines: List<VirtualHumanLine> = emptyList(),
     val innerContourPoints: List<V2Point> = emptyList(),
     val headCenter: V2Point,
@@ -312,7 +348,9 @@ data class VirtualHumanFigure(
     val drawHead: Boolean = true,
     val poseDriven: Boolean = false,
     val visualStyle: VirtualHumanVisualStyle = VirtualHumanVisualStyle.SKELETON,
-    val decorativePaths: List<VirtualHumanStrokePath> = emptyList()
+    val decorativePaths: List<VirtualHumanStrokePath> = emptyList(),
+    /** 固定目标人物的实体化 2.5D 造型；实时用户点不会改变它。 */
+    val volumetricAvatar: VirtualHumanAvatar? = null
 )
 
 data class CameraV2Guide(
@@ -323,22 +361,33 @@ data class CameraV2Guide(
     val semanticScene: SemanticScene,
     val virtualHuman: VirtualHumanFigure,
     val modelAvailability: ModelAvailability,
-    val frameAspectRatio: Float = CameraV2PreviewTransform.DEFAULT_FRAME_ASPECT_RATIO
+    val frameAspectRatio: Float = CameraV2PreviewTransform.DEFAULT_FRAME_ASPECT_RATIO,
+    /** 固定目标姿势与候选集合；实时 WholeBody 数据只用于用户对齐。 */
+    val targetPose: TargetPose? = null,
+    val poseCandidates: List<TargetPose> = emptyList(),
+    val alignmentFeedback: PoseAlignmentFeedback? = null,
+    val wholeBodyPose: WholeBodyPoseEstimate = WholeBodyPoseEstimate.Empty,
+    val isPoseSelectionLocked: Boolean = false
 ) {
     companion object {
         fun initial(profile: BodyProfile = BodyProfile(BodyProfile.DEFAULT_HEIGHT_CM, BodyProfile.DEFAULT_WEIGHT_KG)): CameraV2Guide {
-            val bounds = V2Rect(0.32f, 0.15f, 0.68f, 0.91f)
+            val bounds = V2Rect(0.35f, 0.23f, 0.65f, 0.72f)
+            val recommendation = PoseRecommendationEngine().recommend(SemanticScene.Unknown)
             return CameraV2Guide(
                 targetBounds = bounds,
                 quality = CameraV2Quality.NEEDS_MOVE,
                 movement = CameraV2Movement.NONE,
                 hint = CameraV2Hint.CAMERA_STARTING,
                 semanticScene = SemanticScene.Unknown,
-                virtualHuman = VirtualHumanProjector().projectDefaultHanfuGuide(
+                virtualHuman = VirtualHumanProjector().project(
                     targetBounds = bounds,
-                    profile = profile
+                    profile = profile,
+                    template = PoseTemplate.SIDE_STANCE,
+                    targetPose = recommendation.targetPose
                 ),
-                modelAvailability = ModelAvailability.Missing
+                modelAvailability = ModelAvailability.Missing,
+                targetPose = recommendation.targetPose,
+                poseCandidates = recommendation.candidates
             )
         }
     }

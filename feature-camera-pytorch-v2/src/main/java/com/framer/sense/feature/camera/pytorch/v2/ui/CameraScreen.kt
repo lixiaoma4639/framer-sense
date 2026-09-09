@@ -346,6 +346,8 @@ internal fun CameraV2ScreenContent(
                     hint = state.displayHint(),
                     // 传入横屏状态，让覆盖层调整布局。
                     isLandscape = isLandscape,
+                    // 用户可在当前场景兼容候选中切换，不改变构图主规则。
+                    onSwitchTargetPose = { onIntent(CameraV2Intent.NextTargetPose) },
                     // 覆盖层铺满整个页面。
                     modifier = Modifier.fillMaxSize()
                 )

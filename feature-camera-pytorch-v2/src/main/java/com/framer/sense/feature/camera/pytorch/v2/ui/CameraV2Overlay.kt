@@ -12,15 +12,18 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Button
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.PathEffect
+import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.res.colorResource
 import androidx.compose.ui.res.stringResource
@@ -33,6 +36,7 @@ fun CameraV2Overlay(
     guide: CameraV2Guide,
     hint: CameraV2Hint = guide.hint,
     isLandscape: Boolean = false,
+    onSwitchTargetPose: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val guideColor = when (guide.quality) {
@@ -85,6 +89,15 @@ fun CameraV2Overlay(
                     )
                 }
             }
+            // 目标人物使用程序生成的半透明实体虚拟人；它与实时用户姿态完全分离。
+            figure.volumetricAvatar?.let { avatar ->
+                drawVolumetricAvatar(
+                    avatar = avatar,
+                    previewTransform = previewTransform,
+                    viewportWidth = size.width,
+                    viewportHeight = size.height
+                )
+            }
             if (figure.contourPathPoints.size >= 3) {
                 drawPath(
                     path = figure.contourPathPoints.toPath(size.width, size.height, previewTransform),
@@ -97,6 +110,29 @@ fun CameraV2Overlay(
                     style = Stroke(width = 6.2f, pathEffect = dash)
                 )
             }
+            // 固定目标人物：完整 133 点的身体、脚、脸和双手语义轮廓。
+            figure.targetContourLines.sortedBy { it.depth }.forEach { line ->
+                drawLine(
+                    color = Color.Black.copy(alpha = 0.26f),
+                    start = line.start.toOffset(size.width, size.height, previewTransform),
+                    end = line.end.toOffset(size.width, size.height, previewTransform),
+                    strokeWidth = 3.2f,
+                    pathEffect = innerDash
+                )
+                drawLine(
+                    color = guideColor.copy(alpha = 0.48f),
+                    start = line.start.toOffset(size.width, size.height, previewTransform),
+                    end = line.end.toOffset(size.width, size.height, previewTransform),
+                    strokeWidth = 1.5f,
+                    pathEffect = innerDash
+                )
+            }
+            figure.targetContourPoints.forEach { point ->
+                val center = point.toOffset(size.width, size.height, previewTransform)
+                drawCircle(Color.Black.copy(alpha = 0.30f), 3.8f, center)
+                drawCircle(guideColor.copy(alpha = 0.60f), 2.0f, center)
+            }
+            // 实时用户关键点保持蓝色，明确区分目标 Pose 与当前动作。
             figure.innerContourLines.sortedBy { it.depth }.forEach { line ->
                 drawLine(
                     color = Color.Black.copy(alpha = 0.68f),
@@ -106,7 +142,7 @@ fun CameraV2Overlay(
                     pathEffect = innerDash
                 )
                 drawLine(
-                    color = guideColor.copy(alpha = 0.88f),
+                    color = Color(0xFF80DEEA).copy(alpha = 0.88f),
                     start = line.start.toOffset(size.width, size.height, previewTransform),
                     end = line.end.toOffset(size.width, size.height, previewTransform),
                     strokeWidth = 2.4f,
@@ -121,7 +157,7 @@ fun CameraV2Overlay(
                     center = center
                 )
                 drawCircle(
-                    color = guideColor.copy(alpha = 0.92f),
+                    color = Color(0xFF80DEEA).copy(alpha = 0.92f),
                     radius = 2.5f,
                     center = center
                 )
@@ -140,7 +176,7 @@ fun CameraV2Overlay(
                     style = Stroke(width = 5.8f)
                 )
             }
-            figure.lines.sortedBy { it.depth }.forEach { line ->
+            if (figure.visualStyle != VirtualHumanVisualStyle.VOLUMETRIC_AVATAR) figure.lines.sortedBy { it.depth }.forEach { line ->
                 val depthFactor = ((line.depth + 0.14f) / 0.28f).coerceIn(0f, 1f)
                 drawLine(
                     color = Color.Black.copy(alpha = 0.78f),
@@ -197,6 +233,39 @@ fun CameraV2Overlay(
                 color = Color.White.copy(alpha = 0.74f),
                 textAlign = TextAlign.Center
             )
+            guide.targetPose?.let { targetPose ->
+                Text(
+                    text = stringResource(R.string.camera_v2_target_pose, targetPose.title, targetPose.instruction),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Color.White,
+                    textAlign = TextAlign.Center
+                )
+            }
+            guide.alignmentFeedback?.let { feedback ->
+                Surface(
+                    color = Color.Black.copy(alpha = 0.54f),
+                    contentColor = guideColor,
+                    shape = RoundedCornerShape(8.dp)
+                ) {
+                    Text(
+                        text = feedback.instruction,
+                        style = MaterialTheme.typography.bodyMedium,
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp)
+                    )
+                }
+            }
+        }
+
+        if (guide.poseCandidates.size > 1) {
+            Button(
+                onClick = onSwitchTargetPose,
+                modifier = Modifier
+                    .align(if (isLandscape) Alignment.BottomStart else Alignment.CenterEnd)
+                    .padding(16.dp)
+            ) {
+                Text(stringResource(R.string.camera_v2_switch_pose))
+            }
         }
 
         guide.movement.directionTextRes()?.let { textRes ->
@@ -223,6 +292,90 @@ private fun V2Point.toOffset(
     previewTransform: CameraV2PreviewTransform
 ): Offset =
     previewTransform.map(this).let { point -> Offset(x = point.x * width, y = point.y * height) }
+
+/** 在 Canvas 内渲染实体化目标人物：身体有填充、明暗、轮廓和前后层级，但不包含任何真实人像素材。 */
+private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawVolumetricAvatar(
+    avatar: VirtualHumanAvatar,
+    previewTransform: CameraV2PreviewTransform,
+    viewportWidth: Float,
+    viewportHeight: Float
+) {
+    avatar.shapes
+        .sortedWith(compareBy<VirtualHumanAvatarShape> { it.depth }.thenBy { it.part.renderOrder })
+        .forEach { shape ->
+            val mapped = shape.points.map { it.toOffset(viewportWidth, viewportHeight, previewTransform) }
+            val colors = shape.part.volumeColors()
+            if (shape.closed) {
+                val path = Path().apply {
+                    moveTo(mapped.first().x, mapped.first().y)
+                    mapped.drop(1).forEach { lineTo(it.x, it.y) }
+                    close()
+                }
+                // 黑色底影使透明人物在亮、暗场景中都有轮廓；双层渐变形成体积感。
+                drawPath(path, Color.Black.copy(alpha = 0.32f))
+                drawPath(
+                    path = path,
+                    brush = Brush.linearGradient(
+                        colors = colors,
+                        start = mapped.first(),
+                        end = mapped.last()
+                    ),
+                    alpha = 0.82f
+                )
+                drawPath(path, Color.White.copy(alpha = 0.35f), style = Stroke(width = 1.4f))
+            } else if (mapped.size >= 2) {
+                val width = previewTransform.mapFrameWidth(shape.widthRatio)
+                drawLine(
+                    color = Color.Black.copy(alpha = 0.36f),
+                    start = mapped.first(),
+                    end = mapped.last(),
+                    strokeWidth = width + 4f,
+                    cap = StrokeCap.Round
+                )
+                mapped.zipWithNext().forEach { (start, end) ->
+                    drawLine(
+                        brush = Brush.linearGradient(colors = colors, start = start, end = end),
+                        start = start,
+                        end = end,
+                        strokeWidth = width,
+                        cap = StrokeCap.Round,
+                        alpha = 0.84f
+                    )
+                    drawLine(
+                        color = Color.White.copy(alpha = 0.26f),
+                        start = start,
+                        end = end,
+                        strokeWidth = (width * 0.24f).coerceAtLeast(1.2f),
+                        cap = StrokeCap.Round
+                    )
+                }
+            }
+        }
+}
+
+private val VirtualHumanAvatarPart.renderOrder: Int
+    get() = when (this) {
+        VirtualHumanAvatarPart.LEFT_LEG, VirtualHumanAvatarPart.RIGHT_LEG -> 0
+        VirtualHumanAvatarPart.TORSO -> 1
+        VirtualHumanAvatarPart.LEFT_ARM, VirtualHumanAvatarPart.RIGHT_ARM -> 2
+        VirtualHumanAvatarPart.FACE -> 3
+        VirtualHumanAvatarPart.HAIR -> 4
+        VirtualHumanAvatarPart.LEFT_HAND, VirtualHumanAvatarPart.RIGHT_HAND -> 5
+        VirtualHumanAvatarPart.LEFT_SHOE, VirtualHumanAvatarPart.RIGHT_SHOE -> 6
+    }
+
+private fun VirtualHumanAvatarPart.volumeColors(): List<Color> =
+    when (this) {
+        VirtualHumanAvatarPart.HAIR -> listOf(Color(0xFF17142B), Color(0xFF6E4B94))
+        VirtualHumanAvatarPart.FACE, VirtualHumanAvatarPart.LEFT_HAND, VirtualHumanAvatarPart.RIGHT_HAND ->
+            listOf(Color(0xFFFFE3D2), Color(0xFFB97B9C))
+        VirtualHumanAvatarPart.LEFT_SHOE, VirtualHumanAvatarPart.RIGHT_SHOE ->
+            listOf(Color(0xFF24253C), Color(0xFF7E8FBB))
+        VirtualHumanAvatarPart.TORSO -> listOf(Color(0xFFB4F4F2), Color(0xFF6175E8))
+        VirtualHumanAvatarPart.LEFT_ARM, VirtualHumanAvatarPart.RIGHT_ARM,
+        VirtualHumanAvatarPart.LEFT_LEG, VirtualHumanAvatarPart.RIGHT_LEG ->
+            listOf(Color(0xFF9DEEE5), Color(0xFF5F67D5))
+    }
 
 private fun List<V2Point>.toPath(
     width: Float,

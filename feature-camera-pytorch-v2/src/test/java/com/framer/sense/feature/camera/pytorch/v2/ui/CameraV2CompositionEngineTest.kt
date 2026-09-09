@@ -17,8 +17,8 @@ class CameraV2CompositionEngineTest {
         )
 
         assertEquals(CameraV2Hint.MODEL_ASSETS_MISSING, guide.hint)
-        assertEquals(VirtualHumanVisualStyle.HANFU_GUIDE, guide.virtualHuman.visualStyle)
-        assertTrue(guide.virtualHuman.decorativePaths.isNotEmpty())
+        assertEquals(VirtualHumanVisualStyle.VOLUMETRIC_AVATAR, guide.virtualHuman.visualStyle)
+        assertTrue(guide.targetPose != null)
         assertTrue(guide.targetBounds.centerX in 0.30f..0.70f)
     }
 
@@ -84,7 +84,7 @@ class CameraV2CompositionEngineTest {
     }
 
     @Test
-    fun buildGuide_withWholeBodyPose_usesPoseAwareVirtualHuman() {
+    fun buildGuide_withWholeBodyPose_keepsTargetSkeletonAndAddsLiveContour() {
         val guideWithoutPose = engine.buildGuide(
             analysis = analysis(
                 people = listOf(ScenePerson(V2Rect(0.40f, 0.22f, 0.60f, 0.86f), 0.92f))
@@ -100,7 +100,8 @@ class CameraV2CompositionEngineTest {
         )
 
         assertTrue(guideWithPose.virtualHuman.lines.isNotEmpty())
-        assertTrue(guideWithPose.virtualHuman.lines != guideWithoutPose.virtualHuman.lines)
+        assertEquals(guideWithoutPose.virtualHuman.lines, guideWithPose.virtualHuman.lines)
+        assertTrue(guideWithPose.virtualHuman.innerContourLines.isNotEmpty())
     }
 
     @Test
@@ -110,8 +111,9 @@ class CameraV2CompositionEngineTest {
             profile = profile
         )
 
-        assertEquals(VirtualHumanVisualStyle.HANFU_GUIDE, guide.virtualHuman.visualStyle)
-        assertTrue(guide.virtualHuman.decorativePaths.isNotEmpty())
+        assertEquals(VirtualHumanVisualStyle.VOLUMETRIC_AVATAR, guide.virtualHuman.visualStyle)
+        assertTrue(guide.virtualHuman.lines.isNotEmpty())
+        assertTrue(guide.alignmentFeedback == null)
     }
 
     @Test
@@ -124,8 +126,9 @@ class CameraV2CompositionEngineTest {
             profile = profile
         )
 
-        assertEquals(VirtualHumanVisualStyle.HANFU_GUIDE, guide.virtualHuman.visualStyle)
-        assertTrue(!guide.virtualHuman.poseDriven)
+        assertEquals(VirtualHumanVisualStyle.VOLUMETRIC_AVATAR, guide.virtualHuman.visualStyle)
+        assertTrue(guide.virtualHuman.poseDriven)
+        assertTrue(guide.wholeBodyPose == WholeBodyPoseEstimate.Empty)
     }
 
     @Test
@@ -147,12 +150,12 @@ class CameraV2CompositionEngineTest {
         )
 
         assertEquals(segment.contour, guide.virtualHuman.contourPathPoints)
-        assertEquals(segment.bounds.height, guide.virtualHuman.bounds.height, 0.001f)
-        assertEquals(VirtualHumanVisualStyle.SKELETON, guide.virtualHuman.visualStyle)
+        assertTrue(guide.virtualHuman.bounds.height != segment.bounds.height)
+        assertEquals(VirtualHumanVisualStyle.VOLUMETRIC_AVATAR, guide.virtualHuman.visualStyle)
     }
 
     @Test
-    fun buildGuide_withoutSegmentation_usesPersonBoxForVirtualHumanHeight() {
+    fun buildGuide_withoutSegmentation_keepsVirtualHumanAtCompositionTarget() {
         val person = ScenePerson(V2Rect(0.24f, 0.18f, 0.52f, 0.86f), 0.88f)
 
         val guide = engine.buildGuide(
@@ -161,7 +164,7 @@ class CameraV2CompositionEngineTest {
         )
 
         assertTrue(guide.virtualHuman.contourPathPoints.isEmpty())
-        assertTrue(kotlin.math.abs(guide.virtualHuman.bounds.height - person.bounds.height) < 0.08f)
+        assertTrue(kotlin.math.abs(guide.virtualHuman.bounds.height - person.bounds.height) > 0.08f)
     }
 
     @Test

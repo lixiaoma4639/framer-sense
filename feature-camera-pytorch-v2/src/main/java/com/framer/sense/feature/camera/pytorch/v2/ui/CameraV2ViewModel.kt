@@ -23,6 +23,7 @@ class CameraV2ViewModel : ViewModel() {
             is CameraV2Intent.PermissionButtonClicked -> onPermissionButtonClicked(intent.hasCameraPermission)
             is CameraV2Intent.CameraPermissionResult -> onCameraPermissionResult(intent.granted)
             is CameraV2Intent.GuideProduced -> onGuideProduced(intent.guide)
+            CameraV2Intent.NextTargetPose -> onNextTargetPose()
             is CameraV2Intent.OnnxLoadStateChanged -> onOnnxLoadStateChanged(intent.state)
             is CameraV2Intent.CapturePressed -> onCapturePressed(intent.needsLegacyStoragePermission)
             is CameraV2Intent.LegacyStoragePermissionResult -> onLegacyStoragePermissionResult(intent.granted)
@@ -70,10 +71,31 @@ class CameraV2ViewModel : ViewModel() {
 
     private fun onGuideProduced(guide: CameraV2Guide) {
         _state.update {
+            val retainedPose = it.guide.targetPose?.takeIf { current ->
+                guide.poseCandidates.any { candidate -> candidate.id == current.id }
+            }
+            val selectedPose = retainedPose ?: guide.targetPose
+            val stableGuide = selectedPose?.let { pose ->
+                guide.withTargetPose(
+                    targetPose = pose,
+                    profile = it.bodyProfile,
+                    isSelectionLocked = retainedPose != null || guide.isPoseSelectionLocked
+                )
+            } ?: guide
             it.copy(
                 screenState = CameraV2ScreenState.Streaming,
-                guide = guide
+                guide = stableGuide
             )
+        }
+    }
+
+    private fun onNextTargetPose() {
+        _state.update { state ->
+            val candidates = state.guide.poseCandidates
+            if (candidates.size <= 1) return@update state
+            val currentIndex = candidates.indexOfFirst { it.id == state.guide.targetPose?.id }
+            val next = candidates[(currentIndex + 1).floorMod(candidates.size)]
+            state.copy(guide = state.guide.withTargetPose(next, state.bodyProfile, isSelectionLocked = true))
         }
     }
 
@@ -134,7 +156,9 @@ class CameraV2ViewModel : ViewModel() {
         _state.update {
             it.copy(
                 bodyProfile = profile,
-                guide = it.guide.copy(
+                guide = it.guide.targetPose?.let { targetPose ->
+                    it.guide.withTargetPose(targetPose, profile, it.guide.isPoseSelectionLocked)
+                } ?: it.guide.copy(
                     virtualHuman = VirtualHumanProjector().project(
                         targetBounds = it.guide.targetBounds,
                         profile = profile,
@@ -145,3 +169,5 @@ class CameraV2ViewModel : ViewModel() {
         }
     }
 }
+
+private fun Int.floorMod(modulus: Int): Int = ((this % modulus) + modulus) % modulus

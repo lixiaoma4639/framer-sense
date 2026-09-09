@@ -63,7 +63,7 @@ Framer_Sense 是一个基于 Android 官方多模块架构模板演进而来的 
 | `feature-home` | 首页模块，包含推荐流和相册页面；首页 Tab、推荐流、相册读取分别由对应 ViewModel 管理状态。 |
 | `feature-camera` | 旧 ML Kit 拍照模块，包含 CameraX 预览、ML Kit 画面分析、构图引导虚线覆盖层、拍摄保存和相机权限 UI；当前不再作为 app 拍照入口。 |
 | `feature-camera-pytorch` | 上一版 ONNX 拍照模块，包含 CameraX 预览、ONNX Runtime SSD MobileNet 端侧检测、构图引导虚线覆盖层、拍摄保存和相机权限 UI；当前不再作为 app 拍照入口。 |
-| `feature-camera-pytorch-v2` | 当前拍照入口模块，包含 CameraX 预览、ONNX Runtime YOLO/可选 YOLO Seg/RTMPose WholeBody 133 点模型加载、基于物体检测的场景推断、场景构图评分、线条式 3D 虚拟人像覆盖层、拍摄保存和相机权限 UI。 |
+| `feature-camera-pytorch-v2` | 当前拍照入口模块，包含 CameraX 预览、ONNX Runtime YOLO/可选 YOLO Seg/RTMPose WholeBody 133 点模型加载、基于物体检测的场景推断、场景构图评分、基于 133 点的半透明 2.5D 虚拟人像覆盖层、拍摄保存和相机权限 UI。 |
 | `feature-mymodel` | 我的模块，包含个人主页、扫一扫说明页、消息列表页和设置页；主页资料、内容 Tab、扫一扫说明、消息列表、设置项列表由 ViewModel 管理状态。 |
 
 ### *-navigation 模块
@@ -156,9 +156,10 @@ MyApplication
 - 拍照页根据应用级 `OnnxSessionLoadState` 区分“正在加载 ONNX”和“正在启动相机分析”，避免相机预览重建时误报模型重新加载。
 - `CameraV2OnnxAnalyzer` 约定加载 assets 中的 YOLO 检测、可选 YOLO Seg 和 RTMPose WholeBody ONNX 模型；Seg 缺失时退化为 person box 包裹，WholeBody 缺失或姿态不可靠时显示可恢复提示并继续绘制汉服 3D 构图占位。`yolov8n-pose.onnx` 与旧解析代码保留，但不再参与当前业务。
 - `CameraV2CompositionEngine` 根据场景类别、亮度、人物框、障碍物和候选站位输出构图建议。
-- `VirtualHumanProjector` 根据传入身高体重、pose 模板、RTMPose WholeBody 133 点和人物轮廓生成线条式伪 3D 虚拟人像；全部高置信度节点参与内轮廓与逐点绘制。
-- RTMPose 缺失或身体锚点不可靠时，虚拟人像回退为可缩放的汉服女性虚线模板；人物分割仅作为可选外轮廓增强。
-- `CameraV2Overlay` 在预览上使用 Compose `Canvas` 按深度绘制 3D 虚拟人像、人物外轮廓虚线、人物内轮廓虚线和移动提示。
+- `TargetPoseLibrary` 内置 24 套自建“自然易模仿”的完整 COCO-WholeBody 133 点目标 Pose（身体、脚、脸和双手），并按严格索引自动生成左右镜像；`PoseRecommendationEngine` 按场景构图自动推荐，用户可在同场景候选中切换。
+- `VirtualHumanProjector` 根据传入身高体重和固定目标 Pose 生成实体化 2.5D 虚拟人（身体、发型、脸、手掌、四肢和鞋部的程序化填充、明暗与深度）；133 点细节以低透明度叠加，RTMPose WholeBody 133 点仅作为用户实时轮廓、节点绘制和 `PoseAlignmentEngine` 对齐反馈数据，不改变目标姿势。
+- RTMPose 缺失或身体锚点不可靠时，页面仍显示目标虚拟人和构图说明，仅隐藏实时对齐反馈；人物分割仅作为可选外轮廓增强。
+- `CameraV2Overlay` 在预览上使用 Compose `Canvas` 按深度绘制半透明 2.5D 虚拟人像、低透明度目标 133 点细节、人物外轮廓虚线、用户实时内轮廓和移动提示。
 - 进入“相机”Tab 后，主导航中当前选中的“相机”Tab 显示为带蓝色背景的“拍摄”，点击后使用 CameraX `ImageCapture` 拍照，并通过 `MediaStore` 保存到系统相册；离开相机 Tab 后立即恢复无蓝色背景的“相机”导航项。预览内保留身高体重与保存结果提示，但不再提供独立拍摄按钮。
 
 ONNX v2 相机构图功能的详细设计、数据流、模型来源和扩展方向见 `docs/FEATURE_CAMERA_PYTORCH_V2.md`。上一版 ONNX 方案见 `docs/FEATURE_CAMERA_PYTORCH.md`，旧 ML Kit 方案见 `docs/CAMERA_COMPOSITION_GUIDE.md`。后续拍照保存、滤镜或自定义模型能力应优先在 `feature-camera-pytorch-v2` 内实现。

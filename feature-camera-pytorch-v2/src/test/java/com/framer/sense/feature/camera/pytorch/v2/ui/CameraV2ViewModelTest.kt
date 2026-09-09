@@ -66,4 +66,29 @@ class CameraV2ViewModelTest {
 
         assertEquals(OnnxSessionLoadState.LOADING, viewModel.state.value.onnxLoadState)
     }
+
+    @Test
+    fun nextTargetPose_cyclesCompatibleCandidatesAndLocksSelection() {
+        val viewModel = CameraV2ViewModel()
+        val guide = CameraV2CompositionEngine().buildGuide(
+            CameraV2Analysis(
+                people = emptyList(),
+                objects = emptyList(),
+                personSegments = emptyList(),
+                pose = PoseEstimate.Empty,
+                semanticScene = SemanticScene("street", SceneGroup.URBAN, 0.9f),
+                luminance = 128.0,
+                modelAvailability = ModelAvailability(true, false, wholeBodyPoseReady = true)
+            ),
+            BodyProfile(170, 60)
+        )
+        viewModel.onIntent(CameraV2Intent.GuideProduced(guide))
+        val firstId = viewModel.state.value.guide.targetPose?.id
+
+        viewModel.onIntent(CameraV2Intent.NextTargetPose)
+
+        assertTrue(viewModel.state.value.guide.isPoseSelectionLocked)
+        assertTrue(viewModel.state.value.guide.targetPose?.id != firstId)
+        assertTrue(viewModel.state.value.guide.targetPose in viewModel.state.value.guide.poseCandidates)
+    }
 }

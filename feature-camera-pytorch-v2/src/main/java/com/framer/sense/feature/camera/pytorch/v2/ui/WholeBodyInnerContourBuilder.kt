@@ -2,6 +2,13 @@ package com.framer.sense.feature.camera.pytorch.v2.ui
 
 internal object WholeBodyInnerContourBuilder {
 
+    /** 目标模板也使用与实时 RTMPose 相同的 133 点语义拓扑。 */
+    fun points(targetPose: TargetPose, bounds: V2Rect, profile: BodyProfile): List<V2Point> =
+        points(targetPose.projectedWholeBodyPose(bounds, profile))
+
+    fun build(targetPose: TargetPose, bounds: V2Rect, profile: BodyProfile): List<VirtualHumanLine> =
+        build(targetPose.projectedWholeBodyPose(bounds, profile))
+
     /** 返回全部通过置信度筛选的 WholeBody 节点，供覆盖层逐点绘制。 */
     fun points(pose: WholeBodyPoseEstimate): List<V2Point> =
         if (pose.confidence < POSE_CONFIDENCE_THRESHOLD) {

@@ -34,6 +34,8 @@ class VirtualHumanProjector {
         profile: BodyProfile,
         // 没有真实姿态可用时使用的姿态模板。
         template: PoseTemplate,
+        // 场景推荐出的固定目标姿势；存在时它始终决定虚拟人骨架，实时姿势只用于轮廓和反馈。
+        targetPose: TargetPose? = null,
         // WholeBody 输出的 133 点姿态，默认为空。
         wholeBodyPose: WholeBodyPoseEstimate = WholeBodyPoseEstimate.Empty,
         // 人体分割轮廓点，默认没有。
@@ -71,8 +73,8 @@ class VirtualHumanProjector {
 
         // 仅在身体锚点可靠时使用 RTMPose；否则完整退回汉服构图引导。
         val wholeBodyGuidePose = wholeBodyPose.takeIf { it.isReliableForGuide() } ?: WholeBodyPoseEstimate.Empty
-        // 构造虚拟人的 3D 姿态点；优先使用 RTMPose 身体点，不可用时使用模板点。
-        val posePoints: PosePointSet = buildPosePoints(template, profile, wholeBodyGuidePose, bounds)
+        // 构造虚拟人的 3D 姿态点；有目标姿势时绝不被实时 RTMPose 替换。
+        val posePoints: PosePointSet = buildPosePoints(template, profile, targetPose, wholeBodyGuidePose, bounds)
         // 把 3D 姿态点投影成 2D 画面点。
         val projected = posePoints.points.mapValues { (_, point) ->
             // 将一个 3D 关节点投影到归一化屏幕坐标。
@@ -109,7 +111,7 @@ class VirtualHumanProjector {
             // 必须有关键点，只有置信度没有点也不能构成轮廓。
             wholeBodyGuidePose.keypoints.isNotEmpty()
         // 判断是否使用汉服引导模板。
-        val useHanfuGuide = !posePoints.poseDriven &&
+        val useHanfuGuide = targetPose == null && !posePoints.poseDriven &&
             // 没有分割轮廓时才需要汉服兜底轮廓。
             contourPathPoints.isEmpty() &&
             // 没有 WholeBody 轮廓时才画汉服模板。
@@ -122,6 +124,10 @@ class VirtualHumanProjector {
             // 非汉服模板直接使用人物框。
             bounds
         }
+        // 有固定目标 Pose 时生成实体化虚拟人；它只读取目标模板，绝不读取用户的实时关键点。
+        val volumetricAvatar = targetPose?.let {
+            WholeBodyAvatarBuilder.build(it, bounds, profile)
+        }
 
         // 返回 UI 绘制所需的完整虚拟人数据。
         return VirtualHumanFigure(
@@ -129,12 +135,18 @@ class VirtualHumanProjector {
             bounds = visualBounds,
             // 当前使用的姿态模板。
             template = template,
+            // 记录固定目标姿势，供 UI 展示名称和调试/测试使用。
+            targetPoseId = targetPose?.id,
+            targetPoseTitle = targetPose?.title,
             // 只有真实姿态驱动时才输出骨架线；模板汉服状态不画骨架。
             lines = if (posePoints.poseDriven) lines else emptyList(),
             // 用 WholeBody 关键点构造内部人体轮廓线。
             innerContourLines = WholeBodyInnerContourBuilder.build(wholeBodyGuidePose),
             // 每个高置信度 WholeBody 点均输出给覆盖层，保证 133 点全量参与引导绘制。
             innerContourPoints = WholeBodyInnerContourBuilder.points(wholeBodyGuidePose),
+            // 目标虚拟人使用完整 WholeBody 语义拓扑，而不是只有 14 条骨架锚点。
+            targetContourLines = targetPose?.let { WholeBodyInnerContourBuilder.build(it, bounds, profile) }.orEmpty(),
+            targetContourPoints = targetPose?.let { WholeBodyInnerContourBuilder.points(it, bounds, profile) }.orEmpty(),
             // 头部中心优先使用投影出来的 HEAD 点，否则按边界框顶部估算。
             headCenter = projected[Joint.HEAD] ?: V2Point(visualBounds.centerX, visualBounds.top + visualBounds.height * 0.10f),
             // 如果允许画头部，半径按可视宽度比例计算，并设置最小值。
@@ -146,7 +158,10 @@ class VirtualHumanProjector {
             // 标记当前虚拟人是否由真实 pose 驱动。
             poseDriven = posePoints.poseDriven,
             // 决定 overlay 使用汉服路径绘制还是骨架绘制。
-            visualStyle = if (useHanfuGuide) {
+            visualStyle = if (volumetricAvatar != null) {
+                // 目标 Pose 使用有体积、光影和透视层次的虚拟人。
+                VirtualHumanVisualStyle.VOLUMETRIC_AVATAR
+            } else if (useHanfuGuide) {
                 // 汉服虚线引导样式。
                 VirtualHumanVisualStyle.HANFU_GUIDE
             } else {
@@ -154,7 +169,8 @@ class VirtualHumanProjector {
                 VirtualHumanVisualStyle.SKELETON
             },
             // 汉服样式时生成装饰路径，否则没有装饰路径。
-            decorativePaths = if (useHanfuGuide) buildHanfuGuidePaths(visualBounds) else emptyList()
+            decorativePaths = if (useHanfuGuide) buildHanfuGuidePaths(visualBounds) else emptyList(),
+            volumetricAvatar = volumetricAvatar
         )
     }
 
@@ -403,11 +419,20 @@ class VirtualHumanProjector {
         template: PoseTemplate,
         // 体型配置，用于模板姿态宽度和高度比例。
         profile: BodyProfile,
+        // 场景推荐的目标姿势，优先级高于实时姿势。
+        targetPose: TargetPose?,
         // RTMPose 识别到的真实 133 点姿态。
         wholeBodyPose: WholeBodyPoseEstimate,
         // 当前虚拟人边界框，用于把真实 pose 转换到局部坐标。
         bounds: V2Rect
     ): PosePointSet {
+        if (targetPose != null) {
+            return PosePointSet(
+                points = targetPose.toProjectorSkeleton(profile),
+                drawHead = true,
+                poseDriven = true
+            )
+        }
         // 尝试从 RTMPose 身体点构造姿态点。
         val posePoints = buildPoseAwarePoints(wholeBodyPose, bounds)
         // 如果真实 pose 不可用，就使用模板姿态点。
@@ -617,6 +642,28 @@ class VirtualHumanProjector {
         return point(WholeBodyKeypointIndex.LEFT_SHOULDER) != null &&
             point(WholeBodyKeypointIndex.RIGHT_SHOULDER) != null &&
             bodyPoints.size >= MIN_KEYPOINTS_FOR_POSE
+    }
+
+    private fun TargetPose.toProjectorSkeleton(profile: BodyProfile): Map<Joint, Point3> {
+        fun point(index: Int) = this.point(index).let { Point3(it.x * profile.widthScale, it.y, it.z) }
+        val leftShoulder = point(WholeBodyKeypointIndex.LEFT_SHOULDER)
+        val rightShoulder = point(WholeBodyKeypointIndex.RIGHT_SHOULDER)
+        return mapOf(
+            Joint.HEAD to point(WholeBodyKeypointIndex.NOSE),
+            Joint.NECK to Point3((leftShoulder.x + rightShoulder.x) / 2f, (leftShoulder.y + rightShoulder.y) / 2f - 0.05f, (leftShoulder.z + rightShoulder.z) / 2f),
+            Joint.LEFT_SHOULDER to leftShoulder,
+            Joint.RIGHT_SHOULDER to rightShoulder,
+            Joint.LEFT_ELBOW to point(WholeBodyKeypointIndex.LEFT_ELBOW),
+            Joint.RIGHT_ELBOW to point(WholeBodyKeypointIndex.RIGHT_ELBOW),
+            Joint.LEFT_HAND to point(WholeBodyKeypointIndex.LEFT_WRIST),
+            Joint.RIGHT_HAND to point(WholeBodyKeypointIndex.RIGHT_WRIST),
+            Joint.LEFT_HIP to point(WholeBodyKeypointIndex.LEFT_HIP),
+            Joint.RIGHT_HIP to point(WholeBodyKeypointIndex.RIGHT_HIP),
+            Joint.LEFT_KNEE to point(WholeBodyKeypointIndex.LEFT_KNEE),
+            Joint.RIGHT_KNEE to point(WholeBodyKeypointIndex.RIGHT_KNEE),
+            Joint.LEFT_FOOT to point(WholeBodyKeypointIndex.LEFT_ANKLE),
+            Joint.RIGHT_FOOT to point(WholeBodyKeypointIndex.RIGHT_ANKLE)
+        )
     }
 
     // 把内部 3D 点投影到 2D 画面坐标。

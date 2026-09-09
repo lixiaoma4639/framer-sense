@@ -5,8 +5,8 @@ package com.framer.sense.feature.camera.pytorch.v2.ui
 class CameraV2CompositionEngine(
     // 虚拟人投影器，负责根据目标区域、姿态模板和真实姿态生成屏幕上的虚拟人形。
     private val projector: VirtualHumanProjector = VirtualHumanProjector(),
-    // 姿态模板选择器，负责根据真实姿态和场景类型选择站姿、走姿等模板。
-    private val poseTemplateSelector: PoseTemplateSelector = PoseTemplateSelector()
+    private val poseRecommendationEngine: PoseRecommendationEngine = PoseRecommendationEngine(),
+    private val poseAlignmentEngine: PoseAlignmentEngine = PoseAlignmentEngine()
 ) {
 
     // 根据一帧相机分析结果和用户体型配置，生成当前帧的构图引导。
@@ -17,33 +17,32 @@ class CameraV2CompositionEngine(
         profile: BodyProfile
     ): CameraV2Guide {
         // 先从场景和遮挡信息中选择一个推荐站位区域。
-        val targetBounds = chooseTargetBounds(analysis)
-        // 根据当前人体姿态和语义场景选择虚拟人的姿态模板。
-        val template = poseTemplateSelector.select(analysis.wholeBodyPose, analysis.semanticScene)
+        val compositionBounds = chooseTargetBounds(analysis)
+        // 推荐固定目标 Pose，不以当前用户动作决定虚拟人的姿势。
+        val poseRecommendation = poseRecommendationEngine.recommend(analysis.semanticScene)
+        val targetBounds = compositionBounds.forPoseCategory(poseRecommendation.targetPose.category)
+        // 兼容旧图形字段；实际骨架由 targetPose 决定。
+        val template = poseRecommendation.targetPose.toLegacyTemplate()
         // 从检测到的人体框中选出主要人物，面积和置信度乘积越大越可信。
         val primaryPerson = analysis.people.maxByOrNull { it.bounds.area * it.confidence }
         // 从人体分割结果中选出主要人体轮廓，同样优先面积大且置信度高的结果。
         val primarySegment = analysis.personSegments.maxByOrNull { it.bounds.area * it.confidence }
         // 虚拟人叠加区域优先使用分割框，因为分割边界通常比检测框更贴合人体。
-        val humanOverlayBounds: V2Rect = primarySegment?.bounds
-            // 没有分割时，使用人体检测框并结合姿态关键点向外扩展，避免手脚被框外截断。
-            ?: primaryPerson?.bounds?.expandedWithWholeBodyPose(analysis.wholeBodyPose)
-            // 没有检测到人时，退回使用推荐站位区域，让虚拟人继续提供构图参考。
-            ?: targetBounds
-        // 根据人体区域、体型、姿态模板和真实关键点生成虚拟人图形。
+        // 目标虚拟人永远落在推荐构图框；实时人物仅作为轮廓与对齐观察数据。
         val figure = projector.project(
             // 虚拟人应该落入或贴合的目标区域。
-            targetBounds = humanOverlayBounds,
+            targetBounds = targetBounds,
             // 用户体型参数。
             profile = profile,
             // 当前场景下选中的姿态模板。
             template = template,
+            targetPose = poseRecommendation.targetPose,
             // whole-body 模型产生的 133 点姿态。
             wholeBodyPose = analysis.wholeBodyPose,
             // 人体分割轮廓点，用于更贴合真实人体边缘绘制。
             contourPathPoints = primarySegment?.contour.orEmpty(),
-            // 有真实人体或分割结果时，让虚拟人尽量匹配真实人体框；没人时则使用引导框。
-            matchTargetBounds = primarySegment != null || primaryPerson != null
+            // 固定目标框不能随用户实时人体框跳动。
+            matchTargetBounds = false
         )
 
         // 如果必要模型资源还没准备好，优先提示模型资源缺失，不继续做普通构图判断。
@@ -345,9 +344,10 @@ class CameraV2CompositionEngine(
         analysis: CameraV2Analysis,
         // 当前帧虚拟人图形。
         figure: VirtualHumanFigure
-    ): CameraV2Guide =
-        // 将分析结果和构图判断汇总成 UI 状态对象。
-        CameraV2Guide(
+    ): CameraV2Guide {
+        val recommendation = poseRecommendationEngine.recommend(analysis.semanticScene)
+        val feedback = poseAlignmentEngine.evaluate(analysis.wholeBodyPose, recommendation.targetPose)
+        return CameraV2Guide(
             // 目标区域。
             targetBounds = targetBounds,
             // 构图质量。
@@ -363,8 +363,24 @@ class CameraV2CompositionEngine(
             // 模型可用性。
             modelAvailability = analysis.modelAvailability,
             // 当前帧宽高比。
-            frameAspectRatio = analysis.frameAspectRatio
+            frameAspectRatio = analysis.frameAspectRatio,
+            targetPose = recommendation.targetPose,
+            poseCandidates = recommendation.candidates,
+            alignmentFeedback = feedback,
+            wholeBodyPose = analysis.wholeBodyPose
         )
+    }
+
+    private fun V2Rect.forPoseCategory(category: TargetPoseCategory): V2Rect = when (category) {
+        TargetPoseCategory.FULL_BODY -> this
+        TargetPoseCategory.HALF_BODY -> V2Rect(left, top + height * 0.12f, right, bottom - height * 0.23f)
+        TargetPoseCategory.CLOSE_UP -> V2Rect(left + width * 0.08f, top + height * 0.10f, right - width * 0.08f, top + height * 0.56f)
+    }
+
+    private fun TargetPose.toLegacyTemplate(): PoseTemplate = when (category) {
+        TargetPoseCategory.FULL_BODY -> PoseTemplate.WALKING
+        TargetPoseCategory.HALF_BODY, TargetPoseCategory.CLOSE_UP -> PoseTemplate.SIDE_STANCE
+    }
 
     // 构图引擎内部常量。
     private companion object {
