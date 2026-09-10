@@ -64,9 +64,9 @@ data object Scan : MyModelNavKey
 ### 拍照
 
 - 入口：`CameraScreen()`
-- 当前入口来自 `feature-camera-pytorch-v2`，为 CameraX + ONNX Runtime 3D 构图引导页，显示实时相机预览、线条式 3D 虚拟人像、推荐构图区域、移动提示和拍摄按钮。
+- 当前入口来自 `feature-camera-vlm`，为 CameraX 冻结画面、VLM 导演和 Filament 人偶方案页；主导航使用 `VlmCaptureAction`，冻结、生成和修改期间禁止拍摄且不排队补拍。
 - 点击拍摄后，照片会保存到系统相册。
-- 详细实现见 `docs/FEATURE_CAMERA_PYTORCH_V2.md`；上一版 ONNX 方案见 `docs/FEATURE_CAMERA_PYTORCH.md`，旧 ML Kit 方案见 `docs/CAMERA_COMPOSITION_GUIDE.md`。
+- 当前实现见 `docs/FEATURE_CAMERA_VLM.md`；保留的 ONNX v2 方案见 `docs/FEATURE_CAMERA_PYTORCH_V2.md`，上一版 ONNX 方案见 `docs/FEATURE_CAMERA_PYTORCH.md`，旧 ML Kit 方案见 `docs/CAMERA_COMPOSITION_GUIDE.md`。
 
 ### 我的
 

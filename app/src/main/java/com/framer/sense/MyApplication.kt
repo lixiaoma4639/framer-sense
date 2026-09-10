@@ -17,14 +17,9 @@
 package com.framer.sense
 
 import android.app.Application
-import com.framer.sense.feature.camera.pytorch.v2.ui.CameraV2OnnxSessionManager
 import dagger.hilt.android.HiltAndroidApp
 
 @HiltAndroidApp
 class MyApplication : Application() {
 
-    override fun onCreate() {
-        super.onCreate()
-        CameraV2OnnxSessionManager.preload(this)
-    }
 }

@@ -85,7 +85,7 @@ dependencies {
 
     implementation(project(":core-ui"))
     implementation(project(":feature-home"))
-    implementation(project(":feature-camera-pytorch-v2"))
+    implementation(project(":feature-camera-vlm"))
     implementation(project(":feature-mymodel"))
     implementation(project(":feature-mymodel-navigation"))
 

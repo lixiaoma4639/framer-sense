@@ -1,0 +1,1 @@
+-keep class com.framer.sense.feature.camera.vlm.data.MnnNative { *; }

@@ -30,7 +30,7 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import com.framer.sense.core.ui.MyApplicationTheme
-import com.framer.sense.feature.camera.pytorch.v2.ui.CameraV2CaptureAction
+import com.framer.sense.feature.camera.vlm.ui.VlmCaptureAction
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Column
 import androidx.compose.material3.Text
@@ -169,22 +169,6 @@ class NavigationTest {
     }
 
     @Test
-    fun defaultCameraTabContent_usesCameraV2Screen() {
-        composeTestRule.setContent {
-            MyApplicationTheme {
-                MainNavigationContent(
-                    uiState = MainNavigationUiState(selectedTab = BottomNavTab.CAMERA),
-                    onTabSelected = {},
-                    homeContent = { Text("推荐") },
-                    myModelContent = { _, _, _ -> Text("用户名称") }
-                )
-            }
-        }
-
-        composeTestRule.onNodeWithText("AI 3D 构图引导 V2").assertIsDisplayed()
-    }
-
-    @Test
     fun clickCameraTab_cameraTabBecomesSelected() {
         // 点击拍照 Tab 后，该 Tab 应被选中，首页不再被选中
         composeTestRule.onNodeWithTag("bottom_tab_CAMERA").performClick()
@@ -219,7 +203,7 @@ class NavigationTest {
                     cameraContent = { onCaptureActionChanged ->
                         LaunchedEffect(Unit) {
                             onCaptureActionChanged(
-                                CameraV2CaptureAction(
+                                VlmCaptureAction(
                                     onClick = { captureCount.value++ },
                                     enabled = true
                                 )
@@ -246,8 +230,9 @@ class NavigationTest {
         composeTestRule.runOnIdle { assertEquals(2, captureCount.value) }
     }
 
+    /** 拍摄回调尚未准备好时丢弃点击，不在相机恢复后补拍；无参数。 */
     @Test
-    fun selectedCameraTab_clickBeforeCaptureActionReady_runsWhenActionArrives() {
+    fun selectedCameraTab_clickBeforeCaptureActionReady_doesNotQueueCapture() {
         val publishCaptureAction = mutableStateOf(false)
         val captureCount = mutableStateOf(0)
 
@@ -262,7 +247,7 @@ class NavigationTest {
                         if (publishCaptureAction.value) {
                             LaunchedEffect(Unit) {
                                 onCaptureActionChanged(
-                                    CameraV2CaptureAction(
+                                    VlmCaptureAction(
                                         onClick = { captureCount.value++ },
                                         enabled = true
                                     )
@@ -285,7 +270,7 @@ class NavigationTest {
             assertEquals(0, captureCount.value)
             publishCaptureAction.value = true
         }
-        composeTestRule.runOnIdle { assertEquals(1, captureCount.value) }
+        composeTestRule.runOnIdle { assertEquals(0, captureCount.value) }
     }
 
     @Test

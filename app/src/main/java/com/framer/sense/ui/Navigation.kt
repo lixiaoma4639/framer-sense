@@ -72,8 +72,8 @@ import androidx.navigation3.runtime.entryProvider
 import androidx.navigation3.runtime.rememberNavBackStack
 import androidx.navigation3.runtime.rememberSaveableStateHolderNavEntryDecorator
 import androidx.navigation3.ui.NavDisplay
-import com.framer.sense.feature.camera.pytorch.v2.ui.CameraScreen
-import com.framer.sense.feature.camera.pytorch.v2.ui.CameraV2CaptureAction
+import com.framer.sense.feature.camera.vlm.ui.VlmCameraScreen
+import com.framer.sense.feature.camera.vlm.ui.VlmCaptureAction
 import com.framer.sense.feature.home.ui.HomeScreen
 import com.framer.sense.feature.mymodel.navigation.Main
 import com.framer.sense.feature.mymodel.navigation.Messages
@@ -119,8 +119,8 @@ internal fun MainNavigationContent(
     uiState: MainNavigationUiState,
     onTabSelected: (BottomNavTab) -> Unit,
     homeContent: @Composable () -> Unit = { HomeScreen() },
-    cameraContent: @Composable ((CameraV2CaptureAction?) -> Unit) -> Unit = { onCaptureActionChanged ->
-        CameraScreen(onCaptureActionChanged = onCaptureActionChanged)
+    cameraContent: @Composable ((VlmCaptureAction?) -> Unit) -> Unit = { onCaptureActionChanged ->
+        VlmCameraScreen(onCaptureActionChanged = onCaptureActionChanged)
     },
     myModelContent: @Composable (
         onSettingsClick: () -> Unit,
@@ -150,16 +150,14 @@ internal fun MainNavigationContent(
     val myModelBackStack = rememberNavBackStack(Main)
     val layoutDirection = LocalLayoutDirection.current
     val currentUiState by rememberUpdatedState(uiState)
-    var cameraCaptureAction by remember { mutableStateOf<CameraV2CaptureAction?>(null) }
+    var cameraCaptureAction by remember { mutableStateOf<VlmCaptureAction?>(null) }
     val currentCameraCaptureAction by rememberUpdatedState(cameraCaptureAction)
-    var pendingCameraCaptureClick by remember { mutableStateOf(false) }
     val showCameraSideNavigation =
         uiState.showBottomBar && uiState.selectedTab == BottomNavTab.CAMERA && isLandscape
 
     LaunchedEffect(uiState.selectedTab) {
         if (uiState.selectedTab != BottomNavTab.CAMERA) {
             cameraCaptureAction = null
-            pendingCameraCaptureClick = false
         }
     }
 
@@ -180,23 +178,17 @@ internal fun MainNavigationContent(
         if (tab == BottomNavTab.CAMERA && latestUiState.selectedTab == BottomNavTab.CAMERA) {
             if (latestCaptureAction?.enabled == true) {
                 latestCaptureAction.onClick()
-            } else {
-                pendingCameraCaptureClick = true
             }
             return
         }
 
-        pendingCameraCaptureClick = false
         cameraCaptureAction = null
         onTabSelected(tab)
     }
 
-    fun onCameraCaptureActionChanged(action: CameraV2CaptureAction?) {
+    /** 更新拍摄入口；action 为当前能力或离开页面时的 null，不补执行历史点击。 */
+    fun onCameraCaptureActionChanged(action: VlmCaptureAction?) {
         cameraCaptureAction = action
-        if (pendingCameraCaptureClick && action?.enabled == true) {
-            pendingCameraCaptureClick = false
-            action.onClick()
-        }
     }
 
     Box(modifier = modifier.fillMaxSize()) {
@@ -268,7 +260,7 @@ internal fun MainNavigationContent(
 @Composable
 private fun BottomNavigationBar(
     selectedTab: BottomNavTab,
-    cameraCaptureAction: CameraV2CaptureAction?,
+    cameraCaptureAction: VlmCaptureAction?,
     onTabClick: (BottomNavTab) -> Unit
 ) {
     NavigationBar(
@@ -310,7 +302,7 @@ private fun BottomNavigationBar(
 @Composable
 private fun CameraLandscapeNavigationRail(
     selectedTab: BottomNavTab,
-    cameraCaptureAction: CameraV2CaptureAction?,
+    cameraCaptureAction: VlmCaptureAction?,
     onTabClick: (BottomNavTab) -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -361,10 +353,10 @@ private fun BottomNavTab.isCaptureAction(selectedTab: BottomNavTab): Boolean =
 
 private fun BottomNavTab.isEnabled(
     selectedTab: BottomNavTab,
-    cameraCaptureAction: CameraV2CaptureAction?
+    cameraCaptureAction: VlmCaptureAction?
 ): Boolean =
     this != BottomNavTab.CAMERA || selectedTab != BottomNavTab.CAMERA ||
-        cameraCaptureAction?.enabled != false
+        cameraCaptureAction?.enabled == true
 
 @Composable
 private fun CaptureActionContent(icon: ImageVector) {
@@ -414,8 +406,8 @@ private fun MainNavigationDestination(
     selectedTab: BottomNavTab,
     tabStateHolder: SaveableStateHolder,
     homeContent: @Composable () -> Unit,
-    cameraContent: @Composable ((CameraV2CaptureAction?) -> Unit) -> Unit,
-    onCaptureActionChanged: (CameraV2CaptureAction?) -> Unit,
+    cameraContent: @Composable ((VlmCaptureAction?) -> Unit) -> Unit,
+    onCaptureActionChanged: (VlmCaptureAction?) -> Unit,
     myModelContent: @Composable (
         onSettingsClick: () -> Unit,
         onMessagesClick: () -> Unit,

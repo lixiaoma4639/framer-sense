@@ -17,7 +17,7 @@ Framer_Sense 是一个基于 Android 官方多模块架构模板演进而来的 
 | 异步与状态 | Kotlin Coroutines、Flow、Lifecycle Compose |
 | 导航 | 底部导航状态切换、Navigation3 模板能力保留 |
 | 图片加载 | Coil 3 |
-| 相机与端侧 AI | CameraX、ONNX Runtime、YOLO/YOLO Pose/YOLO Seg/可选 WholeBody Landmark ONNX 约定模型、旧 ONNX 与 ML Kit 方案保留 |
+| 相机与端侧 AI | CameraX、MNN 3.6.1 离线 VLM、云端导演网关、Filament 1.76.0；旧 ONNX 与 ML Kit 方案保留 |
 | 测试 | JUnit、Compose UI Test、Android Instrumented Test、Hilt Test |
 
 当前源码基准包名和 app `applicationId` 为 `com.framer.sense`。各 module 的 Gradle `namespace` 默认以 `com.framer.sense` 为前缀，并按模块边界追加 `core.*`、`feature.*`、`test.*` 等后缀。
@@ -25,7 +25,7 @@ Framer_Sense 是一个基于 Android 官方多模块架构模板演进而来的 
 当前应用主体验是一个三栏导航 App；拍照 Tab 在横屏时改用右侧竖向导航栏，其余状态保持底部导航：
 
 - 首页：推荐流和系统相册。
-- 拍照：CameraX 实时预览、ONNX Runtime 端侧 3D 构图引导和拍摄保存到系统相册。
+- 拍照：CameraX 冻结构图、离线/云端 VLM 导演、程序化 3D 人偶参考和系统相册保存。
 - 我的：个人主页、内容 Tab、扫一扫说明页、消息列表页和设置页。
 
 拍照模块当前按 MVI 组织：Composable 负责渲染状态、转发 Intent 和执行一次性 Effect，ViewModel 负责状态归约。非拍照模块当前按 MVVM 组织：Composable 负责渲染和事件转发，ViewModel 持有页面 UI 状态。模板中的 MyModel Repository/Room 数据层仍保留在 `core-data`、`core-database`，但不再接入底部导航中的“我的”主页。
@@ -63,8 +63,13 @@ Framer_Sense 是一个基于 Android 官方多模块架构模板演进而来的 
 | `feature-home` | 首页模块，包含推荐流和相册页面；首页 Tab、推荐流、相册读取分别由对应 ViewModel 管理状态。 |
 | `feature-camera` | 旧 ML Kit 拍照模块，包含 CameraX 预览、ML Kit 画面分析、构图引导虚线覆盖层、拍摄保存和相机权限 UI；当前不再作为 app 拍照入口。 |
 | `feature-camera-pytorch` | 上一版 ONNX 拍照模块，包含 CameraX 预览、ONNX Runtime SSD MobileNet 端侧检测、构图引导虚线覆盖层、拍摄保存和相机权限 UI；当前不再作为 app 拍照入口。 |
-| `feature-camera-pytorch-v2` | 当前拍照入口模块，包含 CameraX 预览、ONNX Runtime YOLO/YOLO Pose/可选 YOLO Seg/可选 WholeBody Landmark 约定模型加载、基于物体检测的场景推断、场景构图评分、线条式 3D 虚拟人像覆盖层、拍摄保存和相机权限 UI。 |
+| `feature-camera-pytorch-v2` | 保留的 ONNX v2 模块，当前不再作为 app 拍照入口，包含 CameraX 预览、ONNX Runtime YOLO/YOLO Pose/可选 YOLO Seg/可选 WholeBody Landmark 约定模型加载、基于物体检测的场景推断、场景构图评分、线条式 3D 虚拟人像覆盖层、拍摄保存和相机权限 UI。 |
+| `feature-camera-vlm` | 当前拍照入口，采用 MVI，负责 CameraX 冻结图、VLM 路由与两轮导演、模型 ZIP 导入、MNN JNI 和 Filament 人偶。 |
 | `feature-mymodel` | 我的模块，包含个人主页、扫一扫说明页、消息列表页和设置页；主页资料、内容 Tab、扫一扫说明、消息列表、设置项列表由 ViewModel 管理状态。 |
+
+### services/vlm-gateway
+
+可本地运行的 Python FastAPI 服务，用 HTTPX 适配千问、Seed 2.0、GPT、Gemini；供应商密钥和模型 ID 只在服务端配置。单次请求只做一轮模型决策，不负责会话和自动切换。
 
 ### *-navigation 模块
 
@@ -98,7 +103,7 @@ MyApplication
 | Tab | Composable |
 | --- | --- |
 | 首页 | `HomeScreen()` |
-| 拍照 | `CameraScreen()` |
+| 拍照 | `VlmCameraScreen()` |
 | 我的 | `MyModelMainScreen()` |
 
 当当前 Tab 为“拍照”且设备横屏时，主导航改为屏幕右侧的竖向 `NavigationRail`，相机预览占用左侧剩余区域；三个 Tab 沿右侧高度均匀分布，不使用默认的紧凑连续排列。两个横屏方向均固定在当前界面右侧，图标与文字保持正向。拍照竖屏、首页和“我的”继续使用底部导航。底部导航状态不会因“我的”模块内部页面而移除。当用户进入“我的 -> 扫一扫”“我的 -> 设置”或“我的 -> 消息”页面时，app 层使用 Navigation3 `NavDisplay` 和 `MyModelNavKey` 维护内部返回栈，内部页面作为全屏覆盖层盖住上一页全部内容，物理返回键会从 Navigation3 back stack 返回我的主页。主导航 ViewModel 只管理底部 Tab 状态，Compose 侧使用 `rememberSaveableStateHolder` 保存各 Tab 页面状态。
@@ -143,25 +148,20 @@ MyApplication
 
 ### 拍照页面
 
-`CameraScreen` 当前来自 `feature-camera-pytorch-v2`，是 CameraX + ONNX Runtime 的实时 3D 构图引导页面：
+`VlmCameraScreen` 来自 `feature-camera-vlm`，按 MVI 组织，ViewModel 管理冻结会话、方案版本和异步请求令牌：
 
-- 首次进入先检查 `CAMERA` 权限，未授权时展示权限说明和重新授权按钮。
-- 页面按 MVI 组织，`CameraV2ViewModel` 统一处理 `CameraV2Intent`、归约 `CameraV2State`，并通过 `CameraV2Effect` 触发权限请求等一次性平台动作。
-- 已授权后使用 CameraX `PreviewView` 显示后置摄像头实时预览。
-- 拍照页仅忽略主导航的顶部系统栏内边距，使相机预览延伸至状态栏；首页和“我的”仍保留原有系统栏安全区。
-- 底部导航内容高度为 64dp，并使用紧凑的 20dp 图标、2dp 图文间距和居中小号标签；拍照横屏右侧导航栏宽度为 54dp。系统导航栏安全区保持不变。
-- `ImageAnalysis` 使用 `STRATEGY_KEEP_ONLY_LATEST` 获取实时帧，交给 `CameraV2FrameAnalyzer` 进行端侧分析。
-- `CameraV2FrameAnalyzer` 对实时帧做约 520ms 节流，调用 `CameraV2OnnxAnalyzer` 执行 ONNX 推理。
-- App 启动后会在后台预热四个 ONNX Runtime session；session 在应用进程内共享，拍照 Tab 切换和横竖屏重建只复用已有 session，不重复加载模型。应用进程被系统结束后会在下次启动重新预热。
-- 拍照页根据应用级 `OnnxSessionLoadState` 区分“正在加载 ONNX”和“正在启动相机分析”，避免相机预览重建时误报模型重新加载。
-- `CameraV2OnnxAnalyzer` 约定加载 assets 中的 YOLO 检测、YOLO Pose、可选 YOLO Seg 和可选 RTMPose WholeBody ONNX 模型；Seg 缺失时退化为 person box + pose 包裹，WholeBody 缺失时退化为 YOLO Pose 骨架，基础模型缺失时显示可恢复提示并继续绘制 3D 构图占位。
-- `CameraV2CompositionEngine` 根据场景类别、亮度、人物框、障碍物和候选站位输出构图建议。
-- `VirtualHumanProjector` 根据传入身高体重、pose 模板、可用人体关键点、可选 WholeBody 内轮廓和人物轮廓生成线条式伪 3D 虚拟人像；pose、segmentation 或 WholeBody 不足时按可用能力降级。
-- 缺少可用人体 pose、人物分割轮廓和 WholeBody 内轮廓时，虚拟人像回退为可缩放的汉服女性虚线模板；一旦真实检测结果可用，继续使用对应的现有渲染。
-- `CameraV2Overlay` 在预览上使用 Compose `Canvas` 按深度绘制 3D 虚拟人像、人物外轮廓虚线、人物内轮廓虚线和移动提示。
-- 进入“相机”Tab 后，主导航中当前选中的“相机”Tab 显示为带蓝色背景的“拍摄”，点击后使用 CameraX `ImageCapture` 拍照，并通过 `MediaStore` 保存到系统相册；离开相机 Tab 后立即恢复无蓝色背景的“相机”导航项。预览内保留身高体重与保存结果提示，但不再提供独立拍摄按钮。
+- CameraX 预览和拍照使用同一 ViewPort。冻结独立图像后释放 ImageProxy，模型输入 JPEG 长边最多 768 像素。
+- 流程为实时预览、冻结、生成三方案、选中与拖动/缩放/文字修改、应用参考后恢复实时相机。
+- `DirectorAgent` 最多两次模型决策，使用能力查询、方案校验和实际投影渲染工具；不执行任意代码。
+- 模型设置支持大陆/海外、强制离线/指定云端/自动，以及网关令牌和本地 ZIP 模型导入管理。
+- 大陆自动路由为千问、Seed、离线；海外为 GPT、Gemini、离线。内容拒绝、取消和参数错误不触发自动切换。
+- 首个离线目标为 Qwen3-VL-2B-Instruct 的 MNN 3.6.1 模型包，ARM64 CPU JNI 串行推理；权重不随 APK 打包。
+- Filament 1.76.0 使用球体、椭球和胶囊关节人偶，支持 12 站姿与 4 表情。卡片按需离屏渲染，应用后只叠加屏幕参考，不做真实空间锚定。
+- 保留主导航蓝色“拍摄”和横屏侧栏；冻结、生成、修改和资源管理期间禁止拍摄，不排队补拍。真实照片通过 MediaStore 保存，不合入虚拟人偶。
+- 横竖屏变化保留 ViewModel 会话；进程回收后回到实时相机并提示重新构图。
+- App 不再启动预热 ONNX；旧相机模块和专题文档保留作为历史实现。
 
-ONNX v2 相机构图功能的详细设计、数据流、模型来源和扩展方向见 `docs/FEATURE_CAMERA_PYTORCH_V2.md`。上一版 ONNX 方案见 `docs/FEATURE_CAMERA_PYTORCH.md`，旧 ML Kit 方案见 `docs/CAMERA_COMPOSITION_GUIDE.md`。后续拍照保存、滤镜或自定义模型能力应优先在 `feature-camera-pytorch-v2` 内实现。
+详细接入、模型准备、网关启动、协议和验收说明见 `docs/FEATURE_CAMERA_VLM.md`。本次已编写实现及自动化测试，未运行构建/测试，真实设备与供应商需本地验收。后续拍照功能优先在 `feature-camera-vlm` 内实现。
 
 ### 我的模块
 
@@ -200,21 +200,14 @@ feature-mymodel
 相机构图引导数据流：
 
 ```text
-CameraScreen
-  -> CameraV2Intent
-  -> CameraV2ViewModel
-  -> CameraV2State + CameraV2Effect
-  -> CameraX Preview + ImageAnalysis
-  -> CameraV2FrameAnalyzer
-  -> CameraV2OnnxAnalyzer
-  -> ONNX Runtime YOLO / YOLO Pose / YOLO Seg / WholeBody Landmark
-  -> CameraV2CompositionEngine
-  -> VirtualHumanProjector
-  -> CameraV2Overlay
-
-CameraX ImageCapture
-  -> MediaStore.Images
-  -> 系统相册
+VlmCameraScreen -> VlmIntent -> VlmCameraViewModel -> VlmUiState + VlmEffect
+CameraX ImageCapture -> SnapshotStore -> 冻结 JPEG + 768px 模型图片
+CompositionRepository -> DirectorAgent -> VisionModelProvider
+  -> GatewayProvider -> services/vlm-gateway -> 区域内云端供应商
+  -> MnnProvider -> JNI -> MNN 3.6.1 Omni 视觉编码与生成
+DirectorAgent -> PlanValidator + PreviewStore -> FilamentAvatarRenderer
+  -> 三方案 -> 选中修改 -> 应用倍率与透明人偶参考
+CameraX ImageCapture -> MediaStore.Images -> 系统相册真实照片
 ```
 
 职责边界：
@@ -250,6 +243,9 @@ CameraX ImageCapture
 在项目根目录执行：
 
 ```bash
+# VLM 首次构建前准备固定 MNN 源码，不下载权重
+bash feature-camera-vlm/scripts/prepare_mnn.sh
+
 # 构建 Debug 包
 ./gradlew assembleDebug
 
@@ -261,6 +257,7 @@ CameraX ImageCapture
 ./gradlew :feature-camera:testDebugUnitTest
 ./gradlew :feature-camera-pytorch:testDebugUnitTest
 ./gradlew :feature-camera-pytorch-v2:testDebugUnitTest
+./gradlew :feature-camera-vlm:testDebugUnitTest
 ./gradlew :feature-mymodel:testDebugUnitTest
 ./gradlew :core-data:testDebugUnitTest
 
@@ -278,6 +275,8 @@ CameraX ImageCapture
 当前仓库包含多类测试：
 
 - `core-data`：Repository 单元测试。
+- `feature-camera-vlm`：协议、坐标、区域路由和导演预算单元测试；模型 ZIP 导入、取消/重复点击/进程恢复仪器测试。代码已编写，本次未执行。
+- `services/vlm-gateway`：模拟四家上游及鉴权、拒绝、限流的 pytest 测试。本次未执行。
 - `feature-camera-pytorch-v2`：ONNX 3D 构图规则、3D 人像投影、pose 模板、MVI ViewModel 本地单元测试和拍照页 Compose 仪器测试。
 - `feature-camera-pytorch`：上一版 ONNX 构图规则本地单元测试和拍照页 Compose 仪器测试。
 - `feature-camera`：旧 ML Kit 构图规则本地单元测试和拍照页 Compose 仪器测试。
@@ -297,8 +296,8 @@ CameraX ImageCapture
 - 当前源码中首页支持左右滑动切换；部分旧文档可能仍描述为不支持滑动。
 - 当前首页默认页是 `HomeTab.RECOMMEND`，因为 `HomeTab` 枚举顺序为“推荐、相册”。
 - `core-common`、`core-network`、`feature-home-navigation`、`feature-camera-navigation` 当前更偏预留模块，不应误判为已有完整业务能力。
-- 当前拍照模块依赖相机权限、CameraX、ONNX Runtime 和 v2 约定 ONNX 模型资产；无权限、模型缺失、模型加载失败或无可用后置摄像头时显示可恢复提示。
-- 当前 app 与 `feature-camera-pytorch-v2` 因 `onnxruntime-android:1.26.0` 要求保持 `minSdk = 24`；其他旧模块仍可保持各自 `minSdk = 23`。
+- 当前拍照模块依赖 CameraX、Filament、MNN 源码以及用户导入的离线权重或已配置网关。模型缺失或云端不可用时明确报错，不以生产假方案代替推理。
+- 当前 app 与 VLM 模块保持 `minSdk = 24`；原生离线目标为 ARM64。旧 ONNX v2 模块的 minSdk 约束保持不变。Debug 允许本地 HTTP 网关；Release 要求 HTTPS。
 - 推荐页使用网络图片 URL，网络环境会影响图片加载结果。
 - 相册页依赖系统权限和设备媒体库，测试或演示时可能出现空相册、权限拒绝或加载失败。
 - 旧文档可以保留用于理解演进历史；后续编程优先以本文档和源码为准。
