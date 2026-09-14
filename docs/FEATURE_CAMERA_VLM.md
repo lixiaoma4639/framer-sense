@@ -11,7 +11,7 @@
 1. 执行下方 MNN 源码准备脚本。Android 构建需要本地 Android SDK 36、JDK 17、NDK 和 CMake 3.22.1。首次源码准备和依赖解析需要网络。
 2. 先启动网关，配置至少一个所在区域的图文模型。App 模型设置选择“指定云端”，保存网关地址及**网关访问令牌**。
 3. 本地构建安装 Debug 包。在拍照页面授予相机权限，点击“开始构图”；也可使用 Debug 的“测试图片”入口固定输入。
-4. 确认冻结、三方案、姿态预览和应用流程后，再按下文转换并导入离线模型包，选择“强制离线”进行断网验收。
+4. 确认冻结、三方案、姿态预览和应用流程后，再按下文直接在 App 下载离线模型，选择“强制离线”进行断网验收。
 5. 最后启用“自动切换”，人为关闭首选供应商或模拟限流，检查实际供应商记录。真实模型成功率需人工检查，不能用测试固定结果替代。
 
 ## 目录与责任
@@ -20,7 +20,7 @@
 | --- | --- |
 | `feature-camera-vlm/.../camera` | CameraX 绑定、冻结复制、转正裁剪、JPEG 缩略图、MediaStore 保存 |
 | `.../model` | JSON 协议、坐标换算、模型配置和会话输入 |
-| `.../data` | 网关适配、区域路由、本地 ZIP 导入、MNN 串行推理、加密设置 |
+| `.../data` | 网关适配、区域路由、OkHttp 下载与前台服务、目录/ZIP 导入、MNN 串行推理、加密设置 |
 | `.../agent` | 提示词、结构与几何校验、两轮导演循环、Repository |
 | `.../avatar` | 12 个姿态、4 个表情、父子关节、Filament 按需离屏渲染和合成缓存 |
 | `.../ui` | MVI 状态、Intent、Effect、ViewModel、相机和模型设置面板 |
@@ -98,44 +98,26 @@ bash feature-camera-vlm/scripts/prepare_mnn.sh
 
 CMake 将 MNN 合并构建为共享库，打开 LLM、OpenCV 视觉输入和 IMGCODECS，关闭 HTTP 资源读取及音频。JNI 构建目标为 `arm64-v8a`，使用 CPU 四线程。MNN 原生代码与桥接使用 16 KiB 页对齐链接参数；最终 APK 的所有第三方库与目标设备兼容性仍需本地验证。
 
-### 转换模型
+### App 内直接下载（主要入口）
 
-使用官方 `Qwen/Qwen3-VL-2B-Instruct` 原始权重或可信的、确实由 MNN 3.6.1 转换的对应模型。不要仅修改其他模型清单中的名称。原始权重需自行获取并遵守其许可证。
+1. 在拍照页面打开“模型设置”，找到“Qwen3-VL-2B 离线模型”，点击“下载模型”。无需电脑、Python、ZIP 或自行生成清单。
+2. 默认源为 `https://huggingface.co`，目标仓库为 `taobao-mnn/Qwen3-VL-2B-Instruct-MNN`。大陆连接不稳定时可自行填写兼容 Hub API 的 HTTPS 镜像地址；App 不内置或静默切换第三方镜像。
+3. 默认仅使用非计费网络；允许移动流量等计费网络前需要确认。通知权限拒绝时仍可在 App 内查看进度。
+4. 下载使用 OkHttp 4.12.0 + Kotlin 协程和 `dataSync` 前台服务。获取分页文件清单后固定具体提交，所有文件属于同一版本；跳转由 OkHttp 处理，不允许 HTTPS 降级为 HTTP。
+5. 暂停保留已下载文件，继续或重试复用原始源和版本；取消清理本次未激活文件。修改来源需先取消旧任务。页面重建不重复下载；进程被终止后需用户手动点击继续，系统数据同步预算耗尽也暂停。
+6. 文件分块写入 `noBackupFilesDir/vlm-models`，不载入完整权重。检查剩余空间、文件大小、LFS SHA-256 或普通 Git blob SHA-1；无摘要的条目只检查大小及内容基础特征，不宣称哈希完整性通过。
+7. 下载完成后校验 `config.json` 和所引用配置。相机页面在前台且无构图、拍照或模型管理任务时自动加载；后台完成则返回相机页面后加载。下载成功与原生加载成功是两个不同状态。
+8. 显示“离线模型已加载”后选择“强制离线”，保存设置，再断网进行图片构图验收。下载操作不会替用户改变推理模式。
 
-在工作站按 MNN 3.6.1 导出工具说明准备 PyTorch/Transformers/ONNX 等 Python 环境，以及同版本 `MNNConvert` 或 PyMNN。以下为已按该版本导出 CLI 参数编写的转换示例，**本次没有实际执行模型转换**：
+### 官方目录加载和备用导入
 
-```bash
-python feature-camera-vlm/third_party/MNN/transformers/llm/export/llmexport.py \
-  --path /absolute/path/Qwen3-VL-2B-Instruct \
-  --dst_path /absolute/path/qwen3-vl-2b-mnn \
-  --export mnn --quant_bit 4 --visual_quant_bit 8 \
-  --mnnconvert /absolute/path/MNNConvert
-```
+MNN 使用实际文件系统中的 `config.json` 作为入口，JNI 调用 `Llm::createLLM(configPath)`、`load()`。官方配置不需要添加 `model_type` 或专用 `manifest.json`。保持模型文件的原始目录结构；视觉外置权重也必须完整下载。
 
-导出耗时与内存取决于工作站。不要使用 `--skip_weight`；导出目录必须包含完整视觉模型、语言模型及分词器。必要时先在工作站使用该版本 `llm_demo` 对一张图片验证导出结果，再打包。
+MNN 3.6.1 的 `tie_embeddings` 支持数组和对象：有效配置的 `weight_offset` 非零时从 `llm_weight` 读取共享词嵌入，即使配置含 `embedding_file` 也不必另有该文件；offset 为零或无有效共享配置时仍需独立嵌入文件。CPU、线程和生成预算由现有 JNI 运行时设置，不要求用户修改官方配置。
 
-### 打包与导入
+“导入文件夹”通过系统目录选择器复制官方目录，选择直接包含 `config.json` 的子文件夹；Android 不允许选择部分公共根目录。SAF 的 `content://` 不直接传给 MNN。“导入 ZIP”为备用兼容入口，ZIP 根目录需包含 `config.json`；有旧 `manifest.json` 时额外验证其路径、大小和 SHA-256，无清单的标准目录 ZIP 也可导入。`scripts/package_model.py` 仅保留为可选旧包工具，不是下载或加载的前提。
 
-Python 3.10+，无额外打包脚本依赖：
-
-```bash
-python3 feature-camera-vlm/scripts/package_model.py \
-  /absolute/path/qwen3-vl-2b-mnn \
-  /absolute/path/qwen3-vl-2b-mnn.zip
-```
-
-脚本不改变导出目录，只收录运行所需文件并生成 SHA-256 清单，不包含 ONNX 中间文件或原始 PyTorch 权重。ZIP 根目录包含：
-
-- `manifest.json`：`model=Qwen3-VL-2B-Instruct`、`runtime=MNN-3.6.1`、每个文件的相对路径/大小/SHA-256。
-- `config.json`、`llm_config.json`，后者包含 `model_type=qwen3_vl`、`is_visual=true`。
-- 语言网络与权重，默认 `llm.mnn`、`llm.mnn.weight`。
-- 分词器，支持配置中的 `tokenizer_file`（新导出可能是 `tokenizer.mtok`，旧默认 `tokenizer.txt`）。
-- `visual_model` 对应网络（默认 `visual.mnn`）及存在的独立 `.weight` 文件。
-- 非共享词嵌入时需要 `embedding_file`，默认 `embeddings_bf16.bin`。
-
-首版拒绝外部目录覆盖、临时路径配置、非 CPU 后端及推测解码。标准导出配置可直接使用；如果手工配置过路径，先在导出副本中恢复包内相对路径。
-
-在 App“模型设置 → 导入 ZIP”选择文件。解包到新的私有暂存目录，检查路径穿越、重复路径、最多 4096 项、最多 12 GiB、剩余空间、清单、SHA-256 和视觉配置。全部通过后提交激活指针，再删除旧模型；失败保留旧模型。导入同时保留新旧包，设备应有足够暂存空间，不能只留一个新包的大小。
+导入与下载共用目录校验，不在校验阶段替换当前安装。原生候选加载成功后才提交激活指针并清理旧目录；失败保留旧安装、设置和候选文件供重试。为降低峰值内存，加载新模型前卸载旧句柄，失败后旧模型可在下次推理或手动加载时恢复。文件暂存阶段需要同时容纳新旧安装，另保留至少 64 MiB 空间。加载成功仍不代表真实图文推理已验收。
 
 加载、卸载、删除均通过串行原生执行顺序协调。取消发生在可检查的 token 边界；模型加载和图像预填充期间无法保证即时中断，取消后也不会并发释放句柄。最长输出 4096 token，生成阶段有 120 秒预算，预填充的实际可中断时间取决于 MNN。
 
@@ -175,7 +157,7 @@ Android 不保存供应商 API key，也不写死云端模型 ID。设置中的�
 ./gradlew :app:assembleDebug
 # 协议、路由、导演预算与坐标测试
 ./gradlew :feature-camera-vlm:testDebugUnitTest
-# 包导入、会话门控测试：连接设备后执行
+# 模型下载恢复、导入、加载事务与会话门控测试：连接设备后执行
 ./gradlew :feature-camera-vlm:connectedDebugAndroidTest
 # 主导航不排队补拍回归
 ./gradlew :app:connectedDebugAndroidTest
@@ -183,6 +165,10 @@ Android 不保存供应商 API key，也不写死云端模型 ID。设置中的�
 cd services/vlm-gateway
 python -m pytest tests
 ```
+
+新增自动化测试覆盖：模拟 OkHttp 响应的 Range 续传与重写、分页固定版本、取消 socket、摘要损坏；官方目录共享/独立嵌入、Git blob 摘要、路径和空间检查；进程恢复、重复继续、网络计费门控、取消保留旧安装、模拟原生加载失败和成功提交。测试均仅编写，未运行。
+
+真机另需检查：前后台切换和通知进度、系统终止后继续、计费网络切换暂停、镜像可用性、下载后首次加载与断网图片推理。当前没有真实下载、原生加载或断网推理的验收结论。
 
 设备验收记录至少包含：机型/Android/ABI、模型包与量化设置、实际供应商与模型 ID、冻结到三方案耗时、进程峰值内存、错误与修正记录。建议固定同一古建筑、室内、街景三张图，分别测试离线与所在区域两家云端。
 

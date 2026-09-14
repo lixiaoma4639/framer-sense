@@ -64,7 +64,7 @@ Framer_Sense 是一个基于 Android 官方多模块架构模板演进而来的 
 | `feature-camera` | 旧 ML Kit 拍照模块，包含 CameraX 预览、ML Kit 画面分析、构图引导虚线覆盖层、拍摄保存和相机权限 UI；当前不再作为 app 拍照入口。 |
 | `feature-camera-pytorch` | 上一版 ONNX 拍照模块，包含 CameraX 预览、ONNX Runtime SSD MobileNet 端侧检测、构图引导虚线覆盖层、拍摄保存和相机权限 UI；当前不再作为 app 拍照入口。 |
 | `feature-camera-pytorch-v2` | 保留的 ONNX v2 模块，当前不再作为 app 拍照入口，包含 CameraX 预览、ONNX Runtime YOLO/YOLO Pose/可选 YOLO Seg/可选 WholeBody Landmark 约定模型加载、基于物体检测的场景推断、场景构图评分、线条式 3D 虚拟人像覆盖层、拍摄保存和相机权限 UI。 |
-| `feature-camera-vlm` | 当前拍照入口，采用 MVI，负责 CameraX 冻结图、VLM 路由与两轮导演、模型 ZIP 导入、MNN JNI 和 Filament 人偶。 |
+| `feature-camera-vlm` | 当前拍照入口，采用 MVI，负责 CameraX 冻结图、VLM 路由与两轮导演、App 内模型下载、目录/ZIP 导入、MNN JNI 和 Filament 人偶。 |
 | `feature-mymodel` | 我的模块，包含个人主页、扫一扫说明页、消息列表页和设置页；主页资料、内容 Tab、扫一扫说明、消息列表、设置项列表由 ViewModel 管理状态。 |
 
 ### services/vlm-gateway
@@ -153,7 +153,7 @@ MyApplication
 - CameraX 预览和拍照使用同一 ViewPort。冻结独立图像后释放 ImageProxy，模型输入 JPEG 长边最多 768 像素。
 - 流程为实时预览、冻结、生成三方案、选中与拖动/缩放/文字修改、应用参考后恢复实时相机。
 - `DirectorAgent` 最多两次模型决策，使用能力查询、方案校验和实际投影渲染工具；不执行任意代码。
-- 模型设置支持大陆/海外、强制离线/指定云端/自动，以及网关令牌和本地 ZIP 模型导入管理。
+- 模型设置支持大陆/海外、强制离线/指定云端/自动，以及网关令牌和离线模型管理。离线模型主要通过 OkHttp + 协程直接下载官方 MNN 目录，使用 dataSync 前台服务、固定提交和断点续传；保留目录/ZIP 导入。下载完成后仅在相机前台空闲时加载，原生加载成功才激活。
 - 大陆自动路由为千问、Seed、离线；海外为 GPT、Gemini、离线。内容拒绝、取消和参数错误不触发自动切换。
 - 首个离线目标为 Qwen3-VL-2B-Instruct 的 MNN 3.6.1 模型包，ARM64 CPU JNI 串行推理；权重不随 APK 打包。
 - Filament 1.76.0 使用球体、椭球和胶囊关节人偶，支持 12 站姿与 4 表情。卡片按需离屏渲染，应用后只叠加屏幕参考，不做真实空间锚定。
@@ -227,6 +227,7 @@ CameraX ImageCapture -> MediaStore.Images -> 系统相册真实照片
 
 ## 5. 后续开发约定
 
+- Gradle 插件版本由 Version Catalog 管理，根 `build.gradle.kts` 使用 `apply false` 统一声明公共插件，子模块按需应用，避免 Kotlin 插件被多个子项目重复加载；AGP 9 使用内置 Kotlin，不额外应用 `org.jetbrains.kotlin.android`。
 - 新增用户可见功能时，优先放入对应 `feature-*` 模块。
 - 只有多个模块复用的 UI、工具、数据能力才下沉到 `core-*`。
 - 数据访问应经过 Repository，不要让 Compose 页面直接依赖 DAO 或数据库实体。
@@ -275,7 +276,7 @@ bash feature-camera-vlm/scripts/prepare_mnn.sh
 当前仓库包含多类测试：
 
 - `core-data`：Repository 单元测试。
-- `feature-camera-vlm`：协议、坐标、区域路由和导演预算单元测试；模型 ZIP 导入、取消/重复点击/进程恢复仪器测试。代码已编写，本次未执行。
+- `feature-camera-vlm`：协议、坐标、区域路由和导演预算单元测试；下载续传与校验单元测试；模型导入、加载事务、取消/重复点击/进程恢复仪器测试。代码已编写，本次未执行。
 - `services/vlm-gateway`：模拟四家上游及鉴权、拒绝、限流的 pytest 测试。本次未执行。
 - `feature-camera-pytorch-v2`：ONNX 3D 构图规则、3D 人像投影、pose 模板、MVI ViewModel 本地单元测试和拍照页 Compose 仪器测试。
 - `feature-camera-pytorch`：上一版 ONNX 构图规则本地单元测试和拍照页 Compose 仪器测试。

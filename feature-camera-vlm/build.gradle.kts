@@ -77,11 +77,12 @@ dependencies {
     implementation(libs.androidx.camera.core)
     implementation(libs.androidx.camera.lifecycle)
     implementation(libs.androidx.camera.view)
-    implementation("androidx.exifinterface:exifinterface:1.4.1")
+
+    implementation(libs.androidx.exifinterface)
     implementation(libs.kotlinx.serialization.json)
-    implementation("com.squareup.okhttp3:okhttp:4.12.0")
-    implementation("com.google.android.filament:filament-android:1.76.0")
-    implementation("com.google.android.filament:filamat-android:1.76.0")
+//    implementation(libs.okhttp)
+    implementation(libs.filament.android)
+    implementation(libs.filamat.android)
 
 
     // Hilt Dependency Injection

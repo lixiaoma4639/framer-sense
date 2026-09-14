@@ -17,6 +17,8 @@ import javax.inject.Singleton
 object VlmModule {
     /** 提供模型文件仓库。@param context 应用上下文，避免持有 Activity。 */
     @Provides @Singleton fun modelStore(@ApplicationContext context: Context): LocalModelStore = LocalModelStore(context)
+    /** 提供进程共享下载状态。@param context 应用上下文。@param store 私有模型目录仓库。 */
+    @Provides @Singleton fun downloads(@ApplicationContext context: Context, store: LocalModelStore): ModelDownloadRepository = ModelDownloadRepository(context, store)
     /** 提供安全设置仓库。@param context 应用上下文。 */
     @Provides @Singleton fun settings(@ApplicationContext context: Context): SettingsStore = SettingsStore(context)
     /** 提供冻结图片存储。@param context 应用上下文。 */

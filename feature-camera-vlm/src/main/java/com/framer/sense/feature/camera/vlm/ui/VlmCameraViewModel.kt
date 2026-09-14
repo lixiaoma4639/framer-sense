@@ -1,5 +1,7 @@
 package com.framer.sense.feature.camera.vlm.ui
 
+import com.framer.sense.feature.camera.vlm.R
+import java.io.File
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -22,6 +24,7 @@ class VlmCameraViewModel @Inject constructor(
     private val settingsStore: SettingsStore,
     private val models: LocalModelStore,
     private val local: MnnProvider,
+    private val downloads: ModelDownloadRepository,
     savedStateHandle: SavedStateHandle
 ) : ViewModel() {
     private val _state = MutableStateFlow(VlmUiState(settings = settingsStore.read(), modelStatus = models.description(),
@@ -34,7 +37,61 @@ class VlmCameraViewModel @Inject constructor(
     private var work: Job? = null
     private var renderWork: Job? = null
     private var maintenance: Job? = null
-    init { savedStateHandle["vlm_started"] = true }
+    private var foreground = false
+    private var modelLoaded = false
+    private var attemptedPath: String? = null
+    init {
+        savedStateHandle["vlm_started"] = true
+        viewModelScope.launch { downloads.state.collect { value -> _state.update { it.copy(download = value) } } }
+        viewModelScope.launch { state.collect { maybeAutoLoad() } }
+    }
+
+    /** 前台空闲时自动加载已下载目录；无参数，失败或卸载后不循环重试。 */
+    private fun maybeAutoLoad() {
+        if (!foreground || busy() || downloads.state.value.phase != DownloadPhase.DOWNLOADED) return
+        val dir = models.pendingDirectory() ?: models.activeDirectory() ?: return
+        if (attemptedPath == dir.path) return
+        attemptedPath = dir.path
+        maintain(models.message(R.string.vlm_model_loading)) { loadDirectory(dir) }
+    }
+
+    /** 加载候选或现有安装，加载失败明确保留文件以便重试。
+     * @param dir 已校验模型所在目录。
+     */
+    private suspend fun loadDirectory(dir: File) {
+        modelLoaded = false
+        downloads.loadingState(DownloadPhase.LOADING)
+        try {
+            if (models.activeDirectory() == dir) local.load() else local.install(dir)
+            modelLoaded = true
+            downloads.loadingState(DownloadPhase.READY)
+        } catch (cancel: CancellationException) {
+            withContext(NonCancellable) { downloads.loadingState(DownloadPhase.DOWNLOADED) }
+            throw cancel
+        } catch (error: Exception) {
+            downloads.loadingState(DownloadPhase.LOAD_FAILED, models.message(R.string.vlm_model_load_failed))
+            throw error
+        }
+    }
+
+    /** 导入文件并共用加载流程。@param uri 用户授权文件地址。@param directory 是否为 SAF 文件夹。 */
+    private fun importModel(uri: android.net.Uri, directory: Boolean) {
+        if (downloads.state.value.running) return
+        maintain(models.message(R.string.vlm_model_copying)) {
+            var reported = 0L
+            val progress: (Long, String) -> Unit = { bytes, message ->
+                val now = System.nanoTime()
+                if (now - reported > 150_000_000L) {
+                    reported = now
+                    _state.update { it.copy(modelStatus = models.message(R.string.vlm_model_copy_progress, message, bytes / 1048576)) }
+                }
+            }
+            val dir = if (directory) models.importDirectory(uri, progress) else models.importPackage(uri, progress)
+            downloads.forget()
+            attemptedPath = dir.path
+            loadDirectory(dir)
+        }
+    }
 
     /** 接收界面事件并归约状态。
      * @param intent 用户操作或平台异步结果；Bitmap 的所有权随 FrameReady 转交本状态机。
@@ -73,17 +130,26 @@ class VlmCameraViewModel @Inject constructor(
                     } catch (e: Exception) { _state.update { it.copy(error = "设置保存失败：${e.message}") } }
                 }
             }
-            is VlmIntent.ImportModel -> maintain("导入模型") {
-                local.unload()
-                var reported = 0L
-                models.importPackage(intent.uri) { bytes, message ->
-                    val now = System.nanoTime()
-                    if (now - reported > 150_000_000L) { reported = now; _state.update { it.copy(modelStatus = "$message · ${bytes / 1048576} MiB") } }
-                }
+            is VlmIntent.CameraForeground -> { foreground = intent.visible; if (foreground) maybeAutoLoad() }
+            is VlmIntent.StartModelDownload -> if (!busy() && !downloads.state.value.running && foreground) {
+                _effects.tryEmit(VlmEffect.DownloadModel(intent.source, intent.allowMetered))
             }
-            VlmIntent.LoadModel -> maintain("加载模型") { local.load(); Unit }
-            VlmIntent.UnloadModel -> maintain("卸载模型") { local.unload() }
-            VlmIntent.DeleteModel -> maintain("删除模型") { local.unload(); models.delete() }
+            VlmIntent.PauseModelDownload -> downloads.pause()
+            VlmIntent.CancelModelDownload -> if (!_state.value.modelBusy) downloads.cancel()
+            is VlmIntent.ImportModel -> importModel(intent.uri, false)
+            is VlmIntent.ImportModelDirectory -> importModel(intent.uri, true)
+            VlmIntent.LoadModel -> if (!downloads.state.value.running) maintain(models.message(R.string.vlm_model_loading)) {
+                val dir = models.pendingDirectory() ?: models.activeDirectory() ?: throw ModelStorageException(R.string.vlm_model_absent)
+                attemptedPath = dir.path
+                loadDirectory(dir)
+            }
+            VlmIntent.UnloadModel -> maintain(models.message(R.string.vlm_model_unload)) {
+                local.unload(); modelLoaded = false
+                downloads.loadingState(DownloadPhase.DOWNLOADED)
+            }
+            VlmIntent.DeleteModel -> if (!downloads.state.value.running) maintain(models.message(R.string.vlm_model_delete)) {
+                local.unload(); modelLoaded = false; models.delete(); downloads.forget(); attemptedPath = null
+            }
             VlmIntent.CheckGateway -> maintain("检查网关") {
                 val caps = GatewayProvider(_state.value.settings, ProviderId.QWEN).capabilities()
                 _state.update { it.copy(notice = caps.providers.joinToString("\n") { p -> "${p.provider}: ${if (p.configured) p.model else "未配置"}" }) }
@@ -211,12 +277,12 @@ class VlmCameraViewModel @Inject constructor(
      */
     private fun maintain(label: String, operation: suspend () -> Unit) {
         if (busy()) { _state.update { it.copy(error = "请先结束当前构图或拍摄，再管理模型") }; return }
+        _state.update { it.copy(modelBusy = true, modelStatus = label, error = null) }
         maintenance = viewModelScope.launch {
-            _state.update { it.copy(modelBusy = true, modelStatus = label, error = null) }
             try { operation() }
             catch (cancel: CancellationException) { throw cancel }
-            catch (e: Exception) { _state.update { it.copy(error = "$label 失败：${e.message}") } }
-            finally { _state.update { it.copy(modelBusy = false, modelStatus = models.description()) } }
+            catch (e: Exception) { _state.update { it.copy(error = if (e is ModelFailure) e.message else models.errorMessage(e)) } }
+            finally { _state.update { it.copy(modelBusy = false, modelStatus = if (modelLoaded) models.message(R.string.vlm_model_loaded) else models.description()) } }
         }
     }
 
@@ -229,6 +295,7 @@ class VlmCameraViewModel @Inject constructor(
 
     /** UI 离开相机模块时取消平台相关操作；无参数，保留冻结会话供返回查看。 */
     fun onLeave() {
+        foreground = false
         cancelWork()
         captureToken = null
         _state.update { it.copy(cameraReady = false, saving = false, stage = if (it.scene != null && it.stage != VlmStage.LIVE) { if (it.result == null) VlmStage.FROZEN else VlmStage.READY } else VlmStage.LIVE) }

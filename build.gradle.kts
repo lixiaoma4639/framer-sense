@@ -15,3 +15,15 @@
  */
 
 // Root build.gradle.kts
+
+// 在共同父项目声明插件，供子模块复用同一插件类路径，避免 Kotlin 插件重复加载。
+// apply false 只准备插件，不把 Android 或 Kotlin 插件应用到根项目。
+plugins {
+    alias(libs.plugins.android.application) apply false
+    alias(libs.plugins.android.library) apply false
+    alias(libs.plugins.android.test) apply false
+    alias(libs.plugins.compose.compiler) apply false
+    alias(libs.plugins.kotlin.serialization) apply false
+    alias(libs.plugins.hilt.gradle) apply false
+    alias(libs.plugins.ksp) apply false
+}

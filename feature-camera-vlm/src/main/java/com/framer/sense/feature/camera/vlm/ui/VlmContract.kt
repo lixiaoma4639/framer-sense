@@ -2,6 +2,7 @@ package com.framer.sense.feature.camera.vlm.ui
 
 import android.graphics.Bitmap
 import android.net.Uri
+import com.framer.sense.feature.camera.vlm.data.ModelDownloadState
 import com.framer.sense.feature.camera.vlm.avatar.PlanPreview
 import com.framer.sense.feature.camera.vlm.model.*
 
@@ -25,6 +26,7 @@ data class VlmUiState(
     val notice: String? = null,
     val modelStatus: String = "尚未导入离线模型",
     val modelBusy: Boolean = false,
+    val download: ModelDownloadState = ModelDownloadState(),
     val saving: Boolean = false,
     val settingsVisible: Boolean = false,
     val fromImportedImage: Boolean = false
@@ -50,6 +52,11 @@ sealed interface VlmIntent {
     data class SettingsVisible(val visible: Boolean) : VlmIntent
     data class SaveSettings(val settings: ModelSettings) : VlmIntent
     data class ImportModel(val uri: Uri) : VlmIntent
+    data class ImportModelDirectory(val uri: Uri) : VlmIntent
+    data class StartModelDownload(val source: String, val allowMetered: Boolean) : VlmIntent
+    data object PauseModelDownload : VlmIntent
+    data object CancelModelDownload : VlmIntent
+    data class CameraForeground(val visible: Boolean) : VlmIntent
     data object LoadModel : VlmIntent
     data object UnloadModel : VlmIntent
     data object DeleteModel : VlmIntent
@@ -59,6 +66,7 @@ sealed interface VlmIntent {
     data class CaptureFinished(val token: String, val error: String? = null) : VlmIntent
 }
 sealed interface VlmEffect {
+    data class DownloadModel(val source: String, val allowMetered: Boolean) : VlmEffect
     data class Freeze(val token: String) : VlmEffect
     data class Capture(val token: String) : VlmEffect
 }

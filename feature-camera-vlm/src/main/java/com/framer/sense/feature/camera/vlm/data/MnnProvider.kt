@@ -1,6 +1,8 @@
 package com.framer.sense.feature.camera.vlm.data
 
 import android.os.Build
+import com.framer.sense.feature.camera.vlm.R
+import java.io.File
 import com.framer.sense.feature.camera.vlm.model.*
 import kotlinx.coroutines.suspendCancellableCoroutine
 import java.util.concurrent.Executors
@@ -26,10 +28,35 @@ object MnnNative {
     external fun release(handle: Long)
 }
 
+/** 原生运行时抽象，用于不加载真实权重的事务测试。 */
+interface MnnRuntime {
+    /** 初始化本地库；无参数，失败抛出链接错误。 */
+    fun initialize()
+    /** 加载配置。@param path config.json 路径。@return 原生句柄。 */
+    fun load(path: String): Long
+    /** 释放空闲句柄。@param handle 已停止推理的句柄。 */
+    fun release(handle: Long)
+    /** 图像推理。@param handle 活跃句柄。@param image 私有图像路径。@param prompt UTF-8 提示。@param cancel 取消标志。@return 输出字节。 */
+    fun infer(handle: Long, image: String, prompt: ByteArray, cancel: AtomicBoolean): ByteArray
+}
+
+/** 默认真实 JNI 实现，不提供生产假响应。 */
+object NativeMnnRuntime : MnnRuntime {
+    /** 初始化 JNI 库；无参数。 */
+    override fun initialize() = MnnNative.initialize()
+    /** 加载官方配置。@param path 配置路径。@return 原生句柄。 */
+    override fun load(path: String): Long = MnnNative.load(path)
+    /** 释放原生模型。@param handle 空闲句柄。 */
+    override fun release(handle: Long) = MnnNative.release(handle)
+    /** 执行多模态推理。@param handle 活跃句柄。@param image 图片路径。@param prompt UTF-8 输入。@param cancel 取消标志。@return UTF-8 输出。 */
+    override fun infer(handle: Long, image: String, prompt: ByteArray, cancel: AtomicBoolean): ByteArray = MnnNative.infer(handle, image, prompt, cancel)
+}
+
 /** 真正的本地 VLM；模型导入、加载失败不会返回规则结果。 */
 class MnnProvider(
     private val store: LocalModelStore,
-    private val supportedAbis: () -> Array<String> = { Build.SUPPORTED_ABIS }
+    private val supportedAbis: () -> Array<String> = { Build.SUPPORTED_ABIS },
+    private val runtime: MnnRuntime = NativeMnnRuntime
 ) : VisionModelProvider {
     private val executor = Executors.newSingleThreadExecutor { task -> Thread(task, "vlm-mnn").apply { isDaemon = true } }
     private var handle = 0L
@@ -41,9 +68,37 @@ class MnnProvider(
         store.description()
     }
 
+    /** 串行加载候选后提交安装；失败保留旧目录和指针，旧句柄可在下次使用时重新加载。
+     * @param dir 已校验且位置固定的私有模型目录。@return 已加载模型的说明。
+     */
+    suspend fun install(dir: File): String = submit { cancelled ->
+        checkAbi()
+        if (cancelled.get()) throw kotlinx.coroutines.CancellationException()
+        if (handle != 0L) runtime.release(handle)
+        handle = 0L
+        loadedPath = null
+        runtime.initialize()
+        val candidate = runtime.load(File(dir, "config.json").path)
+        if (candidate == 0L) throw ModelStorageException(R.string.vlm_model_load_failed)
+        try {
+            if (cancelled.get()) throw kotlinx.coroutines.CancellationException()
+            val old = store.activate(dir)
+            handle = candidate
+            loadedPath = dir.path
+            // 旧安装清理失败不反转已成功提交的加载事务。
+            runCatching { old?.deleteRecursively() }
+            store.message(R.string.vlm_model_loaded)
+        } catch (error: Throwable) { runtime.release(candidate); throw error }
+    }
+
+    /** 检查原生 ABI；无参数，禁止在不支持的设备上进入 JNI。 */
+    private fun checkAbi() {
+        if ("arm64-v8a" !in supportedAbis()) throw ModelFailure("UNSUPPORTED_ABI", store.message(R.string.vlm_model_abi), true)
+    }
+
     /** 安全卸载模型；无参数，排在正在完成的原生推理之后执行。 */
     suspend fun unload(): Unit = submit { _ ->
-        if (handle != 0L) MnnNative.release(handle)
+        if (handle != 0L) runtime.release(handle)
         handle = 0L
         loadedPath = null
     }
@@ -55,20 +110,20 @@ class MnnProvider(
     override suspend fun step(call: ModelCall): StepReply = submit { cancel ->
         ensureLoaded()
         val start = System.nanoTime()
-        val output = MnnNative.infer(handle, call.input.scene.modelImagePath, call.prompt.toByteArray(Charsets.UTF_8), cancel).toString(Charsets.UTF_8)
-        StepReply(store.description(), output, elapsedMs = (System.nanoTime() - start) / 1_000_000)
+        val output = runtime.infer(handle, call.input.scene.modelImagePath, call.prompt.toByteArray(Charsets.UTF_8), cancel).toString(Charsets.UTF_8)
+        StepReply(store.modelName(), output, elapsedMs = (System.nanoTime() - start) / 1_000_000)
     }
 
     /** 确保当前模型已加载；无参数，只能在专用线程调用。 */
     private fun ensureLoaded() {
-        if ("arm64-v8a" !in supportedAbis()) throw ModelFailure("UNSUPPORTED_ABI", "离线推理需要 ARM64 设备", true)
-        val dir = store.activeDirectory() ?: throw ModelFailure("MODEL_MISSING", "请先导入离线模型包", true)
+        checkAbi()
+        val dir = store.activeDirectory() ?: throw ModelFailure("MODEL_MISSING", store.message(R.string.vlm_model_absent), true)
         if (handle != 0L && loadedPath == dir.path) return
-        if (handle != 0L) MnnNative.release(handle)
+        if (handle != 0L) runtime.release(handle)
         handle = 0L
-        MnnNative.initialize()
-        handle = MnnNative.load(java.io.File(dir, "config.json").path)
-        check(handle != 0L) { "模型加载失败" }
+        runtime.initialize()
+        handle = runtime.load(java.io.File(dir, "config.json").path)
+        if (handle == 0L) throw ModelStorageException(R.string.vlm_model_load_failed)
         loadedPath = dir.path
     }
 
@@ -86,7 +141,7 @@ class MnnProvider(
                 if (continuation.isActive) continuation.resume(result)
             } catch (error: Throwable) {
                 if (continuation.isActive) continuation.resumeWithException(
-                    if (error is ModelFailure) error else ModelFailure("LOCAL_FAILED", "离线模型加载或推理失败：${error.message.orEmpty().take(180)}", true)
+                    if (error is ModelFailure) error else ModelFailure("LOCAL_FAILED", if (error is ModelStorageException) store.errorMessage(error) else store.message(R.string.vlm_model_load_failed), true)
                 )
             }
         }

@@ -38,6 +38,10 @@ import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil3.compose.AsyncImage
+import com.framer.sense.feature.camera.vlm.R
+import com.framer.sense.feature.camera.vlm.data.ModelDownloadService
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import com.framer.sense.feature.camera.vlm.BuildConfig
 import com.framer.sense.feature.camera.vlm.camera.VlmCameraController
 import com.framer.sense.feature.camera.vlm.model.*
@@ -67,6 +71,24 @@ fun VlmCameraScreen(
         else viewModel.onIntent(VlmIntent.UserMessage("保存照片需要存储权限"))
     }
     val modelLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri -> uri?.let { viewModel.onIntent(VlmIntent.ImportModel(it)) } }
+    val directoryLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri -> uri?.let { viewModel.onIntent(VlmIntent.ImportModelDirectory(it)) } }
+    var requestedDownload by remember { mutableStateOf<VlmEffect.DownloadModel?>(null) }
+    val startDownload: (VlmEffect.DownloadModel) -> Unit = { request ->
+        try { ModelDownloadService.start(context, request.source, request.allowMetered) }
+        catch (_: Exception) { viewModel.onIntent(VlmIntent.UserMessage(context.getString(R.string.vlm_download_service_failed))) }
+    }
+    val notificationLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {
+        // 用户拒绝通知权限仍可使用系统允许的前台服务，进度继续在 App 内展示。
+        requestedDownload?.let(startDownload)
+        requestedDownload = null
+    }
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
+    DisposableEffect(lifecycle, viewModel) {
+        val observer = LifecycleEventObserver { _, _ -> viewModel.onIntent(VlmIntent.CameraForeground(lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED))) }
+        lifecycle.addObserver(observer)
+        viewModel.onIntent(VlmIntent.CameraForeground(lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)))
+        onDispose { lifecycle.removeObserver(observer); viewModel.onIntent(VlmIntent.CameraForeground(false)) }
+    }
     val imageLauncher = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri -> uri?.let { viewModel.onIntent(VlmIntent.ImportImage(it)) } }
     val onEvent = remember(viewModel) { { event: VlmIntent -> viewModel.onIntent(event) } }
     val latestAction by rememberUpdatedState(onCaptureActionChanged)
@@ -84,6 +106,12 @@ fun VlmCameraScreen(
     LaunchedEffect(controller, viewModel) {
         viewModel.effects.collect { effect ->
             when (effect) {
+                is VlmEffect.DownloadModel -> {
+                    if (Build.VERSION.SDK_INT >= 33 && ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+                        requestedDownload = effect
+                        notificationLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                    } else startDownload(effect)
+                }
                 is VlmEffect.Freeze -> try {
                     val (bitmap, zoom) = controller.freeze()
                     onEvent(VlmIntent.FrameReady(effect.token, bitmap, zoom))
@@ -121,7 +149,7 @@ fun VlmCameraScreen(
             }
         }
     }
-    if (state.settingsVisible) ModelSettingsDialog(state, onEvent, { modelLauncher.launch(arrayOf("application/zip", "application/octet-stream", "application/x-zip-compressed")) })
+    if (state.settingsVisible) ModelSettingsDialog(state, onEvent, { modelLauncher.launch(arrayOf("application/zip", "application/octet-stream", "application/x-zip-compressed")) }, { directoryLauncher.launch(null) })
 }
 
 /** 展示严格匹配画幅的实时预览或冻结方案。
@@ -314,9 +342,10 @@ private fun shotLabel(shot: ShotType): String = when (shot) {
  * @param state 当前设置及操作进度。
  * @param onEvent 配置与管理操作接收器。
  * @param importModel 系统 ZIP 文件选择动作。
+ * @param importDirectory 官方模型文件夹选择动作。
  */
 @Composable
-private fun ModelSettingsDialog(state: VlmUiState, onEvent: (VlmIntent) -> Unit, importModel: () -> Unit) {
+private fun ModelSettingsDialog(state: VlmUiState, onEvent: (VlmIntent) -> Unit, importModel: () -> Unit, importDirectory: () -> Unit) {
     var draft by remember(state.settings) { mutableStateOf(state.settings) }
     AlertDialog(onDismissRequest = { if (!state.modelBusy) onEvent(VlmIntent.SettingsVisible(false)) }, title = { Text("模型设置") },
         text = {
@@ -333,16 +362,7 @@ private fun ModelSettingsDialog(state: VlmUiState, onEvent: (VlmIntent) -> Unit,
                 OutlinedTextField(draft.gatewayToken, { draft = draft.copy(gatewayToken = it) }, label = { Text("独立网关令牌") }, visualTransformation = PasswordVisualTransformation(), singleLine = true)
                 Text("供应商 API 密钥仅配置在服务端。检查网关使用已保存的设置。", style = MaterialTheme.typography.labelSmall)
                 TextButton(onClick = { onEvent(VlmIntent.CheckGateway) }, enabled = !state.modelBusy) { Text("检查已保存网关") }
-                Text(state.modelStatus)
-                if (state.modelBusy) LinearProgressIndicator(Modifier.fillMaxWidth())
-                Row {
-                    TextButton(onClick = importModel, enabled = !state.modelBusy) { Text("导入 ZIP") }
-                    TextButton(onClick = { onEvent(VlmIntent.LoadModel) }, enabled = !state.modelBusy) { Text("加载") }
-                }
-                Row {
-                    TextButton(onClick = { onEvent(VlmIntent.UnloadModel) }, enabled = !state.modelBusy) { Text("卸载内存") }
-                    TextButton(onClick = { onEvent(VlmIntent.DeleteModel) }, enabled = !state.modelBusy) { Text("删除模型") }
-                }
+                OfflineModelPanel(state, onEvent, importDirectory, importModel)
                 state.error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
                 state.notice?.let { Text(it) }
             }

@@ -2,6 +2,8 @@ package com.framer.sense.feature.camera.vlm.data
 
 import android.content.Context
 import android.net.Uri
+import android.provider.DocumentsContract
+import com.framer.sense.feature.camera.vlm.R
 import com.framer.sense.feature.camera.vlm.model.VlmJson
 import com.framer.sense.feature.camera.vlm.model.newVlmId
 import kotlinx.coroutines.Dispatchers
@@ -9,38 +11,68 @@ import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
-import kotlinx.serialization.json.*
 import java.io.File
-import java.security.MessageDigest
+import java.io.InputStream
 import java.util.zip.ZipInputStream
 
 @Serializable data class ModelFile(val path: String, val size: Long, val sha256: String)
 @Serializable data class ModelManifest(val model: String, val runtime: String, val files: List<ModelFile>)
 
-/** 管理私有模型包；与模型推理的串行卸载顺序由调用方保证。 */
-class LocalModelStore(
-    private val context: Context,
-    private val availableSpace: (File) -> Long = { it.usableSpace }
-) {
-    private val root = File(context.noBackupFilesDir, "vlm-models").apply { mkdirs() }
+/** 管理官方模型目录与旧 ZIP；只有串行原生加载成功后才提交激活指针。 */
+class LocalModelStore(private val context: Context, private val availableSpace: (File) -> Long = { it.usableSpace }) {
+    val root = File(context.noBackupFilesDir, "vlm-models").canonicalFile.apply { mkdirs() }
     private val preferences = context.getSharedPreferences("vlm-model", Context.MODE_PRIVATE)
 
-    /** 获取已激活模型目录；无参数，未安装或文件丢失返回 null。 */
-    fun activeDirectory(): File? = preferences.getString("active", null)?.let { name -> File(root, name).takeIf { it.isDirectory } }
+    /** 获取当前安装；无参数，目录丢失时返回 null。 */
+    fun activeDirectory(): File? = directory("active")
+    /** 获取已校验但尚未激活的候选；无参数，不存在时返回 null。 */
+    fun pendingDirectory(): File? = directory("pending")
+    /** 读取私有目录指针。@param key 指针名称。@return 存在的安全目录。 */
+    private fun directory(key: String): File? = preferences.getString(key, null)?.let { name ->
+        runCatching { safeChild(root, name).takeIf { it.isDirectory } }.getOrNull()
+    }
+    /** 获取已安装模型说明；无参数，不将安装等同于已加载。 */
+    fun description(): String = message(if (activeDirectory() == null) R.string.vlm_model_absent else R.string.vlm_model_installed)
+    /** 返回模型调用记录名称；无参数，未知导入模型不冒充官方具体型号。 */
+    fun modelName(): String = if (activeDirectory()?.name?.startsWith("download-") == true) HubDownloadClient.MODEL else message(R.string.vlm_model_generic_name)
+    /** 获取本地化文案。@param resource 字符串资源。@param args 格式化参数。@return 当前语言文案。 */
+    fun message(resource: Int, vararg args: Any): String = context.getString(resource, *args)
+    /** 将文件操作异常转成可展示的消息。@param error 原始异常。@return 不含响应正文或密钥的错误。 */
+    fun errorMessage(error: Throwable): String = if (error is ModelStorageException) message(error.resource, error.detail) else message(R.string.vlm_model_operation_failed)
 
-    /** 获取模型展示名称；无参数，未安装返回明确说明。 */
-    fun description(): String = activeDirectory()?.let { dir ->
-        runCatching { VlmJson.decodeFromString<ModelManifest>(File(dir, "manifest.json").readText()).model }.getOrDefault("模型包损坏")
-    } ?: "尚未导入离线模型"
-
-    /** 导入并激活模型 ZIP，失败保留原模型。
-     * @param uri 用户在系统文件选择器中选择的 ZIP。
-     * @param progress 接收已解包字节数与当前阶段说明。
+    /** 登记候选目录，下载和导入共用；调用前完成文件校验。
+     * @param dir 私有候选目录，不能移动已打开的模型文件。
      */
-    suspend fun importPackage(uri: Uri, progress: (Long, String) -> Unit) = withContext(Dispatchers.IO) {
-        val staging = File(root, "import-${newVlmId()}").apply { mkdirs() }
-        var activated = false
-        try {
+    fun stage(dir: File) {
+        if (dir.canonicalFile.parentFile != root.canonicalFile) throw ModelStorageException(R.string.vlm_model_path)
+        val previous = pendingDirectory()
+        if (!preferences.edit().putString("pending", dir.name).commit()) throw ModelStorageException(R.string.vlm_model_persist)
+        previous?.takeIf { it != dir && it != activeDirectory() }?.deleteRecursively()
+    }
+
+    /** 提交已成功加载的模型；必须由 MNN 串行线程调用。
+     * @param dir 已加载候选。@return 原安装目录，调用方释放旧句柄后可清理。
+     */
+    fun activate(dir: File): File? {
+        if (dir.canonicalFile.parentFile != root.canonicalFile) throw ModelStorageException(R.string.vlm_model_path)
+        val old = activeDirectory()
+        if (!preferences.edit().putString("active", dir.name).remove("pending").commit()) throw ModelStorageException(R.string.vlm_model_persist)
+        return old?.takeIf { it != dir }
+    }
+
+    /** 移除未激活候选；不会删除当前安装。@param dir 需要丢弃的候选目录。 */
+    fun discard(dir: File) {
+        if (activeDirectory() == dir) return
+        if (pendingDirectory() == dir && !preferences.edit().remove("pending").commit()) throw ModelStorageException(R.string.vlm_model_persist)
+        if (dir.canonicalFile.parentFile == root.canonicalFile) dir.deleteRecursively()
+    }
+
+    /** 导入旧 ZIP 或普通官方目录 ZIP，只准备候选，不提前替换旧安装。
+     * @param uri 系统选择器返回的 ZIP 地址。@param progress 已复制字节数和阶段文案。
+     * @return 校验完成的私有目录。
+     */
+    suspend fun importPackage(uri: Uri, progress: (Long, String) -> Unit): File = withContext(Dispatchers.IO) {
+        prepare { staging ->
             var total = 0L
             var count = 0
             val names = mutableSetOf<String>()
@@ -49,130 +81,118 @@ class LocalModelStore(
                     while (true) {
                         currentCoroutineContext().ensureActive()
                         val entry = zip.nextEntry ?: break
-                        require(++count <= 4096) { "模型包文件数量过多" }
+                        if (++count > 4096 || !names.add(entry.name)) throw ModelStorageException(R.string.vlm_model_metadata)
                         val target = safeChild(staging, entry.name.trimEnd('/'))
-                        require(names.add(entry.name)) { "模型包存在重复路径" }
-                        if (entry.isDirectory) target.mkdirs() else {
-                            target.parentFile?.mkdirs()
-                            target.outputStream().buffered().use { output ->
-                                val buffer = ByteArray(128 * 1024)
-                                while (true) {
-                                    currentCoroutineContext().ensureActive()
-                                    val n = zip.read(buffer)
-                                    if (n < 0) break
-                                    total += n
-                                    require(total <= 12L * 1024 * 1024 * 1024) { "模型包解压后超过 12 GiB" }
-                                    require(availableSpace(staging) > n + 64L * 1024 * 1024) { "可用存储空间不足" }
-                                    output.write(buffer, 0, n)
-                                    progress(total, "正在导入 ${entry.name}")
-                                }
-                            }
+                        if (entry.isDirectory) target.mkdirs() else copyFile(zip, target) { bytes ->
+                            total += bytes
+                            if (total > ModelFiles.MAX_BYTES) throw ModelStorageException(R.string.vlm_model_metadata)
+                            progress(total, message(R.string.vlm_model_copying))
                         }
                         zip.closeEntry()
                     }
                 }
-            } ?: error("无法读取模型包")
-            progress(total, "正在校验模型完整性")
-            validateDirectory(staging)
-            currentCoroutineContext().ensureActive()
-            val old = activeDirectory()
-            check(preferences.edit().putString("active", staging.name).commit()) { "无法保存模型激活信息" }
-            activated = true
-            old?.takeIf { it != staging }?.deleteRecursively()
-            progress(total, "模型已导入，可加载验证")
-        } finally {
-            if (!activated) staging.deleteRecursively()
+            } ?: throw ModelStorageException(R.string.vlm_model_read)
         }
     }
 
-    /** 验证包中文件哈希和实际视觉配置。
-     * @param dir 已解包的私有模型目录。
-     * @return 校验通过的清单。
+    /** 通过 SAF 导入官方文件夹，保持目录结构，不向 JNI 传入 content URI。
+     * @param uri 用户授权的目录 URI。@param progress 已复制字节数与说明。
+     * @return 私有模型目录；源文件不修改。
      */
-    suspend fun validateDirectory(dir: File): ModelManifest = withContext(Dispatchers.IO) {
+    suspend fun importDirectory(uri: Uri, progress: (Long, String) -> Unit): File = withContext(Dispatchers.IO) {
+        prepare { staging ->
+            var count = 0
+            var total = 0L
+            val queue = ArrayDeque<Pair<String, String>>()
+            queue.add(DocumentsContract.getTreeDocumentId(uri) to "")
+            while (queue.isNotEmpty()) {
+                currentCoroutineContext().ensureActive()
+                val (id, prefix) = queue.removeFirst()
+                val children = DocumentsContract.buildChildDocumentsUriUsingTree(uri, id)
+                context.contentResolver.query(children, arrayOf(DocumentsContract.Document.COLUMN_DOCUMENT_ID, DocumentsContract.Document.COLUMN_DISPLAY_NAME, DocumentsContract.Document.COLUMN_MIME_TYPE), null, null, null)?.use { cursor ->
+                    while (cursor.moveToNext()) {
+                        if (++count > 4096) throw ModelStorageException(R.string.vlm_model_metadata)
+                        val documentId = cursor.getString(0)
+                        val name = cursor.getString(1)
+                        if (name.contains('/')) throw ModelStorageException(R.string.vlm_model_path)
+                        val relative = prefix + name
+                        val target = safeChild(staging, relative)
+                        if (target.exists()) throw ModelStorageException(R.string.vlm_model_path)
+                        if (cursor.getString(2) == DocumentsContract.Document.MIME_TYPE_DIR) {
+                            target.mkdirs()
+                            queue.add(documentId to "$relative/")
+                        } else {
+                            context.contentResolver.openInputStream(DocumentsContract.buildDocumentUriUsingTree(uri, documentId))?.use { input ->
+                                copyFile(input, target) { bytes ->
+                                    total += bytes
+                                    if (total > ModelFiles.MAX_BYTES) throw ModelStorageException(R.string.vlm_model_metadata)
+                                    progress(total, message(R.string.vlm_model_copying))
+                                }
+                            } ?: throw ModelStorageException(R.string.vlm_model_read)
+                        }
+                    }
+                } ?: throw ModelStorageException(R.string.vlm_model_read)
+            }
+        }
+    }
+
+    /** 创建导入事务并登记候选；失败清理本次文件。
+     * @param copy 将外部文件复制到暂存目录的动作。@return 候选目录。
+     */
+    private suspend fun prepare(copy: suspend (File) -> Unit): File {
+        val dir = File(root, "import-${newVlmId()}").apply { mkdirs() }
+        try {
+            copy(dir)
+            validateDirectory(dir)
+            currentCoroutineContext().ensureActive()
+            stage(dir)
+            return dir
+        } catch (error: Throwable) { dir.deleteRecursively(); throw error }
+    }
+
+    /** 分块复制文件并检查空间。@param input 借用的输入流，由调用者关闭。@param target 输出文件。
+     * @param progress 接收本块字节数；输出流在本函数关闭。
+     */
+    private suspend fun copyFile(input: InputStream, target: File, progress: (Int) -> Unit) {
+        target.parentFile?.mkdirs()
+        target.outputStream().buffered().use { output ->
+            val buffer = ByteArray(128 * 1024)
+            while (true) {
+                currentCoroutineContext().ensureActive()
+                val count = input.read(buffer)
+                if (count < 0) break
+                ModelFiles.checkSpace(availableSpace(root), count.toLong())
+                progress(count)
+                output.write(buffer, 0, count)
+            }
+        }
+    }
+
+    /** 校验标准目录；旧包有清单时额外验证所有摘要。
+     * @param dir 私有目录，无清单也可以加载。
+     */
+    suspend fun validateDirectory(dir: File) = withContext(Dispatchers.IO) {
         val manifestFile = File(dir, "manifest.json")
-        require(manifestFile.isFile && manifestFile.length() <= 1024 * 1024) { "缺少或无效的 manifest.json" }
-        val manifest = VlmJson.decodeFromString<ModelManifest>(manifestFile.readText())
-        require(manifest.runtime == "MNN-3.6.1" && manifest.model == "Qwen3-VL-2B-Instruct") { "首版仅支持 Qwen3-VL-2B-Instruct / MNN-3.6.1 模型包" }
-        require(manifest.files.map { it.path }.distinct().size == manifest.files.size) { "清单路径重复" }
-        val expected = manifest.files.map { it.path }.toSet()
-        val actual = dir.walkTopDown().filter { it.isFile }.map { it.relativeTo(dir).invariantSeparatorsPath }.toSet() - "manifest.json"
-        require(expected == actual) { "模型包文件与清单不一致" }
-        for (entry in manifest.files) {
-            currentCoroutineContext().ensureActive()
-            val file = safeChild(dir, entry.path)
-            require(file.isFile && file.length() == entry.size && entry.size > 0) { "模型文件缺失或大小不符：${entry.path}" }
-            val hash = MessageDigest.getInstance("SHA-256")
-            file.inputStream().buffered().use { input ->
-                val buffer = ByteArray(128 * 1024)
-                while (true) {
-                    currentCoroutineContext().ensureActive()
-                    val n = input.read(buffer)
-                    if (n < 0) break
-                    hash.update(buffer, 0, n)
-                }
-            }
-            require(hash.digest().joinToString("") { "%02x".format(it) }.equals(entry.sha256, true)) { "模型文件校验失败：${entry.path}" }
+        if (manifestFile.exists()) {
+            if (manifestFile.length() !in 1..1024L * 1024) throw ModelStorageException(R.string.vlm_model_metadata)
+            val manifest = VlmJson.decodeFromString<ModelManifest>(manifestFile.readText())
+            val names = manifest.files.map { it.path }.toSet()
+            val actual = dir.walkTopDown().filter { it.isFile }.map { it.relativeTo(dir).invariantSeparatorsPath }.toSet() - "manifest.json"
+            if (names.size != manifest.files.size || names != actual) throw ModelStorageException(R.string.vlm_model_metadata)
+            manifest.files.forEach { ModelFiles.verify(safeChild(dir, it.path), it.size, it.sha256) }
         }
-        require("config.json" in expected && "llm_config.json" in expected) { "缺少模型配置" }
-        require(listOf("config.json", "llm_config.json").all { File(dir, it).length() <= 2 * 1024 * 1024 }) { "模型配置过大" }
-        val config = VlmJson.parseToJsonElement(File(dir, "config.json").readText()).jsonObject
-        val info = VlmJson.parseToJsonElement(File(dir, "llm_config.json").readText()).jsonObject
-        val merged = config + info
-        require(merged["is_visual"]?.jsonPrimitive?.booleanOrNull == true) { "模型未启用视觉输入" }
-        require(merged["model_type"]?.jsonPrimitive?.content == "qwen3_vl") { "模型架构必须为 qwen3_vl" }
-        require(merged["is_single"]?.jsonPrimitive?.booleanOrNull != false && merged["is_audio"]?.jsonPrimitive?.booleanOrNull != true) { "首版仅支持单体图文模型" }
-        require((config["llm_config"]?.jsonPrimitive?.content ?: "llm_config.json") == "llm_config.json") { "模型元配置必须为 llm_config.json" }
-        validateConfigPaths(config, dir, expected)
-        validateConfigPaths(info, dir, expected)
-        if (merged["tie_embeddings"] == null) {
-            val embedding = merged["embedding_file"]?.jsonPrimitive?.content ?: "embeddings_bf16.bin"
-            require(embedding in expected) { "缺少词嵌入文件" }
-        }
-        mapOf("llm_config" to "llm_config.json", "llm_model" to "llm.mnn", "llm_weight" to "llm.mnn.weight", "tokenizer_file" to "tokenizer.txt", "visual_model" to "visual.mnn").forEach { (key, fallback) ->
-            val path = merged[key]?.jsonPrimitive?.content ?: fallback
-            require(path in expected && safeChild(dir, path).isFile) { "缺少 $key 对应文件" }
-        }
-        manifest
+        ModelFiles.validate(dir)
     }
 
-    /** 递归检查运行配置，拒绝越界路径和首版未启用的后端。
-     * @param config 当前 JSON 配置对象。
-     * @param dir 私有解包目录。
-     * @param files 清单中可用文件集合。
-     */
-    private fun validateConfigPaths(config: JsonObject, dir: File, files: Set<String>) {
-        config.forEach { (key, value) ->
-            if (value is JsonObject) validateConfigPaths(value, dir, files)
-            require(key !in setOf("base_dir", "tmp_path", "prefix_cache_path", "draft_model", "npu_model_dir")) { "首版不支持配置 $key" }
-            if (key == "backend_type") require(value.jsonPrimitive.content == "cpu") { "首版仅支持 CPU 后端" }
-            if (key == "speculative_type") require(value.jsonPrimitive.content == "none") { "首版不支持推测解码" }
-            if (key.endsWith("_file") || key.endsWith("_model") || key.endsWith("_weight") || key == "llm_config") {
-                val path = value.jsonPrimitive.content
-                require(safeChild(dir, path).isFile && path in files) { "配置引用未收录的文件：$key" }
-            }
-        }
-    }
-
-    /** 删除已经卸载的模型；无参数，先清除激活指针再回收文件。 */
+    /** 删除已卸载安装和候选；无参数，由调用方先串行卸载模型。 */
     suspend fun delete() = withContext(Dispatchers.IO) {
-        val old = activeDirectory()
-        check(preferences.edit().remove("active").commit()) { "无法清除模型配置" }
-        old?.deleteRecursively()
-        Unit
+        val dirs = listOfNotNull(activeDirectory(), pendingDirectory()).distinct()
+        if (!preferences.edit().remove("active").remove("pending").commit()) throw ModelStorageException(R.string.vlm_model_persist)
+        dirs.forEach { it.deleteRecursively() }
     }
 
     companion object {
-        /** 将包内路径解析到指定根目录，拒绝路径穿越。
-         * @param root 可信解包根目录。
-         * @param path 包内相对路径。
-         * @return 保证位于根目录下的文件。
-         */
-        fun safeChild(root: File, path: String): File {
-            require(path.isNotBlank() && !path.startsWith('/') && '\\' !in path && ':' !in path && path.split('/').none { it.isEmpty() || it == ".." || it == "." }) { "模型包包含非法路径" }
-            val file = File(root, path).canonicalFile
-            require(file.path.startsWith(root.canonicalPath + File.separator)) { "模型包路径越界" }
-            return file
-        }
+        /** 兼容已有调用的安全路径入口。@param root 根目录。@param path 相对路径。@return 内部文件。 */
+        fun safeChild(root: File, path: String): File = ModelFiles.child(root, path)
     }
 }

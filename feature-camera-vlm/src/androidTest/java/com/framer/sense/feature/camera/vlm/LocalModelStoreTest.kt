@@ -60,7 +60,9 @@ class LocalModelStoreTest {
         val root = File(InstrumentationRegistry.getInstrumentation().targetContext.cacheDir, "vlm-test-${UUID.randomUUID()}").apply { mkdirs() }
         val store = LocalModelStore(isolatedContext(root))
         try {
-            store.importPackage(Uri.fromFile(modelZip(root))) { _, _ -> }
+            val candidate = store.importPackage(Uri.fromFile(modelZip(root))) { _, _ -> }
+            assertNull(store.activeDirectory())
+            store.activate(candidate) // 此用例仅测试文件事务，原生加载事务另测。
             val active = store.activeDirectory()
             assertNotNull(active)
             for (zip in listOf(modelZip(root, brokenHash = true), modelZip(root, omitVision = true))) {
@@ -77,7 +79,7 @@ class LocalModelStoreTest {
         val store = LocalModelStore(isolatedContext(root), availableSpace = { 0L })
         try {
             val error = runCatching { store.importPackage(Uri.fromFile(modelZip(root))) { _, _ -> } }.exceptionOrNull()
-            assertTrue(error?.message.orEmpty().contains("空间不足"))
+            assertTrue(store.errorMessage(error!!).contains("空间不足"))
             assertNull(store.activeDirectory())
             assertTrue(File(root, "vlm-models").listFiles()!!.isEmpty())
         } finally { store.delete(); root.deleteRecursively() }

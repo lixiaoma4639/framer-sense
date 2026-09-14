@@ -39,18 +39,18 @@ def read_config(root: Path, name: str) -> dict:
     return value
 
 
-def referenced_files(config: dict, root: Path) -> set[str]:
-    """递归收集安全配置引用。config 为配置对象，root 为导出目录；返回必须打包的文件路径。"""
+def referenced_files(config: dict, root: Path, shared_embedding: bool = False) -> set[str]:
+    """递归收集安全配置引用。config 为配置对象，root 为导出目录，shared_embedding 表示复用语言权重；返回必须打包的文件路径。"""
     files = set()
     for key, value in config.items():
         if isinstance(value, dict):
-            files.update(referenced_files(value, root))
+            files.update(referenced_files(value, root, shared_embedding))
         if key in {"base_dir", "tmp_path", "prefix_cache_path", "draft_model", "npu_model_dir"}:
             raise ValueError(f"首版不支持配置 {key}；请在导出副本中移除后再打包")
-        if key == "backend_type" and value != "cpu":
-            raise ValueError("首版仅支持 CPU 后端")
         if key == "speculative_type" and value != "none":
             raise ValueError("首版不支持推测解码")
+        if key == "embedding_file" and shared_embedding:
+            continue
         if key.endswith(("_file", "_model", "_weight")) or key == "llm_config":
             checked_path(root, value)
             files.add(value)
@@ -77,16 +77,19 @@ def package_model(source: Path, destination: Path) -> None:
     if config.get("llm_config", "llm_config.json") != "llm_config.json":
         raise ValueError("元配置必须为 llm_config.json")
     merged = config | info
-    if merged.get("is_visual") is not True or merged.get("model_type") != "qwen3_vl":
+    if merged.get("is_visual") is not True:
         raise ValueError("需要真实 qwen3_vl 视觉模型配置")
     if merged.get("is_single") is False or merged.get("is_audio") is True:
         raise ValueError("首版仅支持单体图文模型")
-    names = {"config.json", "llm_config.json"} | referenced_files(config, source) | referenced_files(info, source)
+    tie = merged.get("tie_embeddings")
+    offset = tie[0] if isinstance(tie, list) and len(tie) >= 5 else tie.get("weight_offset", 0) if isinstance(tie, dict) else 0
+    shared_embedding = offset > 0
+    names = {"config.json", "llm_config.json"} | referenced_files(config, source, shared_embedding) | referenced_files(info, source, shared_embedding)
     for key, fallback in REQUIRED.items():
         name = merged.get(key, fallback)
         checked_path(source, name)
         names.add(name)
-    if "tie_embeddings" not in merged:
+    if not shared_embedding:
         names.add(merged.get("embedding_file", "embeddings_bf16.bin"))
     # MNN 视觉网络可把权重放在同名 .weight 文件，必须随主图一起收录。
     for name in list(names):

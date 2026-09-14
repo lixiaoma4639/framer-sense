@@ -27,6 +27,7 @@ plugins {
 android {
     namespace = "com.framer.sense"
     compileSdk = 36
+    ndkVersion = "28.2.13676358"
 
     defaultConfig {
         applicationId = "com.framer.sense"
