@@ -1,7 +1,9 @@
 package com.framer.sense.feature.camera.vlm.di
 
 import android.content.Context
-import com.framer.sense.feature.camera.vlm.agent.CompositionRepository
+import android.util.Log
+import com.framer.sense.feature.camera.vlm.BuildConfig
+import com.framer.sense.feature.camera.vlm.agent.*
 import com.framer.sense.feature.camera.vlm.avatar.*
 import com.framer.sense.feature.camera.vlm.camera.SnapshotStore
 import com.framer.sense.feature.camera.vlm.data.*
@@ -26,7 +28,21 @@ object VlmModule {
     /** 提供串行离线模型。@param store 已验证的私有模型包管理器。 */
     @Provides @Singleton fun local(store: LocalModelStore): MnnProvider = MnnProvider(store)
     /** 提供构图业务入口。@param local 本地真实 VLM 适配器。 */
-    @Provides @Singleton fun repository(local: MnnProvider): CompositionRepository = CompositionRepository(local)
+    @Provides @Singleton fun repository(local: MnnProvider): CompositionRepository = CompositionRepository(
+        local,
+        DirectorAgent(logger = object : DirectorLogger {
+            override fun debug(message: String) { Log.d("VlmDirector", message) }
+            override fun info(message: String) { Log.i("VlmDirector", message) }
+            override fun warn(message: String, error: Throwable?) { Log.w("VlmDirector", message, error) }
+            override fun error(message: String, error: Throwable?) { Log.e("VlmDirector", message, error) }
+            override fun diagnostic(message: () -> String) {
+                if (BuildConfig.DEBUG) {
+                    val parts = message().chunked(800)
+                    parts.forEachIndexed { index, part -> Log.d("VlmDirector", "解析诊断 part=${index + 1}/${parts.size} $part") }
+                }
+            }
+        })
+    )
     /** 提供共享的按需预览服务；无参数，内部 GPU 线程串行执行。 */
     @Provides @Singleton fun previews(): PreviewStore = PreviewStore(FilamentAvatarRenderer())
 }

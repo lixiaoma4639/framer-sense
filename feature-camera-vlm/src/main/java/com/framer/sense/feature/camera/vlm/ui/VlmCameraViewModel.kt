@@ -1,5 +1,6 @@
 package com.framer.sense.feature.camera.vlm.ui
 
+import android.util.Log
 import com.framer.sense.feature.camera.vlm.R
 import java.io.File
 import androidx.lifecycle.SavedStateHandle
@@ -46,10 +47,16 @@ class VlmCameraViewModel @Inject constructor(
         viewModelScope.launch { state.collect { maybeAutoLoad() } }
     }
 
-    /** 前台空闲时自动加载已下载目录；无参数，失败或卸载后不循环重试。 */
+    /** 前台空闲时自动加载已下载或已安装目录；无参数，失败或卸载后不循环重试。 */
     private fun maybeAutoLoad() {
-        if (!foreground || busy() || downloads.state.value.phase != DownloadPhase.DOWNLOADED) return
-        val dir = models.pendingDirectory() ?: models.activeDirectory() ?: return
+        if (!foreground || busy() || modelLoaded) return
+        val phase = downloads.state.value.phase
+        // 下载完成时优先尝试候选目录；导入/既有安装没有下载会话，直接加载当前安装。
+        val dir = if (phase == DownloadPhase.DOWNLOADED) {
+            models.pendingDirectory() ?: models.activeDirectory()
+        } else {
+            models.activeDirectory()
+        } ?: return
         if (attemptedPath == dir.path) return
         attemptedPath = dir.path
         maintain(models.message(R.string.vlm_model_loading)) { loadDirectory(dir) }
@@ -101,7 +108,7 @@ class VlmCameraViewModel @Inject constructor(
             is VlmIntent.UserMessage -> _state.update { it.copy(error = intent.message) }
             VlmIntent.StartComposition -> if (_state.value.stage == VlmStage.LIVE && _state.value.cameraReady && !busy()) {
                 cancelWork()
-                _state.update { it.copy(stage = VlmStage.FREEZING, error = null) }
+                _state.update { it.copy(stage = VlmStage.FREEZING, error = null, directorProgress = null) }
                 _effects.tryEmit(VlmEffect.Freeze(requestToken))
             }
             is VlmIntent.FrameReady -> receiveFrame(intent)
@@ -113,8 +120,8 @@ class VlmCameraViewModel @Inject constructor(
             is VlmIntent.InstructionChanged -> _state.update { it.copy(instruction = intent.text.take(2000)) }
             VlmIntent.Generate -> compose(false)
             VlmIntent.Revise -> compose(true)
-            VlmIntent.Cancel -> { if (busy() && _state.value.modelBusy) return; cancelWork(); _state.update { it.copy(stage = if (it.scene == null) VlmStage.LIVE else if (it.result == null) VlmStage.FROZEN else VlmStage.READY, error = null) } }
-            VlmIntent.ResumeCamera -> { cancelWork(); _state.update { it.copy(stage = VlmStage.LIVE, reference = null, referencePlan = null, error = null, cameraReady = false) } }
+            VlmIntent.Cancel -> { if (busy() && _state.value.modelBusy) return; cancelWork(); _state.update { it.copy(stage = if (it.scene == null) VlmStage.LIVE else if (it.result == null) VlmStage.FROZEN else VlmStage.READY, error = null, directorProgress = null) } }
+            VlmIntent.ResumeCamera -> { cancelWork(); _state.update { it.copy(stage = VlmStage.LIVE, reference = null, referencePlan = null, error = null, cameraReady = false, directorProgress = null) } }
             is VlmIntent.Select -> if (!busy()) _state.update { it.copy(selectedId = intent.id) }
             is VlmIntent.Move -> adjust { it.copy(foot = Point2((it.foot.x + intent.dx).coerceIn(0f, 1f), (it.foot.y + intent.dy).coerceIn(0f, 4f))) }
             is VlmIntent.Resize -> adjust { it.copy(height = intent.height.coerceIn(.08f, 4f)) }
@@ -194,7 +201,7 @@ class VlmCameraViewModel @Inject constructor(
             try {
                 val scene = snapshots.save(event.bitmap, event.zoom)
                 if (event.token == requestToken) {
-                    _state.update { it.copy(scene = scene, stage = VlmStage.FROZEN, result = null, diagnostics = null, previews = emptyMap(), reference = null, selectedId = null, fromImportedImage = false) }
+                    _state.update { it.copy(scene = scene, stage = VlmStage.FROZEN, result = null, diagnostics = null, previews = emptyMap(), reference = null, selectedId = null, fromImportedImage = false, directorProgress = null) }
                     compose(false)
                 }
             } catch (cancel: CancellationException) { throw cancel }
@@ -214,14 +221,29 @@ class VlmCameraViewModel @Inject constructor(
         cancelWork()
         val token = requestToken
         val input = DirectorInput(scene, previous.camera, previous.instruction, if (revise) previous.result!!.plans else emptyList(), if (revise) previous.selectedId else null)
-        _state.update { it.copy(stage = if (revise) VlmStage.MODIFYING else VlmStage.GENERATING, error = null, notice = null) }
+        Log.i(LOG_TAG, "启动${if (revise) "修改方案" else "生成方案"}任务 token=${token.take(8)} image=${scene.id.take(8)} mode=${previous.settings.mode} modelStatus=${previous.modelStatus}")
+        _state.update { it.copy(stage = if (revise) VlmStage.MODIFYING else VlmStage.GENERATING, error = null, notice = null, directorProgress = DirectorProgress.PreparingRequest) }
         work = viewModelScope.launch {
             try {
-                val result = repository.compose(input, previous.settings, previews)
-                val images = result.plans.associate { it.id to previews.preview(scene, it) }
-                if (token == requestToken) _state.update { it.copy(result = result, diagnostics = result, previews = images, selectedId = previous.selectedId?.takeIf { id -> result.plans.any { p -> p.id == id } } ?: result.plans.first().id, stage = VlmStage.READY) }
+                val result = repository.compose(input, previous.settings, previews) { progress ->
+                    if (token == requestToken) _state.update { it.copy(directorProgress = progress) }
+                }
+                val images = buildMap {
+                    result.plans.forEachIndexed { index, plan ->
+                        if (token == requestToken) _state.update { it.copy(directorProgress = DirectorProgress.RenderingPreview(index + 1, result.plans.size)) }
+                        put(plan.id, previews.preview(scene, plan))
+                    }
+                }
+                if (token == requestToken) {
+                    Log.i(LOG_TAG, "构图任务成功 token=${token.take(8)} plans=${result.plans.size} traces=${result.traces.size}")
+                    _state.update { it.copy(result = result, diagnostics = result, previews = images, selectedId = previous.selectedId?.takeIf { id -> result.plans.any { p -> p.id == id } } ?: result.plans.first().id, stage = VlmStage.READY, directorProgress = null) }
+                }
             } catch (cancel: CancellationException) { throw cancel }
-            catch (e: Exception) { if (token == requestToken) _state.update { it.copy(stage = if (it.result == null) VlmStage.FROZEN else VlmStage.READY, error = e.message ?: "构图失败，请重试", diagnostics = (e as? ModelFailure)?.diagnostics) } }
+            catch (e: Exception) {
+                Log.e(LOG_TAG, "构图任务失败 token=${token.take(8)} error=${e::class.java.simpleName}", e)
+                val message = if ((e as? ModelFailure)?.code == "LOCAL_INVALID_OUTPUT") models.message(R.string.vlm_local_invalid_output) else e.message ?: "构图失败，请重试"
+                if (token == requestToken) _state.update { it.copy(stage = if (it.result == null) VlmStage.FROZEN else VlmStage.READY, error = message, diagnostics = (e as? ModelFailure)?.diagnostics, directorProgress = null) }
+            }
         }
     }
 
@@ -298,6 +320,10 @@ class VlmCameraViewModel @Inject constructor(
         foreground = false
         cancelWork()
         captureToken = null
-        _state.update { it.copy(cameraReady = false, saving = false, stage = if (it.scene != null && it.stage != VlmStage.LIVE) { if (it.result == null) VlmStage.FROZEN else VlmStage.READY } else VlmStage.LIVE) }
+        _state.update { it.copy(cameraReady = false, saving = false, stage = if (it.scene != null && it.stage != VlmStage.LIVE) { if (it.result == null) VlmStage.FROZEN else VlmStage.READY } else VlmStage.LIVE, directorProgress = null) }
+    }
+
+    private companion object {
+        const val LOG_TAG = "VlmCamera"
     }
 }

@@ -1,11 +1,16 @@
 package com.framer.sense.feature.camera.vlm.data
 
 import android.os.Build
+import android.util.Log
 import com.framer.sense.feature.camera.vlm.R
+import com.framer.sense.feature.camera.vlm.BuildConfig
 import java.io.File
 import com.framer.sense.feature.camera.vlm.model.*
 import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.CancellationException
+import kotlinx.serialization.encodeToString
 import java.util.concurrent.Executors
+import java.util.concurrent.TimeoutException
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
@@ -21,9 +26,10 @@ object MnnNative {
      * @param imagePath 私有 JPEG 绝对路径。
      * @param prompt UTF-8 编码的导演提示词。
      * @param cancelled Kotlin 协程取消标志，在生成边界读取。
+     * @param progress 真实 token 的输出回调，供停滞监控使用。
      * @return UTF-8 输出字节。
      */
-    external fun infer(handle: Long, imagePath: String, prompt: ByteArray, cancelled: AtomicBoolean): ByteArray
+    external fun infer(handle: Long, imagePath: String, prompt: ByteArray, cancelled: AtomicBoolean, progress: MnnTokenProgress): ByteArray
     /** 释放空闲句柄。@param handle 已结束所有推理的模型句柄。 */
     external fun release(handle: Long)
 }
@@ -36,8 +42,8 @@ interface MnnRuntime {
     fun load(path: String): Long
     /** 释放空闲句柄。@param handle 已停止推理的句柄。 */
     fun release(handle: Long)
-    /** 图像推理。@param handle 活跃句柄。@param image 私有图像路径。@param prompt UTF-8 提示。@param cancel 取消标志。@return 输出字节。 */
-    fun infer(handle: Long, image: String, prompt: ByteArray, cancel: AtomicBoolean): ByteArray
+    /** 图像推理。@param handle 活跃句柄。@param image 私有图像路径。@param prompt UTF-8 提示。@param cancel 取消标志。@param onToken 实际输出新 token 的回调。@return 输出字节。 */
+    fun infer(handle: Long, image: String, prompt: ByteArray, cancel: AtomicBoolean, onToken: () -> Unit): ByteArray
 }
 
 /** 默认真实 JNI 实现，不提供生产假响应。 */
@@ -49,7 +55,8 @@ object NativeMnnRuntime : MnnRuntime {
     /** 释放原生模型。@param handle 空闲句柄。 */
     override fun release(handle: Long) = MnnNative.release(handle)
     /** 执行多模态推理。@param handle 活跃句柄。@param image 图片路径。@param prompt UTF-8 输入。@param cancel 取消标志。@return UTF-8 输出。 */
-    override fun infer(handle: Long, image: String, prompt: ByteArray, cancel: AtomicBoolean): ByteArray = MnnNative.infer(handle, image, prompt, cancel)
+    override fun infer(handle: Long, image: String, prompt: ByteArray, cancel: AtomicBoolean, onToken: () -> Unit): ByteArray =
+        MnnNative.infer(handle, image, prompt, cancel, MnnTokenProgress(onToken))
 }
 
 /** 真正的本地 VLM；模型导入、加载失败不会返回规则结果。 */
@@ -61,6 +68,7 @@ class MnnProvider(
     private val executor = Executors.newSingleThreadExecutor { task -> Thread(task, "vlm-mnn").apply { isDaemon = true } }
     private var handle = 0L
     private var loadedPath: String? = null
+    private val nativeInferenceRunning = AtomicBoolean(false)
 
     /** 加载当前已导入模型；无参数，串行完成，避免与推理同时释放资源。 */
     suspend fun load(): String = submit { _ ->
@@ -107,24 +115,78 @@ class MnnProvider(
      * @param call 当前图像、提示词与请求标识。
      * @return 模型真实输出和耗时。
      */
-    override suspend fun step(call: ModelCall): StepReply = submit { cancel ->
-        ensureLoaded()
-        val start = System.nanoTime()
-        val output = runtime.infer(handle, call.input.scene.modelImagePath, call.prompt.toByteArray(Charsets.UTF_8), cancel).toString(Charsets.UTF_8)
-        StepReply(store.modelName(), output, elapsedMs = (System.nanoTime() - start) / 1_000_000)
+    override suspend fun step(call: ModelCall): StepReply {
+        // 原生计算只能在安全边界退出；超时后立即重试不能排在仍未退出的 JNI 后无限等待。
+        if (nativeInferenceRunning.get()) throw ModelFailure("LOCAL_BUSY", store.message(R.string.vlm_model_inference_busy), true)
+        return try {
+            withTokenInactivityWatchdog { onToken -> infer(call, onToken) }
+        } catch (failure: ModelFailure) {
+            if (failure.code == "LOCAL_TIMEOUT") {
+                Log.w(LOG_TAG, "离线推理停滞 request=${call.requestId.take(8)} idleLimitMs=39000")
+                throw ModelFailure("LOCAL_TIMEOUT", store.message(R.string.vlm_model_inference_timeout), true)
+            }
+            throw failure
+        }
+    }
+
+    private suspend fun infer(call: ModelCall, onToken: () -> Unit): StepReply = submit { cancel ->
+        val image = File(call.input.scene.modelImagePath)
+        Log.i(LOG_TAG, "离线推理开始 request=${call.requestId.take(8)} image=${call.input.scene.id.take(8)} imageExists=${image.isFile} imageBytes=${image.length()} promptBytes=${call.prompt.toByteArray(Charsets.UTF_8).size}")
+        var loaded = false
+        try {
+            ensureLoaded()
+            loaded = true
+            // load 不能中断；若等待期间已取消，加载返回后不得继续启动推理。
+            if (cancel.get()) throw CancellationException()
+            val start = System.nanoTime()
+            nativeInferenceRunning.set(true)
+            val output = try {
+                runtime.infer(handle, image.path, call.prompt.toByteArray(Charsets.UTF_8), cancel, onToken).toString(Charsets.UTF_8)
+            } finally {
+                nativeInferenceRunning.set(false)
+            }
+            if (cancel.get()) throw CancellationException()
+            val elapsedMs = (System.nanoTime() - start) / 1_000_000
+            Log.i(LOG_TAG, "离线推理完成 request=${call.requestId.take(8)} model=${store.modelName()} elapsedMs=$elapsedMs outputBytes=${output.toByteArray().size}")
+            if (BuildConfig.DEBUG) {
+                // JSON 字符串转义保留换行、控制符和首尾空白；小段输出避免 Logcat 截断。
+                val parts = VlmJson.encodeToString(output).chunked(800)
+                parts.forEachIndexed { index, part ->
+                    Log.d(LOG_TAG, "模型原始输出 request=${call.requestId.take(8)} part=${index + 1}/${parts.size} raw=$part")
+                }
+            }
+            StepReply(store.modelName(), output, elapsedMs = elapsedMs)
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (error: Throwable) {
+            Log.e(LOG_TAG, "离线推理失败 request=${call.requestId.take(8)} activeModel=${store.activeDirectory()?.name ?: "none"} error=${error::class.java.simpleName}", error)
+            throw when {
+                error is ModelFailure -> error
+                error.message == "LOCAL_OUTPUT_LIMIT" -> ModelFailure("LOCAL_OUTPUT_LIMIT", store.message(R.string.vlm_local_output_limit), false)
+                error is TimeoutException -> ModelFailure("LOCAL_TIMEOUT", store.message(R.string.vlm_model_inference_timeout), true)
+                loaded -> ModelFailure("LOCAL_INFERENCE_FAILED", store.message(R.string.vlm_model_inference_failed), true)
+                else -> ModelFailure("LOCAL_FAILED", if (error is ModelStorageException) store.errorMessage(error) else store.message(R.string.vlm_model_load_failed), true)
+            }
+        }
     }
 
     /** 确保当前模型已加载；无参数，只能在专用线程调用。 */
     private fun ensureLoaded() {
         checkAbi()
         val dir = store.activeDirectory() ?: throw ModelFailure("MODEL_MISSING", store.message(R.string.vlm_model_absent), true)
-        if (handle != 0L && loadedPath == dir.path) return
+        if (handle != 0L && loadedPath == dir.path) {
+            Log.d(LOG_TAG, "复用已加载离线模型 dir=${dir.name} handle=$handle")
+            return
+        }
         if (handle != 0L) runtime.release(handle)
         handle = 0L
+        val config = File(dir, "config.json")
+        Log.i(LOG_TAG, "加载离线模型 dir=${dir.name} configExists=${config.isFile} configBytes=${config.length()}")
         runtime.initialize()
-        handle = runtime.load(java.io.File(dir, "config.json").path)
+        handle = runtime.load(config.path)
         if (handle == 0L) throw ModelStorageException(R.string.vlm_model_load_failed)
         loadedPath = dir.path
+        Log.i(LOG_TAG, "离线模型加载成功 dir=${dir.name} handle=$handle")
     }
 
     /** 将原生操作排入串行线程，并桥接协程取消。
@@ -139,11 +201,18 @@ class MnnProvider(
             try {
                 val result = block(cancelled)
                 if (continuation.isActive) continuation.resume(result)
+            } catch (cancelled: CancellationException) {
+                if (continuation.isActive) continuation.cancel(cancelled)
             } catch (error: Throwable) {
+                Log.e(LOG_TAG, "原生模型任务异常 error=${error::class.java.simpleName}", error)
                 if (continuation.isActive) continuation.resumeWithException(
                     if (error is ModelFailure) error else ModelFailure("LOCAL_FAILED", if (error is ModelStorageException) store.errorMessage(error) else store.message(R.string.vlm_model_load_failed), true)
                 )
             }
         }
+    }
+
+    private companion object {
+        const val LOG_TAG = "VlmOffline"
     }
 }

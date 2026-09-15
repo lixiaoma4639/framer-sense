@@ -9,6 +9,9 @@ import com.framer.sense.feature.camera.vlm.avatar.*
 import com.framer.sense.feature.camera.vlm.camera.SnapshotStore
 import com.framer.sense.feature.camera.vlm.model.CompositionPlan
 import com.framer.sense.feature.camera.vlm.model.CameraCapabilities
+import com.framer.sense.feature.camera.vlm.model.DirectorInput
+import com.framer.sense.feature.camera.vlm.model.ModelCall
+import com.framer.sense.feature.camera.vlm.model.SceneSnapshot
 import com.framer.sense.feature.camera.vlm.ui.*
 import androidx.test.platform.app.InstrumentationRegistry
 import com.framer.sense.feature.camera.vlm.data.*
@@ -22,6 +25,9 @@ import org.junit.Test
 import java.io.File
 import java.io.IOException
 import java.util.UUID
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.TimeoutException
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 
@@ -122,7 +128,71 @@ class ModelDownloadRepositoryTest {
         /** 测试释放，无原生资源。@param handle 测试句柄。 */
         override fun release(handle: Long) = Unit
         /** 禁止测试进行推理。@param handle 句柄。@param image 图像。@param prompt 提示。@param cancel 取消标志。@return 不返回假推理结果。 */
-        override fun infer(handle: Long, image: String, prompt: ByteArray, cancel: AtomicBoolean): ByteArray = error("No inference in this test")
+        override fun infer(handle: Long, image: String, prompt: ByteArray, cancel: AtomicBoolean, onToken: () -> Unit): ByteArray = error("No inference in this test")
+    }
+
+    /** 已加载后的推理异常、原生超时与真正的加载失败必须区分。 */
+    @Test fun inferenceErrorsAreNotReportedAsLoadFailures() = runBlocking<Unit> {
+        val root = File(InstrumentationRegistry.getInstrumentation().targetContext.cacheDir, UUID.randomUUID().toString()).apply { mkdirs() }
+        val store = LocalModelStore(context(root))
+        val failLoad = AtomicBoolean(true)
+        var inferenceError: Exception = IllegalStateException("inference failure")
+        val native = object : MnnRuntime by runtime(failLoad) {
+            override fun infer(handle: Long, image: String, prompt: ByteArray, cancel: AtomicBoolean, onToken: () -> Unit): ByteArray = throw inferenceError
+        }
+        val provider = MnnProvider(store, { arrayOf("arm64-v8a") }, native)
+        val call = ModelCall(DirectorInput(SceneSnapshot("frame", 600, 800, 1f, "/unused", "/unused"), CameraCapabilities(), ""), "", "test")
+        try {
+            store.activate(fixture(store, "active"))
+            withTimeout(5_000) {
+                val loading = runCatching { provider.step(call) }.exceptionOrNull() as ModelFailure
+                assertEquals("LOCAL_FAILED", loading.code)
+                assertEquals(store.message(R.string.vlm_model_load_failed), loading.message)
+                failLoad.set(false)
+                val inference = runCatching { provider.step(call) }.exceptionOrNull() as ModelFailure
+                assertEquals("LOCAL_INFERENCE_FAILED", inference.code)
+                assertEquals(store.message(R.string.vlm_model_inference_failed), inference.message)
+                inferenceError = TimeoutException("native timeout")
+                val timeout = runCatching { provider.step(call) }.exceptionOrNull() as ModelFailure
+                assertEquals("LOCAL_TIMEOUT", timeout.code)
+                assertEquals(store.message(R.string.vlm_model_inference_timeout), timeout.message)
+            }
+        } finally { provider.unload(); store.delete(); root.deleteRecursively() }
+    }
+
+    /** 取消等待后，阻塞 JNI 的迟到结果不能回传，也不能并发释放或排入另一轮推理。 */
+    @Test fun cancelledNativeInferenceMustExitBeforeRetryOrRelease() = runBlocking<Unit> {
+        val root = File(InstrumentationRegistry.getInstrumentation().targetContext.cacheDir, UUID.randomUUID().toString()).apply { mkdirs() }
+        val store = LocalModelStore(context(root))
+        val entered = CompletableDeferred<AtomicBoolean>()
+        val releaseNative = CountDownLatch(1)
+        val releases = AtomicInteger()
+        val native = object : MnnRuntime by runtime(AtomicBoolean(false)) {
+            override fun infer(handle: Long, image: String, prompt: ByteArray, cancel: AtomicBoolean, onToken: () -> Unit): ByteArray {
+                onToken()
+                entered.complete(cancel)
+                check(releaseNative.await(5, TimeUnit.SECONDS))
+                return "late result".toByteArray()
+            }
+            override fun release(handle: Long) { releases.incrementAndGet() }
+        }
+        val provider = MnnProvider(store, { arrayOf("arm64-v8a") }, native)
+        val call = ModelCall(DirectorInput(SceneSnapshot("frame", 600, 800, 1f, "/unused", "/unused"), CameraCapabilities(), ""), "", "test")
+        try {
+            store.activate(fixture(store, "active"))
+            val job = launch { provider.step(call); fail("取消后不得返回迟到结果") }
+            val cancel = withTimeout(5_000) { entered.await() }
+            job.cancelAndJoin()
+            assertTrue(cancel.get())
+            val busy = runCatching { provider.step(call) }.exceptionOrNull() as ModelFailure
+            assertEquals("LOCAL_BUSY", busy.code)
+            assertEquals(0, releases.get())
+        } finally {
+            releaseNative.countDown()
+            provider.unload()
+            assertEquals(1, releases.get())
+            store.delete(); root.deleteRecursively()
+        }
     }
 
     /** 加载失败不修改安装，成功后才提交并清理旧文件；无参数。 */

@@ -28,6 +28,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
@@ -39,6 +40,7 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil3.compose.AsyncImage
 import com.framer.sense.feature.camera.vlm.R
+import com.framer.sense.feature.camera.vlm.agent.DirectorProgress
 import com.framer.sense.feature.camera.vlm.data.ModelDownloadService
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
@@ -188,15 +190,49 @@ private fun CameraPane(state: VlmUiState, controller: VlmCameraController, permi
                     } else AsyncImage(File(scene.imagePath), "冻结场景", Modifier.fillMaxSize(), contentScale = ContentScale.FillBounds)
                 }
                 if (state.stage in listOf(VlmStage.FREEZING, VlmStage.GENERATING, VlmStage.MODIFYING)) {
-                    Column(Modifier.align(Alignment.Center).background(Color.Black.copy(alpha = .72f)).padding(16.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                        CircularProgressIndicator()
-                        Text(if (state.stage == VlmStage.FREEZING) "正在冻结画面" else "导演正在分析与校验", color = Color.White)
-                        TextButton(onClick = { onEvent(VlmIntent.Cancel) }) { Text("取消") }
-                    }
+                    VlmLoadingOverlay(state.stage, state.directorProgress, { onEvent(VlmIntent.Cancel) }, Modifier.align(Alignment.Center))
                 }
             }
         }
     }
+}
+
+/** 展示冻结或导演执行时的当前步骤；不保留已经完成的历史步骤。 */
+@Composable
+internal fun VlmLoadingOverlay(
+    stage: VlmStage,
+    progress: DirectorProgress?,
+    onCancel: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Column(
+        modifier.background(Color.Black.copy(alpha = .72f)).padding(16.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        CircularProgressIndicator()
+        Text(
+            if (stage == VlmStage.FREEZING) stringResource(R.string.vlm_camera_freezing)
+            else directorProgressLabel(progress),
+            color = Color.White,
+            modifier = Modifier.testTag("vlm_director_progress")
+        )
+        TextButton(onClick = onCancel) { Text(stringResource(R.string.vlm_action_cancel)) }
+    }
+}
+
+/** 将结构化进度映射为用户可见的本地化文字。 */
+@Composable
+private fun directorProgressLabel(progress: DirectorProgress?): String = when (progress) {
+    DirectorProgress.PreparingRequest, null -> stringResource(R.string.vlm_director_preparing)
+    is DirectorProgress.AnalyzingScene -> if (progress.revisingFromFeedback) {
+        stringResource(R.string.vlm_director_refining, progress.turn)
+    } else {
+        stringResource(R.string.vlm_director_analyzing, progress.turn)
+    }
+    is DirectorProgress.SwitchingProvider -> stringResource(R.string.vlm_director_switching_provider, progress.turn)
+    is DirectorProgress.ValidatingResponse -> stringResource(R.string.vlm_director_validating, progress.turn)
+    is DirectorProgress.InspectingProjection -> stringResource(R.string.vlm_director_inspecting_projection, progress.planIndex, progress.planCount)
+    is DirectorProgress.RenderingPreview -> stringResource(R.string.vlm_director_rendering_preview, progress.planIndex, progress.planCount)
 }
 
 /** 将 CameraX 控件绑定到 Compose 生命周期。

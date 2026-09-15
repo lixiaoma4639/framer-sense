@@ -2,6 +2,7 @@ package com.framer.sense.feature.camera.vlm.ui
 
 import android.graphics.Bitmap
 import android.net.Uri
+import com.framer.sense.feature.camera.vlm.agent.DirectorProgress
 import com.framer.sense.feature.camera.vlm.data.ModelDownloadState
 import com.framer.sense.feature.camera.vlm.avatar.PlanPreview
 import com.framer.sense.feature.camera.vlm.model.*
@@ -29,7 +30,8 @@ data class VlmUiState(
     val download: ModelDownloadState = ModelDownloadState(),
     val saving: Boolean = false,
     val settingsVisible: Boolean = false,
-    val fromImportedImage: Boolean = false
+    val fromImportedImage: Boolean = false,
+    val directorProgress: DirectorProgress? = null
 )
 
 sealed interface VlmIntent {

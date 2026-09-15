@@ -64,7 +64,7 @@ Framer_Sense 是一个基于 Android 官方多模块架构模板演进而来的 
 | `feature-camera` | 旧 ML Kit 拍照模块，包含 CameraX 预览、ML Kit 画面分析、构图引导虚线覆盖层、拍摄保存和相机权限 UI；当前不再作为 app 拍照入口。 |
 | `feature-camera-pytorch` | 上一版 ONNX 拍照模块，包含 CameraX 预览、ONNX Runtime SSD MobileNet 端侧检测、构图引导虚线覆盖层、拍摄保存和相机权限 UI；当前不再作为 app 拍照入口。 |
 | `feature-camera-pytorch-v2` | 保留的 ONNX v2 模块，当前不再作为 app 拍照入口，包含 CameraX 预览、ONNX Runtime YOLO/YOLO Pose/可选 YOLO Seg/可选 WholeBody Landmark 约定模型加载、基于物体检测的场景推断、场景构图评分、线条式 3D 虚拟人像覆盖层、拍摄保存和相机权限 UI。 |
-| `feature-camera-vlm` | 当前拍照入口，采用 MVI，负责 CameraX 冻结图、VLM 路由与两轮导演、App 内模型下载、目录/ZIP 导入、MNN JNI 和 Filament 人偶。 |
+| `feature-camera-vlm` | 当前拍照入口，采用 MVI，负责 CameraX 冻结图、VLM 路由、本地单次/云端两轮导演、App 内模型下载、目录/ZIP 导入、MNN JNI 和 Filament 人偶。 |
 | `feature-mymodel` | 我的模块，包含个人主页、扫一扫说明页、消息列表页和设置页；主页资料、内容 Tab、扫一扫说明、消息列表、设置项列表由 ViewModel 管理状态。 |
 
 ### services/vlm-gateway
@@ -156,6 +156,7 @@ MyApplication
 - 模型设置支持大陆/海外、强制离线/指定云端/自动，以及网关令牌和离线模型管理。离线模型主要通过 OkHttp + 协程直接下载官方 MNN 目录，使用 dataSync 前台服务、固定提交和断点续传；保留目录/ZIP 导入。下载完成后仅在相机前台空闲时加载，原生加载成功才激活。
 - 大陆自动路由为千问、Seed、离线；海外为 GPT、Gemini、离线。内容拒绝、取消和参数错误不触发自动切换。
 - 首个离线目标为 Qwen3-VL-2B-Instruct 的 MNN 3.6.1 模型包，ARM64 CPU JNI 串行推理；权重不随 APK 打包。
+- 离线加载及首 token 不限时；开始输出后连续 39 秒无新 token 才终止等待，正常持续输出不受总时长限制。本地使用短数组协议、最多调用一次并限制输出 512 token；校验失败直接结束，修改只生成选中方案，云端保留最多两轮。完整 JSON 的展示包装兼容不放宽业务校验。
 - Filament 1.76.0 使用球体、椭球和胶囊关节人偶，支持 12 站姿与 4 表情。卡片按需离屏渲染，应用后只叠加屏幕参考，不做真实空间锚定。
 - 保留主导航蓝色“拍摄”和横屏侧栏；冻结、生成、修改和资源管理期间禁止拍摄，不排队补拍。真实照片通过 MediaStore 保存，不合入虚拟人偶。
 - 横竖屏变化保留 ViewModel 会话；进程回收后回到实时相机并提示重新构图。

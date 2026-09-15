@@ -29,6 +29,98 @@ class DirectorAgentTest {
     /** 编码测试供应商输出。@param decision 测试决策。 */
     private fun reply(decision: DirectorDecision): StepReply = StepReply("test-model", VlmJson.encodeToString(decision), decision)
 
+    /** 来自实际失败输出：缺外层、仅一项、漏表情强度、不确定项字段名错误。 */
+    private val singlePlanOutput = """
+        {"id":"p1","title":"环境人像","shot":"ENVIRONMENT",
+         "crop":{"left":0.0,"top":0.0,"right":1.0,"bottom":1.0},"zoom":1.0,
+         "avatar":{"foot":{"x":0.3,"y":0.9},"height":0.3,"yaw":0.0,"pose":"RELAXED","expression":"SMILE"},
+         "guidance":"站在空地，侧身看镜头","reason":"保留建筑主体","needsRetake":false,
+         "uncertainty":["地板","墙壁"],"revision":0}
+    """.trimIndent()
+
+    /** 提示词必须提供当前画面的完整三方案协议，而非单个方案和省略号。 */
+    @Test fun promptContainsCompleteThreePlanEnvelope() {
+        val sceneInput = input().copy(scene = input().scene.copy(id = "new-frame", currentZoom = 2f))
+        val prompt = DirectorPrompt.build(sceneInput, emptyList(), null, false, offline = false)
+        val example = prompt.lineSequence().first { it.trimStart().startsWith("完整输出结构示例=") }.substringAfter('=')
+        val decision = DirectorOutput.decode(example)
+        assertEquals("new-frame", decision.imageId)
+        assertEquals(ActionKind.FINAL, decision.action)
+        assertEquals(3, decision.plans.size)
+        assertEquals(3, decision.plans.map { it.id }.distinct().size)
+        assertTrue(decision.plans.all { it.zoom == 2f })
+        assertTrue(prompt.contains("不能写 uncertainty"))
+        assertFalse(prompt.contains("\"plans\":[...]"))
+    }
+
+    /** 真实失败样本的所有已知修正点必须进入第二轮提示，修正后才能渲染。 */
+    @Test fun repairsReportedSinglePlanWithSpecificFeedback() = runTest {
+        var calls = 0
+        var rendered = 0
+        val result = DirectorAgent().run(input(), ModelSettings(mode = ModelMode.CLOUD), { _ -> object : VisionModelProvider {
+            override suspend fun step(call: ModelCall): StepReply {
+                if (++calls == 1) return StepReply("fake", singlePlanOutput)
+                listOf("仅返回单个方案", "version, imageId, action, plans", "另外两个不同方案", "expressionIntensity", "将 uncertainty 改为 uncertainties").forEach {
+                    assertTrue("缺少修正反馈：$it", call.prompt.contains(it))
+                }
+                return StepReply("fake", VlmJson.encodeToString(DirectorDecision(ActionKind.FINAL, plans(), imageId = "frame")))
+            }
+        } }, PreviewInspector { _, _ -> rendered++; PreviewInspection() })
+        assertEquals(2, calls)
+        assertEquals(3, rendered)
+        assertEquals(3, result.plans.size)
+        assertEquals(singlePlanOutput, result.rawOutputs.first())
+    }
+
+    /** 连续返回同样的单方案必须失败，不得由客户端补成三个方案。 */
+    @Test fun neverAcceptsOrFabricatesMissingPlansFromReportedOutput() = runTest {
+        var calls = 0
+        try {
+            DirectorAgent().run(input(), ModelSettings(mode = ModelMode.OFFLINE), { _ -> object : VisionModelProvider {
+                override suspend fun step(call: ModelCall): StepReply { calls++; return StepReply("fake", singlePlanOutput) }
+            } }, PreviewInspector { _, _ -> error("非法单方案不应进入渲染") })
+            fail("缺少方案不能成功")
+        } catch (failure: ModelFailure) {
+            assertEquals("LOCAL_INVALID_OUTPUT", failure.code)
+            assertEquals(listOf(singlePlanOutput), failure.diagnostics?.rawOutputs)
+            assertTrue(failure.diagnostics!!.plans.isEmpty())
+        }
+        assertEquals(1, calls)
+    }
+
+    /** 完整 JSON 的展示包装不应浪费一轮昂贵的本地推理。 */
+    @Test fun acceptsWrappedFinalJsonWithoutAnotherModelCall() = runTest {
+        val json = VlmJson.encodeToString(DirectorDecision(ActionKind.FINAL, plans(), imageId = "frame"))
+        for (raw in listOf(json, "```json\n$json\n```", "<think>先分析画面。</think>\n```json\n$json\n```")) {
+            var calls = 0
+            val result = DirectorAgent().run(input(), ModelSettings(mode = ModelMode.OFFLINE), { _ -> object : VisionModelProvider {
+                override suspend fun step(call: ModelCall): StepReply {
+                    calls++
+                    assertTrue(call.prompt.contains("只输出紧凑JSON数组"))
+                    return StepReply("fake", raw)
+                }
+            } }, PreviewInspector { _, _ -> PreviewInspection() })
+            assertEquals(1, calls)
+            assertEquals(3, result.plans.size)
+            assertEquals(listOf(raw), result.rawOutputs)
+        }
+    }
+
+    /** 包装兼容不能掩盖截断、缺字段、未知动作或拼接多份 JSON。 */
+    @Test fun wrappedOutputStillRequiresCompleteStrictProtocol() {
+        val json = VlmJson.encodeToString(DirectorDecision(ActionKind.FINAL, plans(), imageId = "frame"))
+        val invalid = listOf(
+            "```json\n${json.dropLast(1)}\n```",
+            "```json\n$json",
+            "<think>未闭合\n$json",
+            "```json\n${json.replace("FINAL", "SHELL")}\n```",
+            "```json\n${json.dropLast(1)},\"exec\":\"x\"}\n```",
+            "```json\n{\"action\":\"FINAL\",\"plans\":[]}\n```",
+            "$json\n$json"
+        )
+        invalid.forEach { assertTrue(runCatching { DirectorOutput.decode(it) }.isFailure) }
+    }
+
     /** 验证半身合法出画、全身出画错误以及裁剪与倍率一致性；无参数。 */
     @Test fun validatesShotSpecificCroppingAndZoom() {
         val validator = PlanValidator()
@@ -54,8 +146,8 @@ class DirectorAgentTest {
                 }
             }
         }
-        val result = DirectorAgent().run(input(), ModelSettings(mode = ModelMode.OFFLINE), { id ->
-            assertEquals(ProviderId.LOCAL, id); provider
+        val result = DirectorAgent().run(input(), ModelSettings(mode = ModelMode.CLOUD), { id ->
+            assertEquals(ProviderId.QWEN, id); provider
         }, PreviewInspector { _, _ -> rendered++; PreviewInspection(messages = listOf("可见")) })
         assertEquals(2, calls)
         assertEquals(3, rendered)
@@ -77,6 +169,37 @@ class DirectorAgentTest {
         }, PreviewInspector { _, _ -> PreviewInspection() })
         assertEquals(listOf(ProviderId.QWEN, ProviderId.SEED), called)
         assertEquals(ProviderId.SEED, result.traces.last().provider)
+    }
+
+    /** 自动切换、两轮修正、结构校验和逐方案投影检验都应按真实执行顺序报告当前步骤。 */
+    @Test fun reportsProgressForFallbackRepairValidationAndProjectionInspection() = runTest {
+        val progress = mutableListOf<DirectorProgress>()
+        var seedCalls = 0
+        val result = DirectorAgent().run(input(), ModelSettings(), { id -> object : VisionModelProvider {
+            /** 千问不可用后由 Seed 首轮返回非法输出、第二轮返回最终方案。 */
+            override suspend fun step(call: ModelCall): StepReply = when (id) {
+                ProviderId.QWEN -> throw ModelFailure("TIMEOUT", "超时", true)
+                ProviderId.SEED -> if (++seedCalls == 1) StepReply("fake", "not-json") else reply(DirectorDecision(ActionKind.FINAL, plans(), imageId = "frame"))
+                else -> error("不应选择其他供应商")
+            }
+        } }, PreviewInspector { _, _ -> PreviewInspection() }) { progress += it }
+
+        assertEquals(3, result.plans.size)
+        assertEquals(
+            listOf(
+                DirectorProgress.PreparingRequest,
+                DirectorProgress.AnalyzingScene(1, false),
+                DirectorProgress.SwitchingProvider(1),
+                DirectorProgress.ValidatingResponse(1),
+                DirectorProgress.PreparingRequest,
+                DirectorProgress.AnalyzingScene(2, true),
+                DirectorProgress.ValidatingResponse(2),
+                DirectorProgress.InspectingProjection(1, 3),
+                DirectorProgress.InspectingProjection(2, 3),
+                DirectorProgress.InspectingProjection(3, 3)
+            ),
+            progress
+        )
     }
 
     /** 验证拒绝不能触发更换模型；无参数。 */
@@ -118,7 +241,7 @@ class DirectorAgentTest {
     @Test fun capabilitiesCannotCreateInfiniteLoop() = runTest {
         var calls = 0
         try {
-            DirectorAgent().run(input(), ModelSettings(mode = ModelMode.OFFLINE), { _ -> object : VisionModelProvider {
+            DirectorAgent().run(input(), ModelSettings(mode = ModelMode.CLOUD), { _ -> object : VisionModelProvider {
                 /** 反复请求能力。@param call 当前请求。 */
                 override suspend fun step(call: ModelCall): StepReply { calls++; return reply(DirectorDecision(ActionKind.CAPABILITIES, imageId = "frame")) }
             } }, PreviewInspector { _, _ -> PreviewInspection() })
@@ -173,7 +296,7 @@ class DirectorAgentTest {
                 override suspend fun step(call: ModelCall) = reply(DirectorDecision(ActionKind.FINAL, plans(), imageId = "old-frame"))
             } }, PreviewInspector { _, _ -> error("旧结果不应渲染") })
             fail("应拒绝错误画面编号")
-        } catch (failure: ModelFailure) { assertEquals("INVALID_OUTPUT", failure.code) }
+        } catch (failure: ModelFailure) { assertEquals("LOCAL_INVALID_OUTPUT", failure.code) }
     }
 
 }
