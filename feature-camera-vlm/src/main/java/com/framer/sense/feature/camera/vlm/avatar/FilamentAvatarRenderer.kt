@@ -157,11 +157,8 @@ class FilamentAvatarRenderer : AvatarRenderer {
                 pixels.rewind()
                 val raw = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
                 raw.copyPixelsFromBuffer(pixels)
-                // Filament/OpenGL 从左下读取，Android Bitmap 从左上显示。
-                val flip = android.graphics.Matrix().apply { setScale(1f, -1f) }
-                val upright = Bitmap.createBitmap(raw, 0, 0, width, height, flip, false)
-                if (upright !== raw) raw.recycle()
-                AvatarPreview(upright, bounds)
+                // Android Filament 的 readPixels 已按 Bitmap 行顺序写入；再次镜像会使人偶上下颠倒。
+                AvatarPreview(raw, bounds)
             } finally {
                 // 读回完成或取消后，先排空驱动命令，再释放本次临时资源。
                 e.flushAndWait()

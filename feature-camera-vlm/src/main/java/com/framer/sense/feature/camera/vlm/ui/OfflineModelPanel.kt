@@ -6,9 +6,12 @@ import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
+import com.framer.sense.core.ui.MyApplicationTheme
 import com.framer.sense.feature.camera.vlm.R
 import com.framer.sense.feature.camera.vlm.data.DownloadPhase
+import com.framer.sense.feature.camera.vlm.data.ModelDownloadState
 
 /** 展示离线模型下载和备用导入入口。
  * @param state MVI 状态。@param onEvent 用户事件接收器。
@@ -77,4 +80,26 @@ internal fun downloadPhaseLabel(phase: DownloadPhase): Int = when (phase) {
     DownloadPhase.READY -> R.string.vlm_model_loaded
     DownloadPhase.LOAD_FAILED -> R.string.vlm_model_load_failed
     DownloadPhase.FAILED -> R.string.vlm_download_failed
+}
+
+@Preview(showBackground = true, widthDp = 360)
+@Composable
+private fun OfflineModelPanelPreview() {
+    MyApplicationTheme(dynamicColor = false) {
+        Surface {
+            OfflineModelPanel(
+                state = VlmUiState(
+                    modelStatus = "正在下载离线模型",
+                    download = ModelDownloadState(
+                        phase = DownloadPhase.DOWNLOADING,
+                        downloaded = 384L * 1048576L,
+                        total = 1024L * 1048576L
+                    )
+                ),
+                onEvent = {},
+                importDirectory = {},
+                importZip = {}
+            )
+        }
+    }
 }

@@ -32,9 +32,11 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import androidx.core.view.doOnLayout
+import com.framer.sense.core.ui.MyApplicationTheme
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -77,7 +79,7 @@ fun VlmCameraScreen(
     var requestedDownload by remember { mutableStateOf<VlmEffect.DownloadModel?>(null) }
     val startDownload: (VlmEffect.DownloadModel) -> Unit = { request ->
         try { ModelDownloadService.start(context, request.source, request.allowMetered) }
-        catch (_: Exception) { viewModel.onIntent(VlmIntent.UserMessage(context.getString(R.string.vlm_download_service_failed))) }
+        catch (_: Exception) { viewModel.onIntent(VlmIntent.UserMessage(stringResource(R.string.vlm_download_service_failed))) }
     }
     val notificationLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {
         // 用户拒绝通知权限仍可使用系统允许的前台服务，进度继续在 App 内展示。
@@ -405,5 +407,61 @@ private fun ModelSettingsDialog(state: VlmUiState, onEvent: (VlmIntent) -> Unit,
         },
         confirmButton = { TextButton(onClick = { onEvent(VlmIntent.SaveSettings(draft)) }, enabled = !state.modelBusy) { Text("保存") } },
         dismissButton = { TextButton(onClick = { onEvent(VlmIntent.SettingsVisible(false)) }, enabled = !state.modelBusy) { Text("关闭") } }
+    )
+}
+
+@Preview(showBackground = true)
+@Composable
+private fun VlmLoadingOverlayPreview() {
+    MyApplicationTheme(dynamicColor = false) {
+        Box(Modifier.fillMaxSize().background(Color(0xFF101B20)), contentAlignment = Alignment.Center) {
+            VlmLoadingOverlay(
+                stage = VlmStage.GENERATING,
+                progress = DirectorProgress.InspectingProjection(planIndex = 2, planCount = 3),
+                onCancel = {}
+            )
+        }
+    }
+}
+
+@Preview(showBackground = true, widthDp = 360)
+@Composable
+private fun VlmControlsReadyPreview() {
+    MyApplicationTheme(dynamicColor = false) {
+        Surface {
+            Controls(
+                state = previewVlmState(),
+                onEvent = {},
+                importImage = {},
+                modifier = Modifier.padding(12.dp)
+            )
+        }
+    }
+}
+
+@Preview(showBackground = true, widthDp = 360)
+@Composable
+private fun VlmModelSettingsDialogPreview() {
+    MyApplicationTheme(dynamicColor = false) {
+        ModelSettingsDialog(
+            state = previewVlmState().copy(settingsVisible = true, modelStatus = "离线模型已加载，可以开始构图"),
+            onEvent = {},
+            importModel = {},
+            importDirectory = {}
+        )
+    }
+}
+
+private fun previewVlmState(): VlmUiState {
+    val plans = listOf(
+        CompositionPlan("preview-environment", "保留室内环境", ShotType.ENVIRONMENT, CropRect(), 1f, AvatarPlacement(Point2(.5f, .9f), .3f), "人物位于画面下方，保留环境信息。", "环境与人物关系清晰。"),
+        CompositionPlan("preview-full", "自然全身站立", ShotType.FULL, CropRect(), 1f, AvatarPlacement(Point2(.5f, .92f), .65f, pose = PoseId.SIDE), "完整保留人物姿态。", "适合展示全身比例。"),
+        CompositionPlan("preview-half", "突出人物表情", ShotType.HALF, CropRect(), 1f, AvatarPlacement(Point2(.5f, 1.4f), 1.25f, pose = PoseId.LOOK_BACK), "裁切至半身，突出表情。", "减少背景干扰。")
+    )
+    return VlmUiState(
+        stage = VlmStage.READY,
+        result = CompositionResult(plans, emptyList(), emptyList(), emptyList()),
+        selectedId = plans.first().id,
+        modelStatus = "离线模型已加载，可以开始构图"
     )
 }
