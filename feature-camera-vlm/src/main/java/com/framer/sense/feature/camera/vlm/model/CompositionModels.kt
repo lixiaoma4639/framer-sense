@@ -16,8 +16,11 @@ val VlmJson = Json { encodeDefaults = true; explicitNulls = true }
     RELAXED, SIDE, LOOK_BACK, HANDS_FRONT, HAND_HIP, HANDS_HIPS,
     WAVE, POINT, HAT, LOOK_UP, LOOK_DOWN, ARMS_OPEN
 }
-@Serializable enum class ExpressionId { NEUTRAL, SMILE, HAPPY, SURPRISED }
+@Serializable enum class ExpressionId { NEUTRAL, SMILE, HAPPY, SURPRISED, THOUGHTFUL, CONFIDENT }
+@Serializable enum class AvatarId { ADULT_FEMALE, ADULT_MALE, CHILD_GIRL, CHILD_BOY }
 @Serializable enum class ActionKind { CAPABILITIES, VALIDATE, RENDER, FINAL }
+@Serializable enum class CompositionZone { LEFT, CENTER, RIGHT }
+@Serializable enum class FacingDirection { FRONT, THREE_QUARTER_LEFT, THREE_QUARTER_RIGHT }
 
 @Serializable data class Point2(val x: Float, val y: Float)
 @Serializable data class CropRect(
@@ -28,6 +31,8 @@ val VlmJson = Json { encodeDefaults = true; explicitNulls = true }
     @Required val foot: Point2 = Point2(0.5f, 0.92f),
     @Required val height: Float = 0.65f,
     @Required val yaw: Float = 0f,
+    /** 由用户选择的指导角色；模型无权据照片推断或改写该值。 */
+    @Required val avatarId: AvatarId = AvatarId.ADULT_FEMALE,
     @Required val pose: PoseId = PoseId.RELAXED,
     @Required val expression: ExpressionId = ExpressionId.NEUTRAL,
     @Required val expressionIntensity: Float = 0.6f
@@ -44,6 +49,26 @@ val VlmJson = Json { encodeDefaults = true; explicitNulls = true }
     @Required val needsRetake: Boolean = false,
     @Required val uncertainties: List<String> = emptyList(),
     @Required val revision: Int = 0
+)
+/** 模型仅表达摄影意图；坐标、裁剪和倍率由客户端映射并校验。 */
+@Serializable data class CompositionIntent(
+    val id: String,
+    val title: String,
+    val shot: ShotType,
+    val zone: CompositionZone,
+    val pose: PoseId,
+    val facing: FacingDirection,
+    val expression: ExpressionId,
+    val guidance: String,
+    val reason: String,
+    @Required val expressionIntensity: Float = .65f,
+    @Required val uncertainties: List<String> = emptyList()
+)
+@Serializable data class CompositionIntentDecision(
+    val action: ActionKind,
+    @Required val intents: List<CompositionIntent> = emptyList(),
+    @Required val version: Int = 1,
+    val imageId: String
 )
 @Serializable data class SceneSnapshot(
     val id: String,
@@ -107,7 +132,9 @@ data class DirectorInput(
     val camera: CameraCapabilities,
     val instruction: String,
     val existing: List<CompositionPlan> = emptyList(),
-    val selectedId: String? = null
+    val selectedId: String? = null,
+    /** 当前会话中用户明确选择的指导角色。 */
+    val avatarId: AvatarId = AvatarId.ADULT_FEMALE
 )
 data class ModelCall(val input: DirectorInput, val prompt: String, val requestId: String)
 data class CallTrace(val provider: ProviderId, val model: String, val elapsedMs: Long, val detail: String)

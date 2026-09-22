@@ -118,6 +118,12 @@ class VlmCameraViewModel @Inject constructor(
             is VlmIntent.CameraReady -> _state.update { it.copy(camera = intent.capabilities, cameraReady = true) }
             VlmIntent.CameraStopped -> _state.update { it.copy(cameraReady = false) }
             is VlmIntent.InstructionChanged -> _state.update { it.copy(instruction = intent.text.take(2000)) }
+            is VlmIntent.AvatarSelected -> if (!busy() && (
+                    _state.value.stage == VlmStage.LIVE ||
+                        (_state.value.stage == VlmStage.FROZEN && _state.value.result == null)
+                )) {
+                _state.update { it.copy(selectedAvatar = intent.avatarId) }
+            }
             VlmIntent.Generate -> compose(false)
             VlmIntent.Revise -> compose(true)
             VlmIntent.Cancel -> { if (busy() && _state.value.modelBusy) return; cancelWork(); _state.update { it.copy(stage = if (it.scene == null) VlmStage.LIVE else if (it.result == null) VlmStage.FROZEN else VlmStage.READY, error = null, directorProgress = null) } }
@@ -220,7 +226,14 @@ class VlmCameraViewModel @Inject constructor(
         if (revise && (previous.result == null || previous.selectedId == null)) return
         cancelWork()
         val token = requestToken
-        val input = DirectorInput(scene, previous.camera, previous.instruction, if (revise) previous.result!!.plans else emptyList(), if (revise) previous.selectedId else null)
+        val input = DirectorInput(
+            scene = scene,
+            camera = previous.camera,
+            instruction = previous.instruction,
+            existing = if (revise) previous.result!!.plans else emptyList(),
+            selectedId = if (revise) previous.selectedId else null,
+            avatarId = previous.selectedAvatar
+        )
         Log.i(LOG_TAG, "启动${if (revise) "修改方案" else "生成方案"}任务 token=${token.take(8)} image=${scene.id.take(8)} mode=${previous.settings.mode} modelStatus=${previous.modelStatus}")
         _state.update { it.copy(stage = if (revise) VlmStage.MODIFYING else VlmStage.GENERATING, error = null, notice = null, directorProgress = DirectorProgress.PreparingRequest) }
         work = viewModelScope.launch {
@@ -277,7 +290,7 @@ class VlmCameraViewModel @Inject constructor(
         val result = s.result ?: return
         val plan = result.plans.find { it.id == s.selectedId } ?: return
         val scene = s.scene ?: return
-        val errors = PlanValidator().validate(result.plans, DirectorInput(scene, s.camera, s.instruction))
+        val errors = PlanValidator().validate(result.plans, DirectorInput(scene, s.camera, s.instruction, avatarId = s.selectedAvatar))
         if (errors.isNotEmpty()) { _state.update { it.copy(error = errors.joinToString("\n")) }; return }
         cancelWork()
         val token = requestToken

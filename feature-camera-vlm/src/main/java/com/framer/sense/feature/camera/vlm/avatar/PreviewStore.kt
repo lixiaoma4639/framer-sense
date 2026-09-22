@@ -5,6 +5,7 @@ import android.graphics.BitmapFactory
 import android.graphics.Canvas
 import android.graphics.Paint
 import android.graphics.Rect
+import android.graphics.RectF
 import com.framer.sense.feature.camera.vlm.agent.PreviewInspector
 import com.framer.sense.feature.camera.vlm.agent.PreviewInspection
 import com.framer.sense.feature.camera.vlm.model.*
@@ -50,6 +51,7 @@ class PreviewStore(private val renderer: AvatarRenderer) : PreviewInspector {
             check(src.width() > 0 && src.height() > 0) { "无效裁剪范围" }
             Canvas(composite).apply {
                 drawBitmap(background, src, Rect(0, 0, w, h), Paint(Paint.FILTER_BITMAP_FLAG))
+                drawContactShadow(human.bounds, w, h, colors.second)
                 drawBitmap(human.bitmap, 0f, 0f, null)
             }
             val result = PlanPreview(composite, human.bitmap, human.bounds)
@@ -85,5 +87,19 @@ class PreviewStore(private val renderer: AvatarRenderer) : PreviewInspector {
             blue += android.graphics.Color.blue(pixel)
         }
         return ((red - blue) / (144f * 255f)).coerceIn(-1f, 1f) to ((red + green + blue) / (432f * 255f)).coerceIn(0f, 1f)
+    }
+
+    /** 在人偶脚底添加克制的软阴影，给冻结画面提供最低限度的接地线索。 */
+    private fun Canvas.drawContactShadow(bounds: CropRect, width: Int, height: Int, brightness: Float) {
+        if (bounds.bottom !in .02f..1.02f) return
+        val centerX = (bounds.left + bounds.right) * width / 2f
+        val footY = bounds.bottom * height
+        val bodyWidth = (bounds.right - bounds.left).coerceAtLeast(.04f) * width
+        val alpha = (66f - brightness.coerceIn(0f, 1f) * 22f).toInt()
+        val shadow = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = android.graphics.Color.argb(alpha, 0, 0, 0)
+            setShadowLayer(bodyWidth * .035f, 0f, bodyWidth * .018f, android.graphics.Color.argb(alpha / 2, 0, 0, 0))
+        }
+        drawOval(RectF(centerX - bodyWidth * .30f, footY - bodyWidth * .035f, centerX + bodyWidth * .30f, footY + bodyWidth * .055f), shadow)
     }
 }

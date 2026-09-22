@@ -43,6 +43,6 @@ object VlmModule {
             }
         })
     )
-    /** 提供共享的按需预览服务；无参数，内部 GPU 线程串行执行。 */
-    @Provides @Singleton fun previews(): PreviewStore = PreviewStore(FilamentAvatarRenderer())
+    /** 提供共享的按需预览服务；GLB 资源和 GPU 工作均由内部专用线程串行管理。 */
+    @Provides @Singleton fun previews(@ApplicationContext context: Context): PreviewStore = PreviewStore(FilamentAvatarRenderer(context))
 }

@@ -43,6 +43,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil3.compose.AsyncImage
 import com.framer.sense.feature.camera.vlm.R
 import com.framer.sense.feature.camera.vlm.agent.DirectorProgress
+import com.framer.sense.feature.camera.vlm.agent.CompositionIntentMapper
 import com.framer.sense.feature.camera.vlm.data.ModelDownloadService
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
@@ -79,7 +80,7 @@ fun VlmCameraScreen(
     var requestedDownload by remember { mutableStateOf<VlmEffect.DownloadModel?>(null) }
     val startDownload: (VlmEffect.DownloadModel) -> Unit = { request ->
         try { ModelDownloadService.start(context, request.source, request.allowMetered) }
-        catch (_: Exception) { viewModel.onIntent(VlmIntent.UserMessage(stringResource(R.string.vlm_download_service_failed))) }
+        catch (_: Exception) { viewModel.onIntent(VlmIntent.UserMessage(context.getString(R.string.vlm_download_service_failed))) }
     }
     val notificationLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {
         // 用户拒绝通知权限仍可使用系统允许的前台服务，进度继续在 App 内展示。
@@ -287,6 +288,7 @@ private fun Controls(state: VlmUiState, onEvent: (VlmIntent) -> Unit, importImag
         state.error?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall, modifier = Modifier.testTag("vlm_error")) }
         state.notice?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
         if (state.stage == VlmStage.LIVE) {
+            AvatarSelector(state, onEvent, busy)
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 Button(onClick = { onEvent(VlmIntent.StartComposition) }, enabled = state.cameraReady && !busy, modifier = Modifier.testTag("vlm_start")) { Text("开始构图") }
                 if (BuildConfig.DEBUG) TextButton(onClick = importImage, enabled = !busy) { Text("测试图片") }
@@ -298,13 +300,18 @@ private fun Controls(state: VlmUiState, onEvent: (VlmIntent) -> Unit, importImag
             }
             state.referencePlan?.let { Text(it.guidance, style = MaterialTheme.typography.bodyMedium) }
         } else {
+            if (state.stage == VlmStage.FROZEN && state.result == null) {
+                AvatarSelector(state, onEvent, busy)
+            }
             state.result?.let { result ->
                 LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     items(result.plans, key = { it.id }) { plan ->
+                        val isSceneFallback = plan.uncertainties.contains(CompositionIntentMapper.SCENE_FALLBACK_MARKER)
+                        val displayTitle = if (isSceneFallback) "${stringResource(R.string.vlm_scene_analysis_fallback)} · ${plan.title}" else plan.title
                         Card(onClick = { onEvent(VlmIntent.Select(plan.id)) }, enabled = !busy,
                             modifier = Modifier.width(130.dp).border(if (plan.id == state.selectedId) 2.dp else 0.dp, MaterialTheme.colorScheme.primary, MaterialTheme.shapes.medium)) {
                             state.previews[plan.id]?.let { Image(it.composite.asImageBitmap(), plan.title, Modifier.fillMaxWidth().height(98.dp), contentScale = ContentScale.Fit) }
-                            Text(plan.title, Modifier.padding(horizontal = 6.dp), maxLines = 1, style = MaterialTheme.typography.labelLarge)
+                            Text(displayTitle, Modifier.padding(horizontal = 6.dp), maxLines = 1, style = MaterialTheme.typography.labelLarge)
                             Text("${poseLabel(plan.avatar.pose)} · ${expressionLabel(plan.avatar.expression)}", Modifier.padding(horizontal = 6.dp), style = MaterialTheme.typography.labelSmall)
                             Text("${shotLabel(plan.shot)} · ${"%.1f".format(plan.zoom)}×", Modifier.padding(6.dp), style = MaterialTheme.typography.labelSmall)
                         }
@@ -312,10 +319,12 @@ private fun Controls(state: VlmUiState, onEvent: (VlmIntent) -> Unit, importImag
                 }
                 val plan = result.plans.find { it.id == state.selectedId }
                 if (plan != null) {
+                    val isSceneFallback = plan.uncertainties.contains(CompositionIntentMapper.SCENE_FALLBACK_MARKER)
                     Text(plan.guidance, style = MaterialTheme.typography.bodySmall)
-                    Text(plan.reason, style = MaterialTheme.typography.labelSmall)
+                    Text(if (isSceneFallback) stringResource(R.string.vlm_scene_analysis_fallback_reason) else plan.reason, style = MaterialTheme.typography.labelSmall)
                     if (plan.needsRetake) Text("需重新取景 · 预览仅供构图参考", color = MaterialTheme.colorScheme.tertiary, style = MaterialTheme.typography.labelSmall)
-                    if (plan.uncertainties.isNotEmpty()) Text(plan.uncertainties.joinToString("；"), style = MaterialTheme.typography.labelSmall)
+                    val visibleUncertainties = plan.uncertainties.filterNot { it == CompositionIntentMapper.SCENE_FALLBACK_MARKER }
+                    if (visibleUncertainties.isNotEmpty()) Text(visibleUncertainties.joinToString("；"), style = MaterialTheme.typography.labelSmall)
                     Slider(value = plan.avatar.height.coerceIn(.08f, 4f), onValueChange = { onEvent(VlmIntent.Resize(it)) }, valueRange = .08f..4f, enabled = !busy)
                 }
 
@@ -329,6 +338,22 @@ private fun Controls(state: VlmUiState, onEvent: (VlmIntent) -> Unit, importImag
         (state.diagnostics ?: state.result)?.let { DebugDetails(it) }
         OutlinedTextField(value = state.instruction, onValueChange = { onEvent(VlmIntent.InstructionChanged(it)) }, label = { Text(if (state.result == null) "拍摄要求" else "修改要求，例如人物小一点") }, modifier = Modifier.fillMaxWidth(), enabled = !busy, maxLines = 2)
         if (state.stage == VlmStage.READY) Button(onClick = { onEvent(VlmIntent.Revise) }, enabled = !busy && state.instruction.isNotBlank()) { Text("让导演修改选中方案") }
+    }
+}
+
+/** 在生成前由用户固定本次构图参考的角色，模型不会根据图片替换该选择。 */
+@Composable
+private fun AvatarSelector(state: VlmUiState, onEvent: (VlmIntent) -> Unit, busy: Boolean) {
+    Text(stringResource(R.string.vlm_avatar_select_title), style = MaterialTheme.typography.labelLarge)
+    LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        items(AvatarId.entries) { avatar ->
+            FilterChip(
+                selected = state.selectedAvatar == avatar,
+                onClick = { onEvent(VlmIntent.AvatarSelected(avatar)) },
+                enabled = !busy,
+                label = { Text(avatarLabel(avatar)) }
+            )
+        }
     }
 }
 
@@ -349,21 +374,44 @@ private fun DebugDetails(result: CompositionResult) {
  * @param pose 公共姿态编号。
  * @return 简体中文姿态说明。
  */
-private fun poseLabel(pose: PoseId): String = when (pose) {
-    PoseId.RELAXED -> "自然站立"; PoseId.SIDE -> "侧身"; PoseId.LOOK_BACK -> "回眸"
-    PoseId.HANDS_FRONT -> "身前交叠"; PoseId.HAND_HIP -> "单手叉腰"; PoseId.HANDS_HIPS -> "双手叉腰"
-    PoseId.WAVE -> "挥手"; PoseId.POINT -> "抬手指向"; PoseId.HAT -> "扶帽"
-    PoseId.LOOK_UP -> "抬头"; PoseId.LOOK_DOWN -> "低头"; PoseId.ARMS_OPEN -> "双臂展开"
-}
+@Composable
+private fun poseLabel(pose: PoseId): String = stringResource(when (pose) {
+    PoseId.RELAXED -> R.string.vlm_pose_relaxed
+    PoseId.SIDE -> R.string.vlm_pose_side
+    PoseId.LOOK_BACK -> R.string.vlm_pose_look_back
+    PoseId.HANDS_FRONT -> R.string.vlm_pose_hands_front
+    PoseId.HAND_HIP -> R.string.vlm_pose_hand_hip
+    PoseId.HANDS_HIPS -> R.string.vlm_pose_hands_hips
+    PoseId.WAVE -> R.string.vlm_pose_wave
+    PoseId.POINT -> R.string.vlm_pose_point
+    PoseId.HAT -> R.string.vlm_pose_hat
+    PoseId.LOOK_UP -> R.string.vlm_pose_look_up
+    PoseId.LOOK_DOWN -> R.string.vlm_pose_look_down
+    PoseId.ARMS_OPEN -> R.string.vlm_pose_arms_open
+})
 
 /** 将面部表情编号映射为用户名称。
  * @param expression 公共表情编号。
  * @return 简体中文表情名称。
  */
-private fun expressionLabel(expression: ExpressionId): String = when (expression) {
-    ExpressionId.NEUTRAL -> "平静"; ExpressionId.SMILE -> "微笑"
-    ExpressionId.HAPPY -> "开心"; ExpressionId.SURPRISED -> "惊讶"
-}
+@Composable
+private fun expressionLabel(expression: ExpressionId): String = stringResource(when (expression) {
+    ExpressionId.NEUTRAL -> R.string.vlm_expression_neutral
+    ExpressionId.SMILE -> R.string.vlm_expression_smile
+    ExpressionId.HAPPY -> R.string.vlm_expression_happy
+    ExpressionId.SURPRISED -> R.string.vlm_expression_surprised
+    ExpressionId.THOUGHTFUL -> R.string.vlm_expression_thoughtful
+    ExpressionId.CONFIDENT -> R.string.vlm_expression_confident
+})
+
+/** 将用户选择的内置 Rocketbox 人像映射为本地化标签。 */
+@Composable
+private fun avatarLabel(avatar: AvatarId): String = stringResource(when (avatar) {
+    AvatarId.ADULT_FEMALE -> R.string.vlm_avatar_adult_female
+    AvatarId.ADULT_MALE -> R.string.vlm_avatar_adult_male
+    AvatarId.CHILD_GIRL -> R.string.vlm_avatar_child_girl
+    AvatarId.CHILD_BOY -> R.string.vlm_avatar_child_boy
+})
 
 /** 将景别编号转换为简体中文。
  * @param shot 公共协议中的景别。

@@ -123,29 +123,44 @@ class DirectorAgent(
                 outputs += answer.raw
                 onProgress(DirectorProgress.ValidatingResponse(turn + 1))
                 val localReply = traces.last().provider == ProviderId.LOCAL
-                val decision = answer.decision ?: try {
-                    if (localReply) OfflineDirectorProtocol.decode(answer.raw, input) else DirectorOutput.decode(answer.raw)
-                } catch (error: IllegalArgumentException) {
-                    logger.warn("导演 JSON 解析失败 type=${error::class.java.simpleName}")
-                    logger.diagnostic { "导演 JSON 解析详情 turn=${turn + 1} type=${error::class.java.name} reason=${error.message}" }
+                val intentDecision = answer.decision?.let(CompositionIntentMapper::fromLegacy) ?: try {
+                    if (localReply) OfflineDirectorProtocol.decodeIntent(answer.raw, input)
+                    else decodeGatewayIntent(answer.raw)
+                } catch (error: Exception) {
+                    logger.warn("导演构图意图解析失败 type=${error::class.java.simpleName}")
+                    logger.diagnostic { "导演构图意图解析详情 turn=${turn + 1} type=${error::class.java.name} reason=${error.message}" }
                     null
                 }
-                if (decision == null) {
-                    logger.warn("模型输出不是有效导演 JSON turn=${turn + 1} outputBytes=${answer.raw.toByteArray().size}")
+                if (intentDecision == null) {
+                    logger.warn("模型输出不是有效构图意图 turn=${turn + 1} outputBytes=${answer.raw.toByteArray().size}")
                     val errors = DirectorOutput.repairErrors(answer.raw, input.scene.id)
                     observations += ToolObservation("validate_plan", errors, errors.map { ToolIssue("INVALID_OUTPUT", it) })
                     logger.warn("导演输出修正要求 turn=${turn + 1} issues=${errors.joinToString("；")}")
                     return@repeat
                 }
-                if (decision.version != 1 || decision.imageId != input.scene.id) {
-                    logger.warn("模型输出 imageId/version 不匹配 turn=${turn + 1} version=${decision.version} imageMatches=${decision.imageId == input.scene.id}")
+                if (intentDecision.version != 1 || intentDecision.imageId != input.scene.id) {
+                    logger.warn("模型意图 imageId/version 不匹配 turn=${turn + 1} version=${intentDecision.version} imageMatches=${intentDecision.imageId == input.scene.id}")
                     observations += ToolObservation("validate_plan", listOf("协议版本必须为 1，imageId 必须等于 ${input.scene.id}"))
                     return@repeat
                 }
-                if (decision.action == ActionKind.CAPABILITIES) {
+                if (intentDecision.action == ActionKind.CAPABILITIES) {
                     observations += ToolObservation("list_avatar_options", listOf(DirectorPrompt.capabilities()))
                     return@repeat
                 }
+                val mapped = try {
+                    CompositionIntentMapper.map(intentDecision, input)
+                } catch (error: IllegalArgumentException) {
+                    logger.warn("构图意图安全映射失败 turn=${turn + 1} reason=${error.message}")
+                    observations += ToolObservation("map_composition_intents", listOf(error.message.orEmpty()), listOf(ToolIssue("INVALID_INTENT", error.message.orEmpty())))
+                    return@repeat
+                }
+                logger.info("构图意图映射完成 turn=${turn + 1} intents=${intentDecision.intents.joinToString { "${it.shot}/${it.zone}/${it.pose}/${it.facing}/${it.expression}" }} plans=${mapped.plans.joinToString { "${it.id}:${it.shot}/${it.avatar.pose}/${it.avatar.expression}" }}")
+                observations += ToolObservation(
+                    "map_composition_intents",
+                    mapped.messages.ifEmpty { listOf("已将模型构图意图映射为安全的坐标、裁剪与倍率") }
+                )
+                // 人像身份只来自拍摄前的用户选择，映射器不会接受或推断模型指定的角色。
+                val decision = DirectorDecision(intentDecision.action, mapped.plans, intentDecision.version, intentDecision.imageId)
                 val errors = validator.validate(decision.plans, input)
                 logger.info("校验模型输出 turn=${turn + 1} action=${decision.action} plans=${decision.plans.size} errors=${errors.size}")
                 if (errors.isNotEmpty()) logger.warn("模型输出校验详情 turn=${turn + 1} errors=${errors.joinToString("；")}")
@@ -179,6 +194,13 @@ class DirectorAgent(
             failure.diagnostics = CompositionResult(emptyList(), traces.toList(), observations.toList(), outputs.toList())
             throw failure
         }
+    }
+
+    /** 新网关协议优先读取意图；旧网关完整方案会转成意图后走同一安全映射。 */
+    private fun decodeGatewayIntent(raw: String): CompositionIntentDecision {
+        val text = DirectorOutput.unwrap(raw)
+        return runCatching { VlmJson.decodeFromString<CompositionIntentDecision>(text) }
+            .getOrElse { CompositionIntentMapper.fromLegacy(DirectorOutput.decode(text)) }
     }
 
 }

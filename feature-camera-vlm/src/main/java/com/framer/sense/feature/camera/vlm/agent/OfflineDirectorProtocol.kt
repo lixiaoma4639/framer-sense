@@ -1,24 +1,85 @@
 package com.framer.sense.feature.camera.vlm.agent
 
 import com.framer.sense.feature.camera.vlm.model.*
-import kotlinx.serialization.encodeToString
-import kotlinx.serialization.json.*
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.booleanOrNull
+import kotlinx.serialization.json.float
+import kotlinx.serialization.json.int
 
-/** 离线模型以三行中文提供画面分析；应用负责固定且已校验的人偶几何。 */
+/**
+ * 本地模型使用短小、可逐行恢复的意图协议。坐标、裁剪和倍率永远不由本地模型生成，
+ * 从而避免低算力设备因长 JSON 或数值字段失控导致整次构图失败。
+ */
 object OfflineDirectorProtocol {
-    fun prompt(input: DirectorInput): String = compositionPrompt(input)
+    fun prompt(input: DirectorInput): String = """
+        你是人像摄影构图助手。看照片后只输出三行，不输出解释、代码块或标题。
+        每行严格使用：景别|方位|姿势|朝向|表情|标题|拍摄指导|构图理由
+        景别只能是 ENVIRONMENT、FULL、HALF、CLOSE_UP；方位只能 LEFT、CENTER、RIGHT；
+        姿势只能 ${PoseId.entries.joinToString()}；朝向只能 ${FacingDirection.entries.joinToString()}；表情只能 ${ExpressionId.entries.joinToString()}。
+        三行必须是不同的构图组合。只根据图片和用户要求给建议，文字简短。
+        用户要求：${input.instruction.take(240)}
+    """.trimIndent()
 
-    private fun compositionPrompt(input: DirectorInput): String = buildString {
-        // 导入的 Qwen3-VL 在 CPU 上对长格式约束会逐字复述提示词。先只取真实视觉分析，
-        // 再由应用生成已经过几何校验的环境、全身、半身三个镜头，避免把格式遵循能力当作视觉能力。
-        append("请看这张照片，用一句中文描述画面中可见的人物、环境，以及适合拍摄的人像构图。只回答描述，不要复述问题，不要列清单。")
-    }.trim()
+    /** 新主链路：读取模型摄影意图，随后由映射器生成安全方案。 */
+    fun decodeIntent(raw: String, input: DirectorInput): CompositionIntentDecision {
+        val text = restoreMissingOuterArray(DirectorOutput.unwrap(raw)).trim()
+        require(text.isNotBlank()) { "Empty offline output" }
+        if (text.startsWith("{")) {
+            return runCatching { VlmJson.decodeFromString<CompositionIntentDecision>(text) }
+                .getOrElse { CompositionIntentMapper.fromLegacy(DirectorOutput.decode(text)) }
+        }
+        if (text.startsWith("[")) return CompositionIntentMapper.fromLegacy(decodeLegacyArray(text, input))
+        val intents = decodeLines(text)
+        return if (intents.size == 3) {
+            CompositionIntentDecision(ActionKind.FINAL, intents, imageId = input.scene.id)
+        } else {
+            CompositionIntentMapper.sceneFallback(visualDescription(text), input)
+        }
+    }
 
+    /** 保留旧调用点的返回类型，避免外围旧集成直接依赖本地协议细节。 */
     fun decode(raw: String, input: DirectorInput): DirectorDecision {
-        val text = restoreMissingOuterArray(DirectorOutput.unwrap(raw))
-        // 已完整遵守旧协议的响应仍可使用，禁止对旧协议补造缺失字段或方案。
-        if (text.startsWith("{")) return DirectorOutput.decode(text)
-        if (!text.trimStart().startsWith("[")) return decodeNatural(text, input)
+        val intent = decodeIntent(raw, input)
+        val mapped = CompositionIntentMapper.map(intent, input).plans
+        return DirectorDecision(intent.action, mapped, intent.version, intent.imageId)
+    }
+
+    private fun decodeLines(text: String): List<CompositionIntent> = text.lineSequence()
+        .map(String::trim)
+        .map { it.replaceFirst(Regex("^[•*-]?\\s*\\d*[.、)]?\\s*"), "") }
+        .mapNotNull { line ->
+            val fields = line.split('|').map(String::trim)
+            if (fields.size != 8) return@mapNotNull null
+            val shot = enumValue<ShotType>(fields[0]) ?: return@mapNotNull null
+            val zone = enumValue<CompositionZone>(fields[1]) ?: return@mapNotNull null
+            val pose = enumValue<PoseId>(fields[2]) ?: return@mapNotNull null
+            val facing = enumValue<FacingDirection>(fields[3]) ?: return@mapNotNull null
+            val expression = enumValue<ExpressionId>(fields[4]) ?: return@mapNotNull null
+            if (fields.drop(5).any(String::isBlank)) return@mapNotNull null
+            CompositionIntent(
+                id = "p${System.identityHashCode(line)}",
+                title = fields[5].take(28), shot = shot, zone = zone, pose = pose,
+                facing = facing, expression = expression,
+                guidance = fields[6].take(160), reason = fields[7].take(160)
+            )
+        }.toList()
+
+    private inline fun <reified T : Enum<T>> enumValue(value: String): T? = enumValues<T>()
+        .firstOrNull { it.name.equals(value.trim(), ignoreCase = true) }
+
+    private fun visualDescription(raw: String): String {
+        val description = raw.lineSequence().map(String::trim).filter(String::isNotBlank)
+            // 部分损坏的三行协议不是场景描述，不能据它回退生成貌似有效的三张卡片。
+            .filterNot { it.contains('|') || it.contains("景别|方位|姿势") || it.contains("只输出三行") }
+            .joinToString(" ").trim()
+        require(description.length >= 8) { "Offline model did not return visual analysis" }
+        return description.take(480)
+    }
+
+    /** 兼容已经安装旧离线模型或缓存提示词时产生的数组完整方案。 */
+    private fun decodeLegacyArray(text: String, input: DirectorInput): DirectorDecision {
         val rows = VlmJson.parseToJsonElement(text) as? JsonArray ?: throw IllegalArgumentException("Expected plan array")
         val selected = input.existing.find { it.id == input.selectedId }
         require(input.selectedId == null || selected != null) { "Unknown selected plan" }
@@ -30,129 +91,32 @@ object OfflineDirectorProtocol {
             val avatar = row[3] as? JsonArray ?: throw IllegalArgumentException("Expected avatar")
             require(crop.size == 4 && avatar.size == 7) { "Invalid geometry fields" }
             fun primitive(value: JsonElement): JsonPrimitive = value as? JsonPrimitive ?: throw IllegalArgumentException("Expected primitive")
-            fun number(value: JsonElement): Float {
-                val p = primitive(value)
-                require(!p.isString && p.float.isFinite()) { "Expected finite number" }
-                return p.float
+            fun number(value: JsonElement): Float = primitive(value).let { p ->
+                require(!p.isString && p.float.isFinite()) { "Expected finite number" }; p.float
             }
-            fun enumIndex(value: JsonElement, size: Int): Int {
-                require(!primitive(value).isString) { "Expected numeric enum" }
-                return primitive(value).int.also { require(it in 0 until size) { "Unknown enum" } }
-            }
-            fun text(value: JsonElement): String {
-                require(primitive(value).isString) { "Expected text" }
-                return primitive(value).content
-            }
-            require(!primitive(row[7]).isString) { "Expected boolean" }
+            fun enumIndex(value: JsonElement, size: Int): Int = primitive(value).int.also { require(it in 0 until size) { "Unknown enum" } }
+            fun string(value: JsonElement): String = primitive(value).let { require(it.isString) { "Expected text" }; it.content }
             CompositionPlan(
-                id = selected?.id ?: "p${index + 1}", title = text(row[4]),
+                id = selected?.id ?: "p${index + 1}", title = string(row[4]),
                 shot = ShotType.entries[enumIndex(row[0], ShotType.entries.size)],
                 crop = CropRect(number(crop[0]), number(crop[1]), number(crop[2]), number(crop[3])), zoom = number(row[2]),
-                avatar = AvatarPlacement(Point2(number(avatar[0]), number(avatar[1])), number(avatar[2]), number(avatar[3]),
-                    PoseId.entries[enumIndex(avatar[4], PoseId.entries.size)], ExpressionId.entries[enumIndex(avatar[5], ExpressionId.entries.size)], number(avatar[6])),
-                guidance = text(row[5]), reason = text(row[6]), needsRetake = requireNotNull(primitive(row[7]).booleanOrNull),
-                uncertainties = (row[8] as? JsonArray ?: throw IllegalArgumentException("Expected uncertainties")).map { text(it) }, revision = selected?.revision ?: 0
-            )
-        }
-        val safePlans = plans.map(::fitWholePersonInsideFrame)
-        val merged = if (selected == null) safePlans else input.existing.map { if (it.id == selected.id) safePlans.single() else it }
-        return DirectorDecision(ActionKind.FINAL, merged, imageId = input.scene.id)
-    }
-
-    private fun decodeNatural(text: String, input: DirectorInput): DirectorDecision {
-        val expected = listOf("环境" to ShotType.ENVIRONMENT, "全身" to ShotType.FULL, "半身" to ShotType.HALF)
-        val rows = text.lineSequence().map(String::trim)
-            .map { it.replaceFirst(Regex("^[•*-]?\\s*\\d*[.、)]?\\s*"), "") }
-            .filter { it.startsWith("环境：") || it.startsWith("环境:") || it.startsWith("全身：") || it.startsWith("全身:") || it.startsWith("半身：") || it.startsWith("半身:") }
-            .toList()
-        if (rows.isEmpty()) return decisionFromVisualDescription(text, input, expected)
-        require(rows.size == 3) { "Expected three offline suggestions" }
-        val plans = rows.zip(expected).mapIndexed { index, (row, expectedShot) ->
-            val (label, shot) = expectedShot
-            require(row.startsWith("$label：") || row.startsWith("$label:")) { "Unexpected offline suggestion order" }
-            val content = row.substringAfter('：', row.substringAfter(':')).trim()
-            val fields = content.split('｜', '|').map(String::trim).filter(String::isNotBlank)
-            require(content.isNotBlank()) { "Expected offline suggestion content" }
-            val title = if (fields.size >= 3) fields[0].take(18) else content.take(18)
-            val guidance = if (fields.size >= 3) fields[1] else content
-            val reason = if (fields.size >= 3) fields[2] else content
-            val avatar = when (shot) {
-                ShotType.ENVIRONMENT -> AvatarPlacement(Point2(.5f, .9f), .3f)
-                ShotType.FULL -> AvatarPlacement(Point2(.5f, .92f), .65f, pose = PoseId.SIDE)
-                ShotType.HALF -> AvatarPlacement(Point2(.5f, 1.4f), 1.25f, pose = PoseId.LOOK_BACK)
-                else -> error("Unsupported offline shot")
-            }
-            CompositionPlan("p${index + 1}", title, shot, CropRect(), input.scene.currentZoom, avatar, guidance, reason)
-        }
-        return DirectorDecision(ActionKind.FINAL, plans, imageId = input.scene.id)
-    }
-
-    private fun decisionFromVisualDescription(
-        raw: String,
-        input: DirectorInput,
-        expected: List<Pair<String, ShotType>>
-    ): DirectorDecision {
-        val description = raw.lineSequence()
-            .map(String::trim)
-            .filter(String::isNotBlank)
-            .filterNot { it.startsWith("景别：") || it.startsWith("景别:") }
-            .joinToString(" ")
-            .trim()
-        // 复述协议不是画面分析，绝不拿它伪造建议。
-        require(description.length >= 8 &&
-            !description.contains("用户要求") &&
-            !description.contains("只输出") &&
-            !description.contains("每行格式") &&
-            !description.contains("不要复述问题")) { "Expected visual description" }
-        val plans = expected.mapIndexed { index, (_, shot) ->
-            val avatar = when (shot) {
-                ShotType.ENVIRONMENT -> AvatarPlacement(Point2(.5f, .9f), .3f)
-                ShotType.FULL -> AvatarPlacement(Point2(.5f, .92f), .65f, pose = PoseId.SIDE)
-                ShotType.HALF -> AvatarPlacement(Point2(.5f, 1.4f), 1.25f, pose = PoseId.LOOK_BACK)
-                else -> error("Unsupported offline shot")
-            }
-            CompositionPlan(
-                id = "p${index + 1}",
-                title = description.take(18),
-                shot = shot,
-                crop = CropRect(),
-                zoom = input.scene.currentZoom,
-                avatar = avatar,
-                guidance = description,
-                reason = description
+                avatar = AvatarPlacement(
+                    foot = Point2(number(avatar[0]), number(avatar[1])), height = number(avatar[2]), yaw = number(avatar[3]),
+                    avatarId = input.avatarId, pose = PoseId.entries[enumIndex(avatar[4], PoseId.entries.size)],
+                    expression = ExpressionId.entries[enumIndex(avatar[5], ExpressionId.entries.size)], expressionIntensity = number(avatar[6])
+                ),
+                guidance = string(row[5]), reason = string(row[6]),
+                needsRetake = requireNotNull(primitive(row[7]).booleanOrNull),
+                uncertainties = (row[8] as? JsonArray ?: throw IllegalArgumentException("Expected uncertainties")).map(::string),
+                revision = selected?.revision ?: 0
             )
         }
         return DirectorDecision(ActionKind.FINAL, plans, imageId = input.scene.id)
     }
 
-    /**
-     * 离线短协议常把半身示例的脚点复制给全身项。全身要求头脚可见，故只在该
-     * 已知矛盾出现时收紧人偶盒至画面内；不更改模型给出的景别、文本、姿态或裁剪。
-     */
-    private fun fitWholePersonInsideFrame(plan: CompositionPlan): CompositionPlan {
-        if (plan.shot !in setOf(ShotType.ENVIRONMENT, ShotType.FULL)) return plan
-        val avatar = plan.avatar
-        if (avatar.foot.y <= 1f && avatar.foot.y - avatar.height >= 0f) return plan
-        val footY = avatar.foot.y.coerceIn(0.08f, 1f)
-        return plan.copy(avatar = avatar.copy(foot = avatar.foot.copy(y = footY), height = avatar.height.coerceIn(0.08f, footY)))
-    }
-
-    /**
-     * MNN 的视觉预填充路径会在少数设备上遗漏最外层数组的第一个 `[`，但其余 token
-     * 已完整输出，例如 `[0,...],[1,...],[2,...]]`。只补回这个可证明缺失的结构字符，
-     * 不补字段、不修改任何模型数值；随后仍由严格协议和几何校验决定是否可用。
-     */
+    /** 只补 MNN 已知会遗漏的最外层数组符号，绝不补造模型字段。 */
     private fun restoreMissingOuterArray(text: String): String {
         val trimmed = text.trimStart()
         return if (trimmed.startsWith("[") && trimmed.drop(1).trimStart().firstOrNull()?.isDigit() == true && trimmed.endsWith("]]")) "[$trimmed" else text
-    }
-
-    private fun encodePlan(plan: CompositionPlan): JsonArray = buildJsonArray {
-        add(plan.shot.ordinal)
-        add(buildJsonArray { with(plan.crop) { add(left); add(top); add(right); add(bottom) } })
-        add(plan.zoom)
-        add(buildJsonArray { with(plan.avatar) { add(foot.x); add(foot.y); add(height); add(yaw); add(pose.ordinal); add(expression.ordinal); add(expressionIntensity) } })
-        add(plan.title); add(plan.guidance); add(plan.reason); add(plan.needsRetake)
-        add(buildJsonArray { plan.uncertainties.forEach { add(it) } })
     }
 }

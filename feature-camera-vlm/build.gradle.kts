@@ -83,6 +83,7 @@ dependencies {
 //    implementation(libs.okhttp)
     implementation(libs.filament.android)
     implementation(libs.filamat.android)
+    implementation(libs.gltfio.android)
 
 
     // Hilt Dependency Injection

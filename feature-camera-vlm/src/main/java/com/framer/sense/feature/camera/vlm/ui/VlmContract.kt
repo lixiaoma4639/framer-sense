@@ -20,6 +20,7 @@ data class VlmUiState(
     val result: CompositionResult? = null,
     val diagnostics: CompositionResult? = null,
     val selectedId: String? = null,
+    val selectedAvatar: AvatarId = AvatarId.ADULT_FEMALE,
     val previews: Map<String, PlanPreview> = emptyMap(),
     val reference: PlanPreview? = null,
     val referencePlan: CompositionPlan? = null,
@@ -42,6 +43,7 @@ sealed interface VlmIntent {
     data class CameraReady(val capabilities: CameraCapabilities) : VlmIntent
     data object CameraStopped : VlmIntent
     data class InstructionChanged(val text: String) : VlmIntent
+    data class AvatarSelected(val avatarId: AvatarId) : VlmIntent
     data object Generate : VlmIntent
     data object Revise : VlmIntent
     data object Cancel : VlmIntent
