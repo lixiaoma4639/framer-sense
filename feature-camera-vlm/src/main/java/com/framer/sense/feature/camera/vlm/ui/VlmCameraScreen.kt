@@ -307,21 +307,19 @@ private fun Controls(state: VlmUiState, onEvent: (VlmIntent) -> Unit, importImag
                 LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     items(result.plans, key = { it.id }) { plan ->
                         val isSceneFallback = plan.uncertainties.contains(CompositionIntentMapper.SCENE_FALLBACK_MARKER)
-                        val displayTitle = if (isSceneFallback) "${stringResource(R.string.vlm_scene_analysis_fallback)} · ${plan.title}" else plan.title
+                        val displayTitle = if (isSceneFallback) stringResource(R.string.vlm_scene_analysis_title, plan.title) else plan.title
                         Card(onClick = { onEvent(VlmIntent.Select(plan.id)) }, enabled = !busy,
                             modifier = Modifier.width(130.dp).border(if (plan.id == state.selectedId) 2.dp else 0.dp, MaterialTheme.colorScheme.primary, MaterialTheme.shapes.medium)) {
                             state.previews[plan.id]?.let { Image(it.composite.asImageBitmap(), plan.title, Modifier.fillMaxWidth().height(98.dp), contentScale = ContentScale.Fit) }
                             Text(displayTitle, Modifier.padding(horizontal = 6.dp), maxLines = 1, style = MaterialTheme.typography.labelLarge)
-                            Text("${poseLabel(plan.avatar.pose)} · ${expressionLabel(plan.avatar.expression)}", Modifier.padding(horizontal = 6.dp), style = MaterialTheme.typography.labelSmall)
-                            Text("${shotLabel(plan.shot)} · ${"%.1f".format(plan.zoom)}×", Modifier.padding(6.dp), style = MaterialTheme.typography.labelSmall)
+                            Text(stringResource(R.string.vlm_composition_pose_expression, poseLabel(plan.avatar.pose), expressionLabel(plan.avatar.expression)), Modifier.padding(horizontal = 6.dp), style = MaterialTheme.typography.labelSmall)
+                            Text(stringResource(R.string.vlm_composition_attributes, shotLabel(plan.shot), placementZoneLabel(plan.avatar.foot.x), facingLabel(plan.avatar.yaw)), Modifier.padding(6.dp), style = MaterialTheme.typography.labelSmall)
                         }
                     }
                 }
+                CompositionDescriptions(result)
                 val plan = result.plans.find { it.id == state.selectedId }
                 if (plan != null) {
-                    val isSceneFallback = plan.uncertainties.contains(CompositionIntentMapper.SCENE_FALLBACK_MARKER)
-                    Text(plan.guidance, style = MaterialTheme.typography.bodySmall)
-                    Text(if (isSceneFallback) stringResource(R.string.vlm_scene_analysis_fallback_reason) else plan.reason, style = MaterialTheme.typography.labelSmall)
                     if (plan.needsRetake) Text("需重新取景 · 预览仅供构图参考", color = MaterialTheme.colorScheme.tertiary, style = MaterialTheme.typography.labelSmall)
                     val visibleUncertainties = plan.uncertainties.filterNot { it == CompositionIntentMapper.SCENE_FALLBACK_MARKER }
                     if (visibleUncertainties.isNotEmpty()) Text(visibleUncertainties.joinToString("；"), style = MaterialTheme.typography.labelSmall)
@@ -338,6 +336,34 @@ private fun Controls(state: VlmUiState, onEvent: (VlmIntent) -> Unit, importImag
         (state.diagnostics ?: state.result)?.let { DebugDetails(it) }
         OutlinedTextField(value = state.instruction, onValueChange = { onEvent(VlmIntent.InstructionChanged(it)) }, label = { Text(if (state.result == null) "拍摄要求" else "修改要求，例如人物小一点") }, modifier = Modifier.fillMaxWidth(), enabled = !busy, maxLines = 2)
         if (state.stage == VlmStage.READY) Button(onClick = { onEvent(VlmIntent.Revise) }, enabled = !busy && state.instruction.isNotBlank()) { Text("让导演修改选中方案") }
+    }
+}
+
+/** 展示三张最终可渲染方案各自的 VLM 依据与实际采用的人像构图。 */
+@Composable
+private fun CompositionDescriptions(result: CompositionResult) {
+    Text(stringResource(R.string.vlm_composition_recommendations), style = MaterialTheme.typography.titleSmall)
+    result.plans.forEachIndexed { index, plan ->
+        val fallback = plan.uncertainties.contains(CompositionIntentMapper.SCENE_FALLBACK_MARKER)
+        val title = if (fallback) stringResource(R.string.vlm_scene_analysis_title, plan.title) else plan.title
+        val actual = stringResource(
+            R.string.vlm_composition_attributes,
+            shotLabel(plan.shot), placementZoneLabel(plan.avatar.foot.x), facingLabel(plan.avatar.yaw)
+        )
+        Column(
+            Modifier.fillMaxWidth().border(1.dp, MaterialTheme.colorScheme.outlineVariant, MaterialTheme.shapes.small).padding(8.dp),
+            verticalArrangement = Arrangement.spacedBy(2.dp)
+        ) {
+            Text(stringResource(R.string.vlm_composition_plan_title, index + 1, title), style = MaterialTheme.typography.labelLarge)
+            Text(stringResource(R.string.vlm_actual_composition, actual), style = MaterialTheme.typography.labelSmall)
+            Text(stringResource(R.string.vlm_composition_pose_expression, poseLabel(plan.avatar.pose), expressionLabel(plan.avatar.expression)), style = MaterialTheme.typography.labelSmall)
+            if (fallback) {
+                Text(stringResource(R.string.vlm_environment_person_evidence, plan.guidance), style = MaterialTheme.typography.bodySmall)
+            } else {
+                Text(stringResource(R.string.vlm_composition_guidance, plan.guidance), style = MaterialTheme.typography.bodySmall)
+                Text(stringResource(R.string.vlm_composition_reason, plan.reason), style = MaterialTheme.typography.bodySmall)
+            }
+        }
     }
 }
 
@@ -417,12 +443,29 @@ private fun avatarLabel(avatar: AvatarId): String = stringResource(when (avatar)
  * @param shot 公共协议中的景别。
  * @return 用户可理解的名称。
  */
-private fun shotLabel(shot: ShotType): String = when (shot) {
-    ShotType.ENVIRONMENT -> "环境人像"
-    ShotType.FULL -> "全身"
-    ShotType.HALF -> "半身"
-    ShotType.CLOSE_UP -> "特写"
-}
+@Composable
+private fun shotLabel(shot: ShotType): String = stringResource(when (shot) {
+    ShotType.ENVIRONMENT -> R.string.vlm_shot_environment
+    ShotType.FULL -> R.string.vlm_shot_full
+    ShotType.HALF -> R.string.vlm_shot_half
+    ShotType.CLOSE_UP -> R.string.vlm_shot_close_up
+})
+
+/** 显示安全映射后真正应用在预览中的画面方位。 */
+@Composable
+private fun placementZoneLabel(x: Float): String = stringResource(when {
+    x < .4f -> R.string.vlm_zone_left
+    x > .6f -> R.string.vlm_zone_right
+    else -> R.string.vlm_zone_center
+})
+
+/** 显示安全映射后真正应用在预览中的朝向。 */
+@Composable
+private fun facingLabel(yaw: Float): String = stringResource(when {
+    yaw < -8f -> R.string.vlm_facing_left
+    yaw > 8f -> R.string.vlm_facing_right
+    else -> R.string.vlm_facing_front
+})
 
 /** 模型配置和离线包管理弹窗。
  * @param state 当前设置及操作进度。

@@ -22,6 +22,7 @@ object DirectorPrompt {
         shot 仅 ENVIRONMENT/FULL/HALF/CLOSE_UP；zone 仅 LEFT/CENTER/RIGHT；facing 仅 FRONT/THREE_QUARTER_LEFT/THREE_QUARTER_RIGHT。
         pose 仅 ${PoseId.entries.joinToString()}；expression 仅 ${ExpressionId.entries.joinToString()}；expressionIntensity 为 0..1。
         三项的 景别 + 方位 + 姿势 + 朝向 + 表情 组合不得完全重复。可自由选择景别，不要固定套用环境、全身、半身模板。
+        title、guidance 和 reason 必须使用简体中文；reason 要引用当前图片中可见的环境或空间依据，使构图建议与场景分析可对应。
         你只负责摄影语义：景别、人物在画面左中右、姿势、朝向、表情及文案。客户端会安全计算坐标、裁剪和倍率；不要输出 crop、zoom、foot、height、yaw、avatar 或 needsRetake。
         未知地面、光照与遮挡条件写入 uncertainties。只推荐适合模仿的站姿，不推测建筑可进入性或画面外内容。
         场景尺寸=${input.scene.width}x${input.scene.height}；currentZoom=${input.scene.currentZoom}

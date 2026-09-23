@@ -9,17 +9,14 @@ import kotlinx.serialization.json.float
 import kotlinx.serialization.json.int
 
 /**
- * 本地模型使用短小、可逐行恢复的意图协议。坐标、裁剪和倍率永远不由本地模型生成，
- * 从而避免低算力设备因长 JSON 或数值字段失控导致整次构图失败。
+ * 本地模型优先给出极短场景观察；应用再沿用同一安全映射器生成方案。
+ * 它仍能兼容旧的逐行意图和数组协议，但不要求低算力模型稳定生成复杂格式。
  */
 object OfflineDirectorProtocol {
     fun prompt(input: DirectorInput): String = """
-        你是人像摄影构图助手。看照片后只输出三行，不输出解释、代码块或标题。
-        每行严格使用：景别|方位|姿势|朝向|表情|标题|拍摄指导|构图理由
-        景别只能是 ENVIRONMENT、FULL、HALF、CLOSE_UP；方位只能 LEFT、CENTER、RIGHT；
-        姿势只能 ${PoseId.entries.joinToString()}；朝向只能 ${FacingDirection.entries.joinToString()}；表情只能 ${ExpressionId.entries.joinToString()}。
-        三行必须是不同的构图组合。只根据图片和用户要求给建议，文字简短。
-        用户要求：${input.instruction.take(240)}
+        只看图片。用一句简体中文、50字以内，说明可见环境，并给出推荐景别、人物站位或姿势。
+        禁止列表、标题、Markdown、英文、坐标、姿势编号和解释；回答一句后立刻结束。
+        拍摄要求：${input.instruction.take(120)}
     """.trimIndent()
 
     /** 新主链路：读取模型摄影意图，随后由映射器生成安全方案。 */

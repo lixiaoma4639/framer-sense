@@ -12,10 +12,11 @@
 #include <cctype>
 
 using MNN::Transformer::Llm;
-static constexpr int kMaxOutputTokens = 192;
+// 离线协议只需要一句场景观察；较小预算避免低端 CPU 在模型忽略停止指令时长时间续写。
+static constexpr int kMaxOutputTokens = 96;
 // 不覆盖模型包的 sampler 配置。Qwen3-VL-2B 的导出配置使用 mixed sampler；
 // 强制 greedy 会在部分 ARM CPU 上重复同一 token，直到触发输出上限。
-static constexpr char kCpuConfig[] = R"({"backend_type":"cpu","thread_num":4,"max_all_tokens":16384,"max_new_tokens":192,"reuse_kv":false,"use_template":true,"timeout_ms":120000})";
+static constexpr char kCpuConfig[] = R"({"backend_type":"cpu","thread_num":4,"max_all_tokens":16384,"max_new_tokens":96,"reuse_kv":false,"use_template":true,"timeout_ms":120000})";
 
 /** 直接监听 MNN 的 token 输出，首 token 后由协程监控停滞，不把耗时长当成异常。 */
 class TokenOutputBuffer : public std::streambuf {
@@ -189,7 +190,9 @@ Java_com_framer_sense_feature_camera_vlm_data_MnnNative_infer(JNIEnv* env, jobje
             if (callback && result) env->CallVoidMethod(progress, callback, result);
             env->DeleteLocalRef(callbackClass);
             if (env->ExceptionCheck()) return nullptr;
-            throw std::runtime_error("LOCAL_OUTPUT_LIMIT");
+            // 文本短协议没有 JSON 闭合标志。保留已生成的文本交给 Kotlin 的场景描述
+            // 回退解析；若它确实不含有效观察，解析层仍会明确拒绝，而不是误报推理失败。
+            __android_log_print(ANDROID_LOG_WARN, "VlmOffline", "MNN 输出达到预算，交由离线协议解析已生成文本");
         }
         return result;
     } catch (const std::exception& e) { fail(env, e.what()); return nullptr; }

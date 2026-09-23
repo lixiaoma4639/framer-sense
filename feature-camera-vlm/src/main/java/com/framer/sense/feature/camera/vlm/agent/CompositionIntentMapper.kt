@@ -47,18 +47,20 @@ object CompositionIntentMapper {
     /** 离线模型只能描述画面时，依据描述线索生成明确标记的场景分析备选。 */
     fun sceneFallback(description: String, input: DirectorInput): CompositionIntentDecision {
         val text = description.lowercase()
-        val zone = when {
-            listOf("左", "left").any(text::contains) -> CompositionZone.RIGHT
-            listOf("右", "right").any(text::contains) -> CompositionZone.LEFT
-            else -> CompositionZone.CENTER
-        }
         val narrow = listOf("走廊", "通道", "狭", "门", "楼梯").any(text::contains)
         val warm = listOf("阳光", "暖", "花", "笑", "庆").any(text::contains)
-        val shots = if (narrow) listOf(ShotType.ENVIRONMENT, ShotType.FULL, ShotType.HALF)
+        val defaultShots = if (narrow) listOf(ShotType.ENVIRONMENT, ShotType.FULL, ShotType.HALF)
         else listOf(ShotType.FULL, ShotType.ENVIRONMENT, ShotType.HALF)
-        val poses = if (narrow) listOf(PoseId.SIDE, PoseId.RELAXED, PoseId.LOOK_BACK)
+        val defaultPoses = if (narrow) listOf(PoseId.SIDE, PoseId.RELAXED, PoseId.LOOK_BACK)
         else listOf(PoseId.RELAXED, PoseId.HAND_HIP, PoseId.HANDS_FRONT)
-        val zones = listOf(zone, CompositionZone.CENTER, opposite(zone))
+        // 第一个方案直接优先采用 VLM 自然语言中出现的景别、站位和姿势；其余方案只在
+        // 同一场景语义内做安全的差异化扩展，不需要模型输出坐标或复杂协议。
+        val primaryShot = detectedShot(text)
+        val primaryZone = detectedZone(text)
+        val primaryPose = detectedPose(text)
+        val shots = preferredSequence(primaryShot, defaultShots)
+        val poses = preferredSequence(primaryPose, defaultPoses)
+        val zones = preferredSequence(primaryZone, listOf(CompositionZone.CENTER, CompositionZone.LEFT, CompositionZone.RIGHT))
         return CompositionIntentDecision(
             action = ActionKind.FINAL,
             imageId = input.scene.id,
@@ -69,7 +71,7 @@ object CompositionIntentMapper {
                     shot = shots[index],
                     zone = zones[index],
                     pose = poses[index],
-                    facing = if (index == 1) FacingDirection.FRONT else FacingDirection.THREE_QUARTER_LEFT,
+                    facing = listOf(FacingDirection.FRONT, FacingDirection.THREE_QUARTER_LEFT, FacingDirection.THREE_QUARTER_RIGHT)[index],
                     expression = if (warm) ExpressionId.SMILE else ExpressionId.CONFIDENT,
                     guidance = description.take(120),
                     reason = description.take(160),
@@ -78,6 +80,36 @@ object CompositionIntentMapper {
             }
         )
     }
+
+    private fun detectedShot(text: String): ShotType? = when {
+        listOf("特写", "近景", "胸像").any(text::contains) -> ShotType.CLOSE_UP
+        listOf("半身", "上半身").any(text::contains) -> ShotType.HALF
+        listOf("全身", "全景").any(text::contains) -> ShotType.FULL
+        listOf("环境", "带景", "广角").any(text::contains) -> ShotType.ENVIRONMENT
+        else -> null
+    }
+
+    private fun detectedZone(text: String): CompositionZone? = when {
+        listOf("左侧", "左边", "左方", "左下").any(text::contains) -> CompositionZone.LEFT
+        listOf("右侧", "右边", "右方", "右下").any(text::contains) -> CompositionZone.RIGHT
+        listOf("中央", "中间", "居中").any(text::contains) -> CompositionZone.CENTER
+        else -> null
+    }
+
+    private fun detectedPose(text: String): PoseId? = when {
+        listOf("回眸", "回头").any(text::contains) -> PoseId.LOOK_BACK
+        listOf("侧身", "侧站").any(text::contains) -> PoseId.SIDE
+        text.contains("叉腰") -> PoseId.HAND_HIP
+        listOf("双手", "交叠", "身前").any(text::contains) -> PoseId.HANDS_FRONT
+        listOf("挥手", "抬手").any(text::contains) -> PoseId.WAVE
+        listOf("自然站", "站立").any(text::contains) -> PoseId.RELAXED
+        else -> null
+    }
+
+    private fun <T> preferredSequence(primary: T?, defaults: List<T>): List<T> = buildList {
+        primary?.let(::add)
+        defaults.forEach { if (it !in this) add(it) }
+    }.take(3)
 
     private fun distinct(source: List<CompositionIntent>, messages: MutableList<String>): List<CompositionIntent> {
         val used = mutableSetOf<String>()
