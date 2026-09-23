@@ -94,9 +94,7 @@ class FilamentAvatarRenderer(context: Context) : AvatarRenderer {
             // Rocketbox 将网格和骨骼放在场景根节点的两个分支中。instance.root 只指向
             // 骨骼分支，方案变换必须以 asset.root 为目标，才能同时影响身体网格与骨骼。
             transforms.getTransform(transforms.getInstance(loaded.root), rootBaseTransform)
-            val boneBase = com.framer.sense.feature.camera.vlm.model.PoseId.entries
-                .flatMap { AvatarCatalog.poseRotations(it).keys }
-                .distinct()
+            val boneBase = AvatarCatalog.controlledBoneNames
                 .mapNotNull { name ->
                     val entity = loaded.getFirstEntityByName(name)
                     if (entity == 0) null else {
@@ -198,19 +196,28 @@ class FilamentAvatarRenderer(context: Context) : AvatarRenderer {
                 scene.addEntity(fillLightEntity)
                 indirect = IndirectLight.Builder().irradiance(1, floatArrayOf(.8f, .8f, .8f)).intensity(24_000f).build(e)
                 scene.indirectLight = indirect
-                val bounds = applyPlan(loaded, plan, aspect)
+                var renderedPlan = plan
+                var expectedBounds = applyPlan(loaded, renderedPlan, aspect)
                 scene.addEntities(loaded.asset.entities)
-                // 部分 Android GPU 对可读 SwapChain 始终返回 alpha=255。分别以黑白背景
-                // 渲染同一帧，依据两帧颜色差恢复真实 alpha，避免离屏背景覆盖原始照片。
-                renderer.clearOptions = opaqueClear(0.0)
-                val blackMatte = readBitmap(e, renderer, view, swapChain, width, height)
-                renderer.clearOptions = opaqueClear(1.0)
-                val whiteMatte = readBitmap(e, renderer, view, swapChain, width, height)
-                val bitmap = restoreTransparency(blackMatte, whiteMatte)
+                var bitmap = renderTransparent(e, renderer, view, swapChain, width, height)
+                var actualBounds = alphaCropRect(bitmap)
+                // 个别 GLB 导出会报告不准确包围盒。按真实透明像素高度只做一次向下校准，
+                // 正常资产不会触发；绝不为了填满画面而放大人像。
+                val shrink = calibrationShrink(expectedBounds, actualBounds)
+                if (shrink < .96f) {
+                    val originalHeight = renderedPlan.avatar.height
+                    renderedPlan = renderedPlan.copy(avatar = renderedPlan.avatar.copy(height = originalHeight * shrink))
+                    expectedBounds = applyPlan(loaded, renderedPlan, aspect)
+                    bitmap.recycle()
+                    bitmap = renderTransparent(e, renderer, view, swapChain, width, height)
+                    actualBounds = alphaCropRect(bitmap)
+                    Log.w(LOG_TAG, "GLB 比例校准 role=${plan.avatar.avatarId} targetHeight=$originalHeight shrink=$shrink")
+                }
+                val bounds = actualBounds ?: expectedBounds
                 Log.i(
                     LOG_TAG,
-                    "GLB 诊断像素 role=${plan.avatar.avatarId} pose=${plan.avatar.pose} " +
-                        "alphaBounds=${alphaBounds(bitmap)} expectedBounds=$bounds"
+                    "GLB 诊断像素 role=${plan.avatar.avatarId} pose=${renderedPlan.avatar.pose} " +
+                        "alphaBounds=${alphaBounds(bitmap)} expectedBounds=$expectedBounds actualBounds=$actualBounds"
                 )
                 AvatarPreview(bitmap, bounds)
             } finally {
@@ -241,7 +248,10 @@ class FilamentAvatarRenderer(context: Context) : AvatarRenderer {
         val avatar = plan.avatar
         val visibleHeight = avatar.height
         val scale = visibleHeight / loaded.height
-        val rotations = AvatarCatalog.poseRotations(avatar.pose)
+        // 新方案使用细分动作；旧方案没有 poseDirective 时严格沿用 PoseId，避免历史卡片
+        // 在升级后突然改变姿势。每次均从绑定姿势恢复，杜绝上一张方案的骨骼残留。
+        val rotations = avatar.poseDirective?.let { AvatarCatalog.directiveRotations(it) }
+            ?: AvatarCatalog.poseRotations(avatar.pose)
         for ((name, base) in loaded.boneBaseTransforms) {
             val entity = loaded.asset.getFirstEntityByName(name)
             if (entity == 0) continue
@@ -331,6 +341,22 @@ class FilamentAvatarRenderer(context: Context) : AvatarRenderer {
         }
     }
 
+    /** 用黑白底各渲染一次，恢复部分 GPU 会丢失的透明 alpha。 */
+    private suspend fun renderTransparent(
+        e: Engine,
+        renderer: Renderer,
+        view: View,
+        swapChain: SwapChain,
+        width: Int,
+        height: Int
+    ): Bitmap {
+        renderer.clearOptions = opaqueClear(0.0)
+        val blackMatte = readBitmap(e, renderer, view, swapChain, width, height)
+        renderer.clearOptions = opaqueClear(1.0)
+        val whiteMatte = readBitmap(e, renderer, view, swapChain, width, height)
+        return restoreTransparency(blackMatte, whiteMatte)
+    }
+
     private fun opaqueClear(value: Double) = Renderer.ClearOptions().apply {
         clear = true
         clearColor = doubleArrayOf(value, value, value, 1.0)
@@ -399,6 +425,16 @@ class FilamentAvatarRenderer(context: Context) : AvatarRenderer {
 
     /** 仅用于定位透明读回与网格投影是否一致；不参与最终合成。 */
     private fun alphaBounds(bitmap: Bitmap): String {
+        val bounds = alphaCropRect(bitmap) ?: return "empty"
+        val left = (bounds.left * bitmap.width).toInt()
+        val top = (bounds.top * bitmap.height).toInt()
+        val right = (bounds.right * bitmap.width).toInt() - 1
+        val bottom = (bounds.bottom * bitmap.height).toInt() - 1
+        return "$left,$top,$right,$bottom/${bitmap.width}x${bitmap.height}"
+    }
+
+    /** 透明人偶在离屏预览中的实际归一化像素边界。 */
+    private fun alphaCropRect(bitmap: Bitmap): CropRect? {
         val pixels = IntArray(bitmap.width * bitmap.height)
         bitmap.getPixels(pixels, 0, bitmap.width, 0, 0, bitmap.width, bitmap.height)
         var left = bitmap.width
@@ -406,7 +442,7 @@ class FilamentAvatarRenderer(context: Context) : AvatarRenderer {
         var right = -1
         var bottom = -1
         pixels.forEachIndexed { index, pixel ->
-            if ((pixel ushr 24) == 0) return@forEachIndexed
+            if ((pixel ushr 24) <= 12) return@forEachIndexed
             val x = index % bitmap.width
             val y = index / bitmap.width
             left = minOf(left, x)
@@ -414,6 +450,19 @@ class FilamentAvatarRenderer(context: Context) : AvatarRenderer {
             right = maxOf(right, x)
             bottom = maxOf(bottom, y)
         }
-        return if (right < 0) "empty" else "$left,$top,$right,$bottom/${bitmap.width}x${bitmap.height}"
+        return if (right < 0) null else CropRect(
+            left.toFloat() / bitmap.width,
+            top.toFloat() / bitmap.height,
+            (right + 1).toFloat() / bitmap.width,
+            (bottom + 1).toFloat() / bitmap.height
+        )
+    }
+
+    /** 仅在实际身高明显超过目标可见高度时向下修正，防止资产异常遮住环境。 */
+    private fun calibrationShrink(expected: CropRect, actual: CropRect?): Float {
+        actual ?: return 1f
+        fun visibleHeight(bounds: CropRect) = (bounds.bottom.coerceAtMost(1f) - bounds.top.coerceAtLeast(0f)).coerceAtLeast(.01f)
+        val ratio = visibleHeight(expected) / visibleHeight(actual)
+        return if (ratio < .96f) ratio.coerceIn(.45f, .95f) else 1f
     }
 }

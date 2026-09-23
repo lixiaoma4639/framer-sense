@@ -39,7 +39,9 @@ object CompositionIntentMapper {
                 guidance = plan.guidance,
                 reason = plan.reason,
                 expressionIntensity = plan.avatar.expressionIntensity,
-                uncertainties = plan.uncertainties
+                uncertainties = plan.uncertainties,
+                poseDirective = plan.avatar.poseDirective,
+                subjectDistance = plan.avatar.subjectDistance
             )
         }
     )
@@ -58,9 +60,11 @@ object CompositionIntentMapper {
         val primaryShot = detectedShot(text)
         val primaryZone = detectedZone(text)
         val primaryPose = detectedPose(text)
+        val primaryDirective = detectedDirective(text, primaryPose ?: defaultPoses.first())
+        val distance = detectedDistance(text)
         val shots = preferredSequence(primaryShot, defaultShots)
-        val poses = preferredSequence(primaryPose, defaultPoses)
         val zones = preferredSequence(primaryZone, listOf(CompositionZone.CENTER, CompositionZone.LEFT, CompositionZone.RIGHT))
+        val directives = fallbackDirectives(primaryDirective)
         return CompositionIntentDecision(
             action = ActionKind.FINAL,
             imageId = input.scene.id,
@@ -70,12 +74,14 @@ object CompositionIntentMapper {
                     title = description.take(28),
                     shot = shots[index],
                     zone = zones[index],
-                    pose = poses[index],
+                    pose = AvatarPoseDirective.legacyPose(directives[index]),
                     facing = listOf(FacingDirection.FRONT, FacingDirection.THREE_QUARTER_LEFT, FacingDirection.THREE_QUARTER_RIGHT)[index],
-                    expression = if (warm) ExpressionId.SMILE else ExpressionId.CONFIDENT,
+                    expression = detectedExpression(text) ?: if (warm) ExpressionId.SMILE else ExpressionId.CONFIDENT,
                     guidance = description.take(120),
                     reason = description.take(160),
-                    uncertainties = listOf(SCENE_FALLBACK_MARKER)
+                    uncertainties = listOf(SCENE_FALLBACK_MARKER),
+                    poseDirective = directives[index],
+                    subjectDistance = distance
                 )
             }
         )
@@ -106,6 +112,78 @@ object CompositionIntentMapper {
         else -> null
     }
 
+    /** 从离线短句中提取可执行的细分身体动作；未知字段保留旧姿势的安全默认值。 */
+    private fun detectedDirective(text: String, fallback: PoseId): AvatarPoseDirective {
+        val legacy = AvatarPoseDirective.fromLegacy(fallback)
+        val body = when {
+            listOf("左侧身", "向左侧身", "身体向左", "左转身").any(text::contains) -> BodyPose.TURN_LEFT
+            listOf("右侧身", "向右侧身", "身体向右", "右转身", "侧身").any(text::contains) -> BodyPose.TURN_RIGHT
+            listOf("前倾", "微微前倾", "俯身").any(text::contains) -> BodyPose.LEAN_FORWARD
+            listOf("正面", "面向镜头", "身体朝前").any(text::contains) -> BodyPose.FRONT
+            else -> legacy.body
+        }
+        val arms = when {
+            listOf("双手叉腰", "双手扶腰").any(text::contains) -> ArmPose.HANDS_HIPS
+            listOf("叉腰", "手扶腰").any(text::contains) -> ArmPose.HAND_HIP
+            listOf("双手", "手放身前", "身前交叠", "交叠").any(text::contains) -> ArmPose.HANDS_FRONT
+            listOf("挥手", "招手").any(text::contains) -> ArmPose.WAVE
+            listOf("指向", "指着", "前伸手").any(text::contains) -> ArmPose.POINT
+            listOf("张开双臂", "双手轻开", "展开双臂").any(text::contains) -> ArmPose.ARMS_OPEN
+            listOf("手臂自然", "双手自然", "自然下垂").any(text::contains) -> ArmPose.RELAXED
+            else -> legacy.arms
+        }
+        val head = when {
+            listOf("回眸", "回头看", "回头").any(text::contains) -> HeadPose.LOOK_BACK
+            listOf("头向左", "向左看", "左转头").any(text::contains) -> HeadPose.TURN_LEFT
+            listOf("头向右", "向右看", "右转头").any(text::contains) -> HeadPose.TURN_RIGHT
+            listOf("抬头", "仰头").any(text::contains) -> HeadPose.LOOK_UP
+            listOf("低头", "低头看").any(text::contains) -> HeadPose.LOOK_DOWN
+            listOf("正视", "看镜头", "头朝镜头").any(text::contains) -> HeadPose.FRONT
+            else -> legacy.head
+        }
+        val stance = when {
+            listOf("重心在左", "重心左", "左腿承重").any(text::contains) -> StancePose.WEIGHT_LEFT
+            listOf("重心在右", "重心右", "右腿承重").any(text::contains) -> StancePose.WEIGHT_RIGHT
+            listOf("前后脚", "前迈", "前脚").any(text::contains) -> StancePose.STEP_FORWARD
+            listOf("自然站", "站立").any(text::contains) -> StancePose.NEUTRAL
+            else -> legacy.stance
+        }
+        return AvatarPoseDirective(body, arms, head, stance)
+    }
+
+    private fun detectedDistance(text: String): SubjectDistance = when {
+        listOf("远处", "远景", "背景", "远离镜头").any(text::contains) -> SubjectDistance.FAR
+        listOf("近处", "近景", "前景", "靠近镜头").any(text::contains) -> SubjectDistance.NEAR
+        else -> SubjectDistance.MID
+    }
+
+    private fun detectedExpression(text: String): ExpressionId? = when {
+        listOf("开朗", "大笑", "开心").any(text::contains) -> ExpressionId.HAPPY
+        listOf("微笑", "笑容").any(text::contains) -> ExpressionId.SMILE
+        listOf("自信", "从容").any(text::contains) -> ExpressionId.CONFIDENT
+        listOf("沉思", "若有所思").any(text::contains) -> ExpressionId.THOUGHTFUL
+        listOf("惊喜", "惊讶").any(text::contains) -> ExpressionId.SURPRISED
+        listOf("平静", "自然表情", "中性").any(text::contains) -> ExpressionId.NEUTRAL
+        else -> null
+    }
+
+    /** 第一条忠实采用模型线索，后两条只改为已验证的不同动作组合。 */
+    private fun fallbackDirectives(primary: AvatarPoseDirective): List<AvatarPoseDirective> = listOf(
+        primary,
+        AvatarPoseDirective(
+            body = if (primary.body == BodyPose.FRONT) BodyPose.TURN_RIGHT else BodyPose.FRONT,
+            arms = if (primary.arms == ArmPose.HAND_HIP) ArmPose.HANDS_FRONT else ArmPose.HAND_HIP,
+            head = if (primary.head == HeadPose.FRONT) HeadPose.TURN_LEFT else HeadPose.FRONT,
+            stance = StancePose.WEIGHT_RIGHT
+        ),
+        AvatarPoseDirective(
+            body = if (primary.body == BodyPose.TURN_LEFT) BodyPose.TURN_RIGHT else BodyPose.TURN_LEFT,
+            arms = if (primary.arms == ArmPose.ARMS_OPEN) ArmPose.POINT else ArmPose.ARMS_OPEN,
+            head = if (primary.head == HeadPose.LOOK_BACK) HeadPose.LOOK_UP else HeadPose.LOOK_BACK,
+            stance = StancePose.WEIGHT_LEFT
+        )
+    )
+
     private fun <T> preferredSequence(primary: T?, defaults: List<T>): List<T> = buildList {
         primary?.let(::add)
         defaults.forEach { if (it !in this) add(it) }
@@ -115,7 +193,7 @@ object CompositionIntentMapper {
         val used = mutableSetOf<String>()
         return source.mapIndexed { index, original ->
             var intent = original
-            fun key(value: CompositionIntent) = "${value.shot}|${value.zone}|${value.pose}|${value.facing}|${value.expression}"
+            fun key(value: CompositionIntent) = "${value.shot}|${value.zone}|${value.pose}|${value.facing}|${value.expression}|${value.poseDirective}"
             if (key(intent) in used) {
                 val zone = CompositionZone.entries.firstOrNull { candidate -> key(intent.copy(zone = candidate)) !in used }
                 if (zone != null) intent = intent.copy(zone = zone)
@@ -131,12 +209,8 @@ object CompositionIntentMapper {
     }
 
     private fun toPlan(intent: CompositionIntent, input: DirectorInput): CompositionPlan {
-        val (height, footY, span) = when (intent.shot) {
-            ShotType.ENVIRONMENT -> Triple(.24f, .92f, 1f)
-            ShotType.FULL -> Triple(.64f, .93f, .76f)
-            ShotType.HALF -> Triple(1.08f, 1.43f, .58f)
-            ShotType.CLOSE_UP -> Triple(1.50f, 1.98f, .42f)
-        }
+        val directive = intent.poseDirective ?: AvatarPoseDirective.fromLegacy(intent.pose)
+        val (height, footY, span) = placement(intent.shot, intent.subjectDistance)
         val preferredCenter = when (intent.zone) {
             CompositionZone.LEFT -> .32f
             CompositionZone.CENTER -> .5f
@@ -164,14 +238,41 @@ object CompositionIntentMapper {
             zoom = requestedZoom.coerceIn(input.camera.minZoom, input.camera.maxZoom),
             avatar = AvatarPlacement(
                 foot = Point2(footX, footY), height = height, yaw = yaw,
-                avatarId = input.avatarId, pose = intent.pose, expression = intent.expression,
-                expressionIntensity = intent.expressionIntensity.coerceIn(0f, 1f)
+                avatarId = input.avatarId, pose = AvatarPoseDirective.legacyPose(directive), expression = intent.expression,
+                expressionIntensity = intent.expressionIntensity.coerceIn(0f, 1f), poseDirective = directive,
+                subjectDistance = intent.subjectDistance
             ),
             guidance = intent.guidance,
             reason = intent.reason,
             needsRetake = needsRetake,
             uncertainties = intent.uncertainties
         )
+    }
+
+    /**
+     * 高度是裁剪后预览画面中的归一化人体高度。先按景别，再按模型的远中近摄影语义
+     * 收敛到保守范围；环境构图绝不使用会遮住场景的大人像。
+     */
+    private fun placement(shot: ShotType, distance: SubjectDistance): Triple<Float, Float, Float> {
+        val height = when (shot) {
+            ShotType.ENVIRONMENT -> when (distance) { SubjectDistance.FAR -> .18f; SubjectDistance.MID -> .23f; SubjectDistance.NEAR -> .28f }
+            ShotType.FULL -> when (distance) { SubjectDistance.FAR -> .36f; SubjectDistance.MID -> .46f; SubjectDistance.NEAR -> .56f }
+            ShotType.HALF -> when (distance) { SubjectDistance.FAR -> .50f; SubjectDistance.MID -> .60f; SubjectDistance.NEAR -> .70f }
+            ShotType.CLOSE_UP -> when (distance) { SubjectDistance.FAR -> .64f; SubjectDistance.MID -> .74f; SubjectDistance.NEAR -> .82f }
+        }
+        val footY = when (shot) {
+            ShotType.ENVIRONMENT -> .92f
+            ShotType.FULL -> .93f
+            ShotType.HALF -> 1.10f
+            ShotType.CLOSE_UP -> 1.32f
+        }
+        val span = when (shot) {
+            ShotType.ENVIRONMENT -> 1f
+            ShotType.FULL -> .76f
+            ShotType.HALF -> .58f
+            ShotType.CLOSE_UP -> .42f
+        }
+        return Triple(height, footY, span)
     }
 
     private fun zoneFor(x: Float) = when {

@@ -77,6 +77,7 @@
     <string name="vlm_composition_reason">构图理由：%1$s</string>
     <string name="vlm_composition_attributes">%1$s · %2$s · %3$s</string>
     <string name="vlm_composition_pose_expression">%1$s · %2$s</string>
+    <string name="vlm_composition_pose_detail">身体：%1$s · 手臂：%2$s · 头部：%3$s · 站姿：%4$s · 表情：%5$s · 距离：%6$s</string>
     <string name="vlm_shot_environment">环境人像</string>
     <string name="vlm_shot_full">全身</string>
     <string name="vlm_shot_half">半身</string>
@@ -110,4 +111,28 @@
     <string name="vlm_expression_surprised">惊喜</string>
     <string name="vlm_expression_thoughtful">沉思</string>
     <string name="vlm_expression_confident">自信</string>
+    <string name="vlm_body_front">正面站立</string>
+    <string name="vlm_body_turn_left">身体向左微转</string>
+    <string name="vlm_body_turn_right">身体向右微转</string>
+    <string name="vlm_body_lean_forward">身体轻微前倾</string>
+    <string name="vlm_arms_relaxed">自然下垂</string>
+    <string name="vlm_arms_hand_hip">单手叉腰</string>
+    <string name="vlm_arms_hands_hips">双手叉腰</string>
+    <string name="vlm_arms_hands_front">双手身前交叠</string>
+    <string name="vlm_arms_wave">轻抬手</string>
+    <string name="vlm_arms_point">前伸指向</string>
+    <string name="vlm_arms_open">双手轻开</string>
+    <string name="vlm_head_front">正视镜头</string>
+    <string name="vlm_head_turn_left">头部向左</string>
+    <string name="vlm_head_turn_right">头部向右</string>
+    <string name="vlm_head_look_up">轻抬头</string>
+    <string name="vlm_head_look_down">轻低头</string>
+    <string name="vlm_head_look_back">回眸</string>
+    <string name="vlm_stance_neutral">自然站姿</string>
+    <string name="vlm_stance_weight_left">重心偏左</string>
+    <string name="vlm_stance_weight_right">重心偏右</string>
+    <string name="vlm_stance_step_forward">轻微前后脚</string>
+    <string name="vlm_distance_far">远处人物</string>
+    <string name="vlm_distance_mid">中距离人物</string>
+    <string name="vlm_distance_near">近处人物</string>
 </resources>

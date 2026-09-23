@@ -1,8 +1,13 @@
 package com.framer.sense.feature.camera.vlm.avatar
 
 import com.framer.sense.feature.camera.vlm.model.AvatarId
+import com.framer.sense.feature.camera.vlm.model.ArmPose
+import com.framer.sense.feature.camera.vlm.model.AvatarPoseDirective
+import com.framer.sense.feature.camera.vlm.model.BodyPose
 import com.framer.sense.feature.camera.vlm.model.ExpressionId
+import com.framer.sense.feature.camera.vlm.model.HeadPose
 import com.framer.sense.feature.camera.vlm.model.PoseId
+import com.framer.sense.feature.camera.vlm.model.StancePose
 
 /** 内置 Rocketbox 人像与受限摄影姿势、表情模板。 */
 object AvatarCatalog {
@@ -37,6 +42,66 @@ object AvatarCatalog {
         PoseId.LOOK_UP -> mapOf("Bip01 Head" to angles(-16f, 0f, 0f))
         PoseId.LOOK_DOWN -> mapOf("Bip01 Head" to angles(13f, 0f, 0f), "Bip01 Spine1" to angles(4f, 0f, 0f))
         PoseId.ARMS_OPEN -> mapOf("Bip01 L UpperArm" to angles(0f, 0f, -58f), "Bip01 R UpperArm" to angles(0f, 0f, 58f))
+    }
+
+    /** 所有受控动作涉及的骨骼；缺少某名称的资产会自动跳过对应局部动作。 */
+    val controlledBoneNames: Set<String> by lazy {
+        PoseId.entries.flatMap { poseRotations(it).keys }.toSet() + setOf(
+            "Bip01 Pelvis", "Bip01 L Thigh", "Bip01 R Thigh"
+        )
+    }
+
+    /**
+     * 将 VLM 的细分摄影动作收敛为有限的骨骼局部旋转。所有角度均刻意小于常规动画
+     * 幅度，目的只是给用户一个舒适、可模仿的构图参考，而不是生成高风险动作。
+     */
+    fun directiveRotations(directive: AvatarPoseDirective): Map<String, FloatArray> {
+        val result = linkedMapOf<String, FloatArray>()
+        fun add(values: Map<String, FloatArray>) = values.forEach { (bone, rotation) ->
+            val current = result[bone] ?: floatArrayOf(0f, 0f, 0f)
+            result[bone] = floatArrayOf(current[0] + rotation[0], current[1] + rotation[1], current[2] + rotation[2])
+        }
+        add(when (directive.body) {
+            BodyPose.FRONT -> emptyMap()
+            BodyPose.TURN_LEFT -> mapOf("Bip01 Spine" to angles(0f, -22f, 0f))
+            BodyPose.TURN_RIGHT -> mapOf("Bip01 Spine" to angles(0f, 22f, 0f))
+            BodyPose.LEAN_FORWARD -> mapOf("Bip01 Spine1" to angles(6f, 0f, 0f))
+        })
+        add(when (directive.arms) {
+            ArmPose.RELAXED -> emptyMap()
+            ArmPose.HAND_HIP -> poseRotations(PoseId.HAND_HIP)
+            ArmPose.HANDS_HIPS -> poseRotations(PoseId.HANDS_HIPS)
+            ArmPose.HANDS_FRONT -> poseRotations(PoseId.HANDS_FRONT)
+            ArmPose.WAVE -> poseRotations(PoseId.WAVE)
+            ArmPose.POINT -> poseRotations(PoseId.POINT)
+            ArmPose.ARMS_OPEN -> poseRotations(PoseId.ARMS_OPEN)
+        })
+        add(when (directive.head) {
+            HeadPose.FRONT -> emptyMap()
+            HeadPose.TURN_LEFT -> mapOf("Bip01 Head" to angles(0f, -16f, 0f))
+            HeadPose.TURN_RIGHT -> mapOf("Bip01 Head" to angles(0f, 16f, 0f))
+            HeadPose.LOOK_UP -> mapOf("Bip01 Head" to angles(-14f, 0f, 0f))
+            HeadPose.LOOK_DOWN -> mapOf("Bip01 Head" to angles(11f, 0f, 0f))
+            HeadPose.LOOK_BACK -> mapOf("Bip01 Head" to angles(0f, 30f, 0f))
+        })
+        add(when (directive.stance) {
+            StancePose.NEUTRAL -> emptyMap()
+            StancePose.WEIGHT_LEFT -> mapOf(
+                "Bip01 Pelvis" to angles(0f, 0f, -2f),
+                "Bip01 L Thigh" to angles(0f, 0f, -3f),
+                "Bip01 R Thigh" to angles(0f, 0f, 2f)
+            )
+            StancePose.WEIGHT_RIGHT -> mapOf(
+                "Bip01 Pelvis" to angles(0f, 0f, 2f),
+                "Bip01 L Thigh" to angles(0f, 0f, -2f),
+                "Bip01 R Thigh" to angles(0f, 0f, 3f)
+            )
+            StancePose.STEP_FORWARD -> mapOf(
+                "Bip01 L Thigh" to angles(-4f, 0f, 0f),
+                "Bip01 R Thigh" to angles(3f, 0f, 0f)
+            )
+        })
+        return result
     }
 
     /** Rocketbox 导出的 ARKit 形变名称与权重。 */

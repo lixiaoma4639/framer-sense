@@ -357,7 +357,15 @@ private fun CompositionDescriptions(result: CompositionResult, selectedId: Strin
     ) {
         Text(stringResource(R.string.vlm_composition_plan_title, index + 1, title), style = MaterialTheme.typography.labelLarge)
         Text(stringResource(R.string.vlm_actual_composition, actual), style = MaterialTheme.typography.labelSmall)
-        Text(stringResource(R.string.vlm_composition_pose_expression, poseLabel(plan.avatar.pose), expressionLabel(plan.avatar.expression)), style = MaterialTheme.typography.labelSmall)
+        val directive = plan.avatar.poseDirective ?: AvatarPoseDirective.fromLegacy(plan.avatar.pose)
+        Text(
+            stringResource(
+                R.string.vlm_composition_pose_detail,
+                bodyLabel(directive.body), armLabel(directive.arms), headLabel(directive.head),
+                stanceLabel(directive.stance), expressionLabel(plan.avatar.expression), distanceLabel(plan.avatar.subjectDistance)
+            ),
+            style = MaterialTheme.typography.labelSmall
+        )
         if (fallback) {
             Text(stringResource(R.string.vlm_environment_person_evidence, plan.guidance), style = MaterialTheme.typography.bodySmall)
         } else {
@@ -428,6 +436,50 @@ private fun expressionLabel(expression: ExpressionId): String = stringResource(w
     ExpressionId.SURPRISED -> R.string.vlm_expression_surprised
     ExpressionId.THOUGHTFUL -> R.string.vlm_expression_thoughtful
     ExpressionId.CONFIDENT -> R.string.vlm_expression_confident
+})
+
+@Composable
+private fun bodyLabel(body: BodyPose): String = stringResource(when (body) {
+    BodyPose.FRONT -> R.string.vlm_body_front
+    BodyPose.TURN_LEFT -> R.string.vlm_body_turn_left
+    BodyPose.TURN_RIGHT -> R.string.vlm_body_turn_right
+    BodyPose.LEAN_FORWARD -> R.string.vlm_body_lean_forward
+})
+
+@Composable
+private fun armLabel(arms: ArmPose): String = stringResource(when (arms) {
+    ArmPose.RELAXED -> R.string.vlm_arms_relaxed
+    ArmPose.HAND_HIP -> R.string.vlm_arms_hand_hip
+    ArmPose.HANDS_HIPS -> R.string.vlm_arms_hands_hips
+    ArmPose.HANDS_FRONT -> R.string.vlm_arms_hands_front
+    ArmPose.WAVE -> R.string.vlm_arms_wave
+    ArmPose.POINT -> R.string.vlm_arms_point
+    ArmPose.ARMS_OPEN -> R.string.vlm_arms_open
+})
+
+@Composable
+private fun headLabel(head: HeadPose): String = stringResource(when (head) {
+    HeadPose.FRONT -> R.string.vlm_head_front
+    HeadPose.TURN_LEFT -> R.string.vlm_head_turn_left
+    HeadPose.TURN_RIGHT -> R.string.vlm_head_turn_right
+    HeadPose.LOOK_UP -> R.string.vlm_head_look_up
+    HeadPose.LOOK_DOWN -> R.string.vlm_head_look_down
+    HeadPose.LOOK_BACK -> R.string.vlm_head_look_back
+})
+
+@Composable
+private fun stanceLabel(stance: StancePose): String = stringResource(when (stance) {
+    StancePose.NEUTRAL -> R.string.vlm_stance_neutral
+    StancePose.WEIGHT_LEFT -> R.string.vlm_stance_weight_left
+    StancePose.WEIGHT_RIGHT -> R.string.vlm_stance_weight_right
+    StancePose.STEP_FORWARD -> R.string.vlm_stance_step_forward
+})
+
+@Composable
+private fun distanceLabel(distance: SubjectDistance): String = stringResource(when (distance) {
+    SubjectDistance.FAR -> R.string.vlm_distance_far
+    SubjectDistance.MID -> R.string.vlm_distance_mid
+    SubjectDistance.NEAR -> R.string.vlm_distance_near
 })
 
 /** 将用户选择的内置 Rocketbox 人像映射为本地化标签。 */

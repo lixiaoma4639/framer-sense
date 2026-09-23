@@ -17,6 +17,16 @@ val VlmJson = Json { encodeDefaults = true; explicitNulls = true }
     WAVE, POINT, HAT, LOOK_UP, LOOK_DOWN, ARMS_OPEN
 }
 @Serializable enum class ExpressionId { NEUTRAL, SMILE, HAPPY, SURPRISED, THOUGHTFUL, CONFIDENT }
+/** 人体躯干的受控朝向；仅允许接近绑定姿势的小幅变换。 */
+@Serializable enum class BodyPose { FRONT, TURN_LEFT, TURN_RIGHT, LEAN_FORWARD }
+/** 手臂动作；每项映射到已验证的 Rocketbox 骼骨旋转。 */
+@Serializable enum class ArmPose { RELAXED, HAND_HIP, HANDS_HIPS, HANDS_FRONT, WAVE, POINT, ARMS_OPEN }
+/** 头部方向；与身体朝向独立，便于表达回眸、抬头等摄影动作。 */
+@Serializable enum class HeadPose { FRONT, TURN_LEFT, TURN_RIGHT, LOOK_UP, LOOK_DOWN, LOOK_BACK }
+/** 下肢只提供轻微重心和前后脚，避免生成不稳定或扭曲的动作。 */
+@Serializable enum class StancePose { NEUTRAL, WEIGHT_LEFT, WEIGHT_RIGHT, STEP_FORWARD }
+/** 模型对人物与相机距离的摄影语义，不是未经校验的真实测距。 */
+@Serializable enum class SubjectDistance { FAR, MID, NEAR }
 @Serializable enum class AvatarId { ADULT_FEMALE, ADULT_MALE, CHILD_GIRL, CHILD_BOY }
 @Serializable enum class ActionKind { CAPABILITIES, VALIDATE, RENDER, FINAL }
 @Serializable enum class CompositionZone { LEFT, CENTER, RIGHT }
@@ -35,8 +45,56 @@ val VlmJson = Json { encodeDefaults = true; explicitNulls = true }
     @Required val avatarId: AvatarId = AvatarId.ADULT_FEMALE,
     @Required val pose: PoseId = PoseId.RELAXED,
     @Required val expression: ExpressionId = ExpressionId.NEUTRAL,
-    @Required val expressionIntensity: Float = 0.6f
+    @Required val expressionIntensity: Float = 0.6f,
+    /** 新协议的细分姿势；为空时按旧 PoseId 渲染，保证历史方案兼容。 */
+    val poseDirective: AvatarPoseDirective? = null,
+    /** 用于说明与比例策略的摄影距离语义。 */
+    val subjectDistance: SubjectDistance = SubjectDistance.MID
 )
+
+/**
+ * VLM 可表达、渲染器可安全执行的人像动作。它不是任意关节角度接口，所有字段都会
+ * 收敛到 Rocketbox 已知骨骼与有限旋转范围。
+ */
+@Serializable data class AvatarPoseDirective(
+    val body: BodyPose = BodyPose.FRONT,
+    val arms: ArmPose = ArmPose.RELAXED,
+    val head: HeadPose = HeadPose.FRONT,
+    val stance: StancePose = StancePose.NEUTRAL
+) {
+    companion object {
+        /** 将旧姿势编号转换为等价的细分动作，供旧方案与旧网关响应使用。 */
+        fun fromLegacy(pose: PoseId): AvatarPoseDirective = when (pose) {
+            PoseId.RELAXED -> AvatarPoseDirective()
+            PoseId.SIDE -> AvatarPoseDirective(BodyPose.TURN_RIGHT, ArmPose.RELAXED, HeadPose.TURN_LEFT, StancePose.WEIGHT_LEFT)
+            PoseId.LOOK_BACK -> AvatarPoseDirective(BodyPose.TURN_RIGHT, ArmPose.RELAXED, HeadPose.LOOK_BACK, StancePose.WEIGHT_RIGHT)
+            PoseId.HANDS_FRONT -> AvatarPoseDirective(arms = ArmPose.HANDS_FRONT)
+            PoseId.HAND_HIP -> AvatarPoseDirective(arms = ArmPose.HAND_HIP, stance = StancePose.WEIGHT_RIGHT)
+            PoseId.HANDS_HIPS -> AvatarPoseDirective(arms = ArmPose.HANDS_HIPS, stance = StancePose.WEIGHT_LEFT)
+            PoseId.WAVE -> AvatarPoseDirective(arms = ArmPose.WAVE)
+            PoseId.POINT -> AvatarPoseDirective(arms = ArmPose.POINT)
+            PoseId.HAT -> AvatarPoseDirective(arms = ArmPose.HAND_HIP, head = HeadPose.TURN_LEFT)
+            PoseId.LOOK_UP -> AvatarPoseDirective(head = HeadPose.LOOK_UP)
+            PoseId.LOOK_DOWN -> AvatarPoseDirective(body = BodyPose.LEAN_FORWARD, head = HeadPose.LOOK_DOWN)
+            PoseId.ARMS_OPEN -> AvatarPoseDirective(arms = ArmPose.ARMS_OPEN)
+        }
+
+        /** 为兼容旧卡片和调试日志，将细分动作归纳为最接近的旧姿势名称。 */
+        fun legacyPose(directive: AvatarPoseDirective): PoseId = when {
+            directive.head == HeadPose.LOOK_BACK -> PoseId.LOOK_BACK
+            directive.head == HeadPose.LOOK_UP -> PoseId.LOOK_UP
+            directive.head == HeadPose.LOOK_DOWN -> PoseId.LOOK_DOWN
+            directive.arms == ArmPose.HAND_HIP -> PoseId.HAND_HIP
+            directive.arms == ArmPose.HANDS_HIPS -> PoseId.HANDS_HIPS
+            directive.arms == ArmPose.HANDS_FRONT -> PoseId.HANDS_FRONT
+            directive.arms == ArmPose.WAVE -> PoseId.WAVE
+            directive.arms == ArmPose.POINT -> PoseId.POINT
+            directive.arms == ArmPose.ARMS_OPEN -> PoseId.ARMS_OPEN
+            directive.body != BodyPose.FRONT -> PoseId.SIDE
+            else -> PoseId.RELAXED
+        }
+    }
+}
 @Serializable data class CompositionPlan(
     val id: String,
     val title: String,
@@ -62,7 +120,10 @@ val VlmJson = Json { encodeDefaults = true; explicitNulls = true }
     val guidance: String,
     val reason: String,
     @Required val expressionIntensity: Float = .65f,
-    @Required val uncertainties: List<String> = emptyList()
+    @Required val uncertainties: List<String> = emptyList(),
+    /** 云端新协议提供细分姿势；旧协议遗漏时由 pose 兼容转换。 */
+    val poseDirective: AvatarPoseDirective? = null,
+    val subjectDistance: SubjectDistance = SubjectDistance.MID
 )
 @Serializable data class CompositionIntentDecision(
     val action: ActionKind,

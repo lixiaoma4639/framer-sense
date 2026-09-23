@@ -14,7 +14,7 @@ import kotlinx.serialization.json.int
  */
 object OfflineDirectorProtocol {
     fun prompt(input: DirectorInput): String = """
-        只看图片。用一句简体中文、50字以内，说明可见环境，并给出推荐景别、人物站位或姿势。
+        只看图片。用一句简体中文、50字以内，依次说明可见环境、人物远中近、推荐景别和位置、身体姿态、手臂动作、头部方向、表情。
         禁止列表、标题、Markdown、英文、坐标、姿势编号和解释；回答一句后立刻结束。
         拍摄要求：${input.instruction.take(120)}
     """.trimIndent()
