@@ -317,7 +317,7 @@ private fun Controls(state: VlmUiState, onEvent: (VlmIntent) -> Unit, importImag
                         }
                     }
                 }
-                CompositionDescriptions(result)
+                CompositionDescriptions(result, state.selectedId)
                 val plan = result.plans.find { it.id == state.selectedId }
                 if (plan != null) {
                     if (plan.needsRetake) Text("需重新取景 · 预览仅供构图参考", color = MaterialTheme.colorScheme.tertiary, style = MaterialTheme.typography.labelSmall)
@@ -339,30 +339,30 @@ private fun Controls(state: VlmUiState, onEvent: (VlmIntent) -> Unit, importImag
     }
 }
 
-/** 展示三张最终可渲染方案各自的 VLM 依据与实际采用的人像构图。 */
+/** 展示当前选中方案的 VLM 依据与实际采用的人像构图。 */
 @Composable
-private fun CompositionDescriptions(result: CompositionResult) {
+private fun CompositionDescriptions(result: CompositionResult, selectedId: String?) {
+    val index = result.plans.indexOfFirst { it.id == selectedId }
+    val plan = result.plans.getOrNull(index) ?: return
     Text(stringResource(R.string.vlm_composition_recommendations), style = MaterialTheme.typography.titleSmall)
-    result.plans.forEachIndexed { index, plan ->
-        val fallback = plan.uncertainties.contains(CompositionIntentMapper.SCENE_FALLBACK_MARKER)
-        val title = if (fallback) stringResource(R.string.vlm_scene_analysis_title, plan.title) else plan.title
-        val actual = stringResource(
-            R.string.vlm_composition_attributes,
-            shotLabel(plan.shot), placementZoneLabel(plan.avatar.foot.x), facingLabel(plan.avatar.yaw)
-        )
-        Column(
-            Modifier.fillMaxWidth().border(1.dp, MaterialTheme.colorScheme.outlineVariant, MaterialTheme.shapes.small).padding(8.dp),
-            verticalArrangement = Arrangement.spacedBy(2.dp)
-        ) {
-            Text(stringResource(R.string.vlm_composition_plan_title, index + 1, title), style = MaterialTheme.typography.labelLarge)
-            Text(stringResource(R.string.vlm_actual_composition, actual), style = MaterialTheme.typography.labelSmall)
-            Text(stringResource(R.string.vlm_composition_pose_expression, poseLabel(plan.avatar.pose), expressionLabel(plan.avatar.expression)), style = MaterialTheme.typography.labelSmall)
-            if (fallback) {
-                Text(stringResource(R.string.vlm_environment_person_evidence, plan.guidance), style = MaterialTheme.typography.bodySmall)
-            } else {
-                Text(stringResource(R.string.vlm_composition_guidance, plan.guidance), style = MaterialTheme.typography.bodySmall)
-                Text(stringResource(R.string.vlm_composition_reason, plan.reason), style = MaterialTheme.typography.bodySmall)
-            }
+    val fallback = plan.uncertainties.contains(CompositionIntentMapper.SCENE_FALLBACK_MARKER)
+    val title = if (fallback) stringResource(R.string.vlm_scene_analysis_title, plan.title) else plan.title
+    val actual = stringResource(
+        R.string.vlm_composition_attributes,
+        shotLabel(plan.shot), placementZoneLabel(plan.avatar.foot.x), facingLabel(plan.avatar.yaw)
+    )
+    Column(
+        Modifier.fillMaxWidth().border(1.dp, MaterialTheme.colorScheme.outlineVariant, MaterialTheme.shapes.small).padding(8.dp),
+        verticalArrangement = Arrangement.spacedBy(2.dp)
+    ) {
+        Text(stringResource(R.string.vlm_composition_plan_title, index + 1, title), style = MaterialTheme.typography.labelLarge)
+        Text(stringResource(R.string.vlm_actual_composition, actual), style = MaterialTheme.typography.labelSmall)
+        Text(stringResource(R.string.vlm_composition_pose_expression, poseLabel(plan.avatar.pose), expressionLabel(plan.avatar.expression)), style = MaterialTheme.typography.labelSmall)
+        if (fallback) {
+            Text(stringResource(R.string.vlm_environment_person_evidence, plan.guidance), style = MaterialTheme.typography.bodySmall)
+        } else {
+            Text(stringResource(R.string.vlm_composition_guidance, plan.guidance), style = MaterialTheme.typography.bodySmall)
+            Text(stringResource(R.string.vlm_composition_reason, plan.reason), style = MaterialTheme.typography.bodySmall)
         }
     }
 }
