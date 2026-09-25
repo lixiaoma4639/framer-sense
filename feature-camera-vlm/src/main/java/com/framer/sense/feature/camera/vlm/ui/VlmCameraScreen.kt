@@ -15,6 +15,7 @@ import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
@@ -305,9 +306,9 @@ private fun Controls(state: VlmUiState, onEvent: (VlmIntent) -> Unit, importImag
             }
             state.result?.let { result ->
                 LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    items(result.plans, key = { it.id }) { plan ->
+                    itemsIndexed(result.plans, key = { _, plan -> plan.id }) { index, plan ->
                         val isSceneFallback = plan.uncertainties.contains(CompositionIntentMapper.SCENE_FALLBACK_MARKER)
-                        val displayTitle = if (isSceneFallback) stringResource(R.string.vlm_scene_analysis_title, plan.title) else plan.title
+                        val displayTitle = if (isSceneFallback) stringResource(R.string.vlm_composition_plan_number, index + 1) else plan.title
                         Card(onClick = { onEvent(VlmIntent.Select(plan.id)) }, enabled = !busy,
                             modifier = Modifier.width(130.dp).border(if (plan.id == state.selectedId) 2.dp else 0.dp, MaterialTheme.colorScheme.primary, MaterialTheme.shapes.medium)) {
                             state.previews[plan.id]?.let { Image(it.composite.asImageBitmap(), plan.title, Modifier.fillMaxWidth().height(98.dp), contentScale = ContentScale.Fit) }
@@ -346,7 +347,7 @@ private fun CompositionDescriptions(result: CompositionResult, selectedId: Strin
     val plan = result.plans.getOrNull(index) ?: return
     Text(stringResource(R.string.vlm_composition_recommendations), style = MaterialTheme.typography.titleSmall)
     val fallback = plan.uncertainties.contains(CompositionIntentMapper.SCENE_FALLBACK_MARKER)
-    val title = if (fallback) stringResource(R.string.vlm_scene_analysis_title, plan.title) else plan.title
+    val title = if (fallback) stringResource(R.string.vlm_composition_plan_number, index + 1) else plan.title
     val actual = stringResource(
         R.string.vlm_composition_attributes,
         shotLabel(plan.shot), placementZoneLabel(plan.avatar.foot.x), facingLabel(plan.avatar.yaw)
@@ -355,7 +356,8 @@ private fun CompositionDescriptions(result: CompositionResult, selectedId: Strin
         Modifier.fillMaxWidth().border(1.dp, MaterialTheme.colorScheme.outlineVariant, MaterialTheme.shapes.small).padding(8.dp),
         verticalArrangement = Arrangement.spacedBy(2.dp)
     ) {
-        Text(stringResource(R.string.vlm_composition_plan_title, index + 1, title), style = MaterialTheme.typography.labelLarge)
+        if (fallback) Text(title, style = MaterialTheme.typography.labelLarge)
+        else Text(stringResource(R.string.vlm_composition_plan_title, index + 1, title), style = MaterialTheme.typography.labelLarge)
         Text(stringResource(R.string.vlm_actual_composition, actual), style = MaterialTheme.typography.labelSmall)
         val directive = plan.avatar.poseDirective ?: AvatarPoseDirective.fromLegacy(plan.avatar.pose)
         Text(

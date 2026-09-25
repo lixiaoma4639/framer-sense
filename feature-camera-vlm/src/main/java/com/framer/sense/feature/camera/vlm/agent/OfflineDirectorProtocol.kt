@@ -57,9 +57,9 @@ object OfflineDirectorProtocol {
             if (fields.drop(5).any(String::isBlank)) return@mapNotNull null
             CompositionIntent(
                 id = "p${System.identityHashCode(line)}",
-                title = fields[5].take(28), shot = shot, zone = zone, pose = pose,
+                title = fields[5], shot = shot, zone = zone, pose = pose,
                 facing = facing, expression = expression,
-                guidance = fields[6].take(160), reason = fields[7].take(160)
+                guidance = fields[6], reason = fields[7]
             )
         }.toList()
 
@@ -72,7 +72,7 @@ object OfflineDirectorProtocol {
             .filterNot { it.contains('|') || it.contains("景别|方位|姿势") || it.contains("只输出三行") }
             .joinToString(" ").trim()
         require(description.length >= 8) { "Offline model did not return visual analysis" }
-        return description.take(480)
+        return description
     }
 
     /** 兼容已经安装旧离线模型或缓存提示词时产生的数组完整方案。 */

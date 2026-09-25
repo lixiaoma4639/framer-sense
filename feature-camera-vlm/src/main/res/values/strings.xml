@@ -68,9 +68,9 @@
     <string name="vlm_director_rendering_preview">正在渲染方案预览 %1$d/%2$d</string>
     <string name="vlm_scene_analysis_fallback">场景分析备选</string>
     <string name="vlm_scene_analysis_fallback_reason">根据当前场景分析生成的备选构图</string>
-    <string name="vlm_scene_analysis_title">场景分析备选 · %1$s</string>
     <string name="vlm_composition_recommendations">构图建议</string>
     <string name="vlm_composition_plan_title">方案 %1$d · %2$s</string>
+    <string name="vlm_composition_plan_number">方案 %1$d</string>
     <string name="vlm_environment_person_evidence">环境与人物依据：%1$s</string>
     <string name="vlm_actual_composition">实际构图：%1$s</string>
     <string name="vlm_composition_guidance">拍摄指导：%1$s</string>

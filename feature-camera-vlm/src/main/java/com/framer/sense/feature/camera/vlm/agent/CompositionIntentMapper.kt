@@ -71,14 +71,14 @@ object CompositionIntentMapper {
             intents = shots.indices.map { index ->
                 CompositionIntent(
                     id = "p${index + 1}",
-                    title = description.take(28),
+                    title = "p${index + 1}",
                     shot = shots[index],
                     zone = zones[index],
                     pose = AvatarPoseDirective.legacyPose(directives[index]),
                     facing = listOf(FacingDirection.FRONT, FacingDirection.THREE_QUARTER_LEFT, FacingDirection.THREE_QUARTER_RIGHT)[index],
                     expression = detectedExpression(text) ?: if (warm) ExpressionId.SMILE else ExpressionId.CONFIDENT,
-                    guidance = description.take(120),
-                    reason = description.take(160),
+                    guidance = description,
+                    reason = description,
                     uncertainties = listOf(SCENE_FALLBACK_MARKER),
                     poseDirective = directives[index],
                     subjectDistance = distance
