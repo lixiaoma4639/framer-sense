@@ -11,7 +11,10 @@ import com.framer.sense.feature.camera.vlm.model.StancePose
 
 /** 内置 Rocketbox 人像与受限摄影姿势、表情模板。 */
 object AvatarCatalog {
-    data class Asset(val fileName: String)
+    const val RIG_ID = "rocketbox-v1"
+    data class Asset(val fileName: String, val version: Int = 1, val rigId: String = RIG_ID, val boundsExtentScale: Float = 100f) {
+        init { require(fileName.isNotBlank() && version > 0 && rigId.isNotBlank() && boundsExtentScale.isFinite() && boundsExtentScale > 0f) }
+    }
 
     private val assets = mapOf(
         AvatarId.ADULT_FEMALE to Asset("vlm_avatars/adult_female.glb"),
@@ -44,7 +47,7 @@ object AvatarCatalog {
         PoseId.ARMS_OPEN -> mapOf("Bip01 L UpperArm" to angles(0f, 0f, -58f), "Bip01 R UpperArm" to angles(0f, 0f, 58f))
     }
 
-    /** 所有受控动作涉及的骨骼；缺少某名称的资产会自动跳过对应局部动作。 */
+    /** 所有受控动作涉及的骨骼；加载时记录，执行时验证当前动作的必需骨骼。 */
     val controlledBoneNames: Set<String> by lazy {
         PoseId.entries.flatMap { poseRotations(it).keys }.toSet() + setOf(
             "Bip01 Pelvis", "Bip01 L Thigh", "Bip01 R Thigh"
@@ -107,15 +110,29 @@ object AvatarCatalog {
     /** Rocketbox 导出的 ARKit 形变名称与权重。 */
     fun expressionWeights(expression: ExpressionId, intensity: Float): Map<String, Float> {
         val amount = intensity.coerceIn(0f, 1f)
-        fun both(name: String, weight: Float) = mapOf("blendShape1.AK_${name}Left" to weight, "blendShape1.AK_${name}Right" to weight)
+        // Rocketbox 的左右通道编号不同，且 GLB 名称没有 FBX 的 blendShape1 前缀。
+        fun smile(weight: Float) = mapOf("AK_44_MouthSmileLeft" to weight, "AK_45_MouthSmileRight" to weight)
+        fun cheeks(weight: Float) = mapOf("AK_07_CheekSquintLeft" to weight, "AK_08_CheekSquintRight" to weight)
+        fun eyes(weight: Float) = mapOf("AK_19_EyeSquintLeft" to weight, "AK_20_EyeSquintRight" to weight)
         return when (expression) {
             ExpressionId.NEUTRAL -> emptyMap()
-            ExpressionId.SMILE -> both("44_MouthSmile", .42f * amount) + both("07_CheekSquint", .12f * amount)
-            ExpressionId.HAPPY -> both("44_MouthSmile", .78f * amount) + both("07_CheekSquint", .28f * amount) + both("19_EyeSquint", .12f * amount)
-            ExpressionId.SURPRISED -> both("21_EyeWide", .48f * amount) + mapOf("blendShape1.AK_25_JawOpen" to .30f * amount)
-            ExpressionId.THOUGHTFUL -> mapOf("blendShape1.AK_03_BrowInnerUp" to .18f * amount, "blendShape1.AK_38_MouthPucker" to .10f * amount)
-            ExpressionId.CONFIDENT -> both("44_MouthSmile", .30f * amount) + mapOf("blendShape1.AK_03_BrowInnerUp" to .08f * amount)
+            ExpressionId.SMILE -> smile(.42f * amount) + cheeks(.12f * amount)
+            ExpressionId.HAPPY -> smile(.78f * amount) + cheeks(.28f * amount) + eyes(.12f * amount)
+            ExpressionId.SURPRISED -> mapOf("AK_21_EyeWideLeft" to .48f * amount, "AK_22_EyeWideRight" to .48f * amount, "AK_25_JawOpen" to .30f * amount)
+            ExpressionId.THOUGHTFUL -> mapOf("AK_03_BrowInnerUp" to .18f * amount, "AK_38_MouthPucker" to .10f * amount)
+            ExpressionId.CONFIDENT -> smile(.30f * amount) + mapOf("AK_03_BrowInnerUp" to .08f * amount)
         }
+    }
+
+    /** 返回当前动作真正缺失的能力，禁止将静默跳过当作渲染成功。 */
+    fun missingCapabilities(
+        avatar: com.framer.sense.feature.camera.vlm.model.AvatarPlacement,
+        boneNames: Set<String>,
+        morphNames: Set<String>
+    ): Set<String> {
+        val rotations = avatar.poseDirective?.let(::directiveRotations) ?: poseRotations(avatar.pose)
+        val requiredMorphs = expressionWeights(avatar.expression, avatar.expressionIntensity).filterValues { it > 0f }.keys
+        return (rotations.keys - boneNames) + (requiredMorphs - morphNames)
     }
 
     private fun angles(x: Float, y: Float, z: Float) = floatArrayOf(x, y, z)

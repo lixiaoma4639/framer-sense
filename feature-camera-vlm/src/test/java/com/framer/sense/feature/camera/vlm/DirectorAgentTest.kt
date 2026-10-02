@@ -43,12 +43,12 @@ class DirectorAgentTest {
         val sceneInput = input().copy(scene = input().scene.copy(id = "new-frame", currentZoom = 2f))
         val prompt = DirectorPrompt.build(sceneInput, emptyList(), null, false, offline = false)
         val example = prompt.lineSequence().first { it.trimStart().startsWith("完整输出结构示例=") }.substringAfter('=')
-        val decision = DirectorOutput.decode(example)
+        val decision = VlmJson.decodeFromString<CompositionIntentDecision>(example)
         assertEquals("new-frame", decision.imageId)
         assertEquals(ActionKind.FINAL, decision.action)
-        assertEquals(3, decision.plans.size)
-        assertEquals(3, decision.plans.map { it.id }.distinct().size)
-        assertTrue(decision.plans.all { it.zoom == 2f })
+        assertEquals(3, decision.intents.size)
+        assertEquals(3, decision.intents.map { it.id }.distinct().size)
+        assertTrue(PlanValidator().validate(CompositionIntentMapper.map(decision, sceneInput).plans, sceneInput).isEmpty())
         assertTrue(prompt.contains("不能写 uncertainty"))
         assertFalse(prompt.contains("\"plans\":[...]"))
     }
@@ -60,7 +60,7 @@ class DirectorAgentTest {
         val result = DirectorAgent().run(input(), ModelSettings(mode = ModelMode.CLOUD), { _ -> object : VisionModelProvider {
             override suspend fun step(call: ModelCall): StepReply {
                 if (++calls == 1) return StepReply("fake", singlePlanOutput)
-                listOf("仅返回单个方案", "version, imageId, action, plans", "另外两个不同方案", "expressionIntensity", "将 uncertainty 改为 uncertainties").forEach {
+                listOf("仅返回单个方案", "version, imageId, action", "另外两个不同意图", "expressionIntensity", "将 uncertainty 改为 uncertainties").forEach {
                     assertTrue("缺少修正反馈：$it", call.prompt.contains(it))
                 }
                 return StepReply("fake", VlmJson.encodeToString(DirectorDecision(ActionKind.FINAL, plans(), imageId = "frame")))
@@ -96,7 +96,7 @@ class DirectorAgentTest {
             val result = DirectorAgent().run(input(), ModelSettings(mode = ModelMode.OFFLINE), { _ -> object : VisionModelProvider {
                 override suspend fun step(call: ModelCall): StepReply {
                     calls++
-                    assertTrue(call.prompt.contains("只输出紧凑JSON数组"))
+                    assertTrue(call.prompt.contains("一句简体中文、50字以内"))
                     return StepReply("fake", raw)
                 }
             } }, PreviewInspector { _, _ -> PreviewInspection() })
@@ -297,6 +297,57 @@ class DirectorAgentTest {
             } }, PreviewInspector { _, _ -> error("旧结果不应渲染") })
             fail("应拒绝错误画面编号")
         } catch (failure: ModelFailure) { assertEquals("LOCAL_INVALID_OUTPUT", failure.code) }
+    }
+
+    @Test fun renderedPlacementBecomesFinalPlanAndGuidanceSource() = runTest {
+        val result = DirectorAgent().run(input(), ModelSettings(mode = ModelMode.OFFLINE), { object : VisionModelProvider {
+            override suspend fun step(call: ModelCall) = reply(DirectorDecision(ActionKind.FINAL, plans(), imageId = "frame"))
+        } }, PreviewInspector { plan, _ ->
+            PreviewInspection(appliedAvatar = plan.avatar.copy(height = plan.avatar.height * .85f, projectionCalibrated = true))
+        })
+        val mapped = CompositionIntentMapper.map(CompositionIntentMapper.fromLegacy(DirectorDecision(ActionKind.FINAL, plans(), imageId = "frame")), input()).plans
+        result.plans.zip(mapped).forEach { (actual, request) ->
+            assertEquals(request.avatar.height * .85f, actual.avatar.height, .0001f)
+            assertTrue(actual.avatar.projectionCalibrated)
+            assertTrue(CompositionGuidance.from(actual).heightPercent < CompositionGuidance.from(request).heightPercent)
+        }
+    }
+
+    @Test fun invalidRenderedPlacementAndChangedAvatarAreRejectedWithoutLocalRetry() = runTest {
+        for (changeIdentity in listOf(false, true)) {
+            var calls = 0
+            try {
+                DirectorAgent().run(input(), ModelSettings(mode = ModelMode.OFFLINE), { object : VisionModelProvider {
+                    override suspend fun step(call: ModelCall): StepReply {
+                        calls++
+                        return reply(DirectorDecision(ActionKind.FINAL, plans(), imageId = "frame"))
+                    }
+                } }, PreviewInspector { plan, _ -> PreviewInspection(appliedAvatar =
+                    if (changeIdentity) plan.avatar.copy(avatarId = AvatarId.ADULT_MALE) else plan.avatar.copy(height = .01f)
+                ) })
+                fail("无效渲染结果不能提交")
+            } catch (failure: ModelFailure) {
+                assertEquals("LOCAL_INVALID_OUTPUT", failure.code)
+                assertTrue(failure.diagnostics!!.observations.any { it.tool == "validate_rendered_plan" })
+            }
+            assertEquals(1, calls)
+        }
+    }
+
+    @Test fun singleIntentRevisionKeepsOtherPlansAndIncrementsSelectedVersion() = runTest {
+        val existing = OfflineDirectorProtocol.decode("湖边开阔，人物自然站立微笑", input()).plans
+        val editing = input(existing, "p2")
+        val prompt = DirectorPrompt.build(editing, emptyList(), null, false)
+        val example = prompt.lineSequence().first { it.trimStart().startsWith("完整输出结构示例=") }.substringAfter('=')
+        assertEquals(listOf("p2"), VlmJson.decodeFromString<CompositionIntentDecision>(example).intents.map { it.id })
+        val intent = CompositionIntentMapper.sceneFallback("花园背景，人物侧身双手交叠微笑", editing).intents.first().copy(id = "p2")
+        val result = DirectorAgent().run(editing, ModelSettings(mode = ModelMode.OFFLINE), { object : VisionModelProvider {
+            override suspend fun step(call: ModelCall) = StepReply("fake", VlmJson.encodeToString(CompositionIntentDecision(ActionKind.FINAL, listOf(intent), imageId = "frame")))
+        } }, PreviewInspector { _, _ -> PreviewInspection() })
+        assertEquals(existing[0], result.plans[0])
+        assertEquals(existing[2], result.plans[2])
+        assertEquals(existing[1].revision + 1, result.plans[1].revision)
+        assertEquals(intent.poseDirective, result.plans[1].avatar.poseDirective)
     }
 
 }

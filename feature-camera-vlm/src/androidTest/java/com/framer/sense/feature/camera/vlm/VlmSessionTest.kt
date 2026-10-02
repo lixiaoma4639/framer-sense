@@ -216,4 +216,135 @@ class VlmSessionTest {
             vm.onLeave()
         }
     }
+
+    @Test fun resizeDiscardsOldPreviewAndApplyUsesCalibratedPlan() = runBlocking {
+        withContext(Dispatchers.Main) {
+            val provider = object : VisionModelProvider {
+                override suspend fun step(call: ModelCall) = reply(call.input.scene.id)
+            }
+            val pending = CompletableDeferred<Unit>()
+            val release = CompletableDeferred<Unit>()
+            val renderer = object : AvatarRenderer {
+                override suspend fun render(plan: CompositionPlan, width: Int, height: Int, warmth: Float, brightness: Float): AvatarPreview {
+                    if (plan.revision > 0 && !plan.avatar.projectionCalibrated) {
+                        pending.complete(Unit)
+                        // 模拟 GPU 不响应取消、旧 revision 仍会迟到返回。
+                        withContext(NonCancellable) { release.await() }
+                    }
+                    val applied = if (plan.id == "p1" && !plan.avatar.projectionCalibrated)
+                        plan.avatar.copy(height = plan.avatar.height * .8f, projectionCalibrated = true)
+                    else plan.avatar.copy(projectionCalibrated = true)
+                    return AvatarPreview(Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888), CropRect(.4f, .5f, .6f, .92f), applied)
+                }
+            }
+            val vm = viewModel(provider = provider, renderer = renderer)
+            val events = mutableListOf<VlmEffect>()
+            val listener = launch(start = CoroutineStart.UNDISPATCHED) { vm.effects.collect { events += it } }
+            try {
+                val token = startGenerating(vm, events)
+                vm.onIntent(VlmIntent.FrameReady(token, Bitmap.createBitmap(60, 80, Bitmap.Config.ARGB_8888), 1f))
+                withTimeout(5000) { vm.state.first { it.stage == VlmStage.READY } }
+                vm.onIntent(VlmIntent.Select("p1"))
+                vm.onIntent(VlmIntent.Resize(.4f))
+                assertFalse(vm.state.value.previews.containsKey("p1"))
+                withTimeout(5000) { pending.await() }
+                vm.onIntent(VlmIntent.Resize(.5f))
+                release.complete(Unit)
+                withTimeout(5000) { vm.state.first { it.previews["p1"]?.appliedPlan?.revision == 2 } }
+                val final = vm.state.value.result!!.plans.first()
+                assertEquals(.4f, final.avatar.height, .0001f)
+                assertEquals(final, vm.state.value.previews.getValue("p1").appliedPlan)
+                vm.onIntent(VlmIntent.Apply)
+                withTimeout(5000) { vm.state.first { it.stage == VlmStage.LIVE } }
+                assertEquals(final, vm.state.value.referencePlan)
+                assertNotNull(vm.state.value.reference)
+            } finally { release.complete(Unit); listener.cancel(); vm.onLeave() }
+        }
+    }
+
+    @Test fun manualActionExpressionAndFaceUseSameSpecWithoutAnotherModelCall() = runBlocking {
+        withContext(Dispatchers.Main) {
+            var calls = 0
+            var failRender = false
+            val provider = object : VisionModelProvider {
+                override suspend fun step(call: ModelCall): StepReply { calls++; return reply(call.input.scene.id) }
+            }
+            val renderer = object : AvatarRenderer {
+                override suspend fun render(plan: CompositionPlan, width: Int, height: Int, warmth: Float, brightness: Float): AvatarPreview {
+                    check(!failRender) { "模拟 GPU 错误" }
+                    return AvatarPreview(Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888), CropRect(.4f, .5f, .6f, .92f), plan.avatar.copy(projectionCalibrated = true))
+                }
+                override suspend fun renderFace(plan: CompositionPlan, size: Int) =
+                    AvatarPreview(Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888), CropRect(), plan.avatar, plan.resolvedSpec)
+            }
+            val vm = viewModel(provider = provider, renderer = renderer)
+            val events = mutableListOf<VlmEffect>()
+            val listener = launch(start = CoroutineStart.UNDISPATCHED) { vm.effects.collect { events += it } }
+            try {
+                val token = startGenerating(vm, events)
+                vm.onIntent(VlmIntent.FrameReady(token, Bitmap.createBitmap(60, 80, Bitmap.Config.ARGB_8888), 1f))
+                withTimeout(5000) { vm.state.first { it.stage == VlmStage.READY } }
+                val original = vm.state.value.result!!.plans
+                vm.onIntent(VlmIntent.ActionSelected(PhotoActionCatalog.basicId(PoseId.WAVE)))
+                withTimeout(5000) { vm.state.first { it.stage == VlmStage.READY && it.result!!.plans[0].revision == 1 } }
+                vm.onIntent(VlmIntent.ExpressionSelected(ExpressionId.SMILE))
+                withTimeout(5000) { vm.state.first { it.stage == VlmStage.READY && it.result!!.plans[0].revision == 2 } }
+                vm.onIntent(VlmIntent.ExpressionIntensityChanged(.8f))
+                withTimeout(5000) { vm.state.first { it.stage == VlmStage.READY && it.result!!.plans[0].revision == 3 } }
+                vm.onIntent(VlmIntent.FaceVisible(true))
+                withTimeout(5000) { vm.state.first { it.facePreview != null && !it.faceLoading } }
+                val selected = vm.state.value.result!!.plans[0]
+                assertEquals(PhotoActionCatalog.basicId(PoseId.WAVE), selected.resolvedSpec!!.action.id)
+                assertEquals(ExpressionId.SMILE, selected.resolvedSpec.guidance.expression)
+                assertEquals(.8f, selected.resolvedSpec.avatar.expressionIntensity, 0f)
+                assertEquals(original.drop(1), vm.state.value.result!!.plans.drop(1))
+                assertEquals(1, calls)
+                vm.onIntent(VlmIntent.Resize(.4f))
+                withTimeout(5000) { vm.state.first { it.previews["p1"]?.appliedPlan?.revision == 4 && it.facePreview != null } }
+                val resized = vm.state.value.result!!.plans[0]
+                assertEquals(selected.resolvedSpec.action, resized.resolvedSpec!!.action)
+                assertTrue(resized.resolvedSpec.matches(resized))
+                val previousPreview = vm.state.value.previews.getValue("p1")
+                failRender = true
+                vm.onIntent(VlmIntent.ActionSelected(PhotoActionCatalog.basicId(PoseId.HAND_HIP)))
+                withTimeout(5000) { vm.state.first { it.stage == VlmStage.READY && it.error != null } }
+                assertEquals(resized, vm.state.value.result!!.plans[0])
+                assertSame(previousPreview, vm.state.value.previews.getValue("p1"))
+                assertEquals(1, calls)
+            } finally { listener.cancel(); vm.onLeave() }
+        }
+    }
+
+    @Test fun lateFaceCannotReplaceNewlySelectedPlan() = runBlocking {
+        withContext(Dispatchers.Main) {
+            val entered = CompletableDeferred<Unit>()
+            val release = CompletableDeferred<Unit>()
+            val renderer = object : AvatarRenderer {
+                override suspend fun render(plan: CompositionPlan, width: Int, height: Int, warmth: Float, brightness: Float) =
+                    AvatarPreview(Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888), CropRect(), plan.avatar.copy(projectionCalibrated = true))
+                override suspend fun renderFace(plan: CompositionPlan, size: Int): AvatarPreview {
+                    if (plan.id == "p1") { entered.complete(Unit); withContext(NonCancellable) { release.await() } }
+                    val bitmap = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
+                    bitmap.eraseColor(if (plan.id == "p1") android.graphics.Color.RED else android.graphics.Color.BLUE)
+                    return AvatarPreview(bitmap, CropRect(), plan.avatar, plan.resolvedSpec)
+                }
+            }
+            val vm = viewModel(provider = object : VisionModelProvider { override suspend fun step(call: ModelCall) = reply(call.input.scene.id) }, renderer = renderer)
+            val events = mutableListOf<VlmEffect>()
+            val listener = launch(start = CoroutineStart.UNDISPATCHED) { vm.effects.collect { events += it } }
+            try {
+                val token = startGenerating(vm, events)
+                vm.onIntent(VlmIntent.FrameReady(token, Bitmap.createBitmap(60, 80, Bitmap.Config.ARGB_8888), 1f))
+                withTimeout(5000) { vm.state.first { it.stage == VlmStage.READY } }
+                vm.onIntent(VlmIntent.FaceVisible(true))
+                withTimeout(5000) { entered.await() }
+                vm.onIntent(VlmIntent.Select("p2"))
+                assertNull(vm.state.value.facePreview)
+                release.complete(Unit)
+                val current = withTimeout(5000) { vm.state.first { it.facePreview != null && !it.faceLoading } }
+                assertEquals("p2", current.selectedId)
+                assertEquals(android.graphics.Color.BLUE, current.facePreview!!.getPixel(0, 0))
+            } finally { release.complete(Unit); listener.cancel(); vm.onLeave() }
+        }
+    }
 }

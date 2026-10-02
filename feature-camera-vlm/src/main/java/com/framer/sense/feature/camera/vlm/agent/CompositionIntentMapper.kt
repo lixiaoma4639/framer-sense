@@ -11,10 +11,14 @@ object CompositionIntentMapper {
 
     fun map(decision: CompositionIntentDecision, input: DirectorInput): Result {
         require(decision.action == ActionKind.FINAL) { "Only FINAL intents can become plans" }
-        require(decision.intents.size == 3) { "Expected three composition intents" }
+        val editing = input.selectedId != null
+        require(decision.intents.size == 3 || (editing && decision.intents.size == 1)) { "Expected three composition intents or one selected replacement" }
+        require(!editing || input.existing.size == 3 && input.existing.any { it.id == input.selectedId }) { "Unknown selected plan" }
         val messages = mutableListOf<String>()
         val intents = distinct(decision.intents, messages)
-        val plans = intents.mapIndexed { index, intent -> toPlan(intent.copy(id = "p${index + 1}"), input) }
+        val plans = intents.mapIndexed { index, intent ->
+            toPlan(intent.copy(id = if (editing && intents.size == 1) input.selectedId else "p${index + 1}"), input)
+        }
         val merged = input.selectedId?.let { selectedId ->
             val replacement = plans.firstOrNull { it.id == selectedId } ?: plans.first()
             input.existing.map { old -> if (old.id == selectedId) replacement.copy(id = old.id) else old }
@@ -254,18 +258,17 @@ object CompositionIntentMapper {
      * 收敛到保守范围；环境构图绝不使用会遮住场景的大人像。
      */
     private fun placement(shot: ShotType, distance: SubjectDistance): Triple<Float, Float, Float> {
-        val height = when (shot) {
+        val visibleHeight = when (shot) {
             ShotType.ENVIRONMENT -> when (distance) { SubjectDistance.FAR -> .18f; SubjectDistance.MID -> .23f; SubjectDistance.NEAR -> .28f }
             ShotType.FULL -> when (distance) { SubjectDistance.FAR -> .36f; SubjectDistance.MID -> .46f; SubjectDistance.NEAR -> .56f }
             ShotType.HALF -> when (distance) { SubjectDistance.FAR -> .50f; SubjectDistance.MID -> .60f; SubjectDistance.NEAR -> .70f }
             ShotType.CLOSE_UP -> when (distance) { SubjectDistance.FAR -> .64f; SubjectDistance.MID -> .74f; SubjectDistance.NEAR -> .82f }
         }
-        val footY = when (shot) {
-            ShotType.ENVIRONMENT -> .92f
-            ShotType.FULL -> .93f
-            ShotType.HALF -> 1.10f
-            ShotType.CLOSE_UP -> 1.32f
-        }
+        // 半身/特写的 height 仍表示完整人体高度，脚底在画面之外。
+        // 先确定可见比例，再反推完整高度和脚底，避免安全映射自身违反景别校验。
+        val cutRatio = when (shot) { ShotType.HALF -> .40f; ShotType.CLOSE_UP -> .68f; else -> 0f }
+        val height = visibleHeight / (1f - cutRatio)
+        val footY = if (cutRatio > 0f) 1f + height * cutRatio else if (shot == ShotType.ENVIRONMENT) .92f else .93f
         val span = when (shot) {
             ShotType.ENVIRONMENT -> 1f
             ShotType.FULL -> .76f

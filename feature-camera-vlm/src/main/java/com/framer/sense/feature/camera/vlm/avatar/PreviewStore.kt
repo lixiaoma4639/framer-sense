@@ -17,12 +17,29 @@ import kotlinx.serialization.encodeToString
 import kotlin.math.roundToInt
 
 /** 一张方案的背景合成、人偶透明层和真实投影范围。 */
-data class PlanPreview(val composite: Bitmap, val avatar: Bitmap, val bounds: CropRect)
+data class PlanPreview(val composite: Bitmap, val avatar: Bitmap, val bounds: CropRect, val appliedPlan: CompositionPlan)
 
 /** 缓存最近的离屏预览，Bitmap 交由持有它的界面与 GC 管理。 */
 class PreviewStore(private val renderer: AvatarRenderer) : PreviewInspector {
     private val mutex = Mutex()
     private val cache = LinkedHashMap<String, PlanPreview>()
+    private val faces = LinkedHashMap<String, AvatarPreview>()
+
+    suspend fun availableActions(role: AvatarId, shot: ShotType) = renderer.availableActions(role, shot)
+    suspend fun availableExpressions(plan: CompositionPlan) = renderer.availableExpressions(plan)
+    suspend fun selectAction(plan: CompositionPlan, id: String) = renderer.resolve(plan, id)
+
+    /** 脸部单独渲染，不放大构图缩略图；最多缓存两张示范。 */
+    suspend fun face(plan: CompositionPlan): AvatarPreview? = mutex.withLock {
+        val resolved = renderer.resolve(plan)
+        val key = key("face", resolved, AvatarRenderPurpose.FACE)
+        faces[key]?.let { return@withLock it }
+        renderer.renderFace(resolved, 384)?.also {
+            check(it.appliedSpec == null || it.appliedSpec.matches(resolved)) { "FACE_SPEC_MISMATCH" }
+            faces[key] = it
+            while (faces.size > 2) faces.remove(faces.keys.first())
+        }
+    }
 
     /** 按冻结图片和完整方案构建预览。
      * @param scene 已转正图片。
@@ -30,7 +47,8 @@ class PreviewStore(private val renderer: AvatarRenderer) : PreviewInspector {
      * @return 可直接展示的合成及透明人偶。
      */
     suspend fun preview(scene: SceneSnapshot, plan: CompositionPlan): PlanPreview = mutex.withLock {
-        val key = scene.id + VlmJson.encodeToString(plan)
+        val resolved = renderer.resolve(plan)
+        val key = key(scene.id, resolved)
         cache[key]?.let { return@withLock it }
         val background = withContext(Dispatchers.IO) {
             val options = BitmapFactory.Options().apply { inSampleSize = 1 }
@@ -44,7 +62,7 @@ class PreviewStore(private val renderer: AvatarRenderer) : PreviewInspector {
             val w = (scene.width * ratio).roundToInt().coerceAtLeast(1)
             val h = (scene.height * ratio).roundToInt().coerceAtLeast(1)
             val colors = environment(background)
-            val human = renderer.render(plan, w, h, colors.first, colors.second)
+            val human = renderer.render(resolved, w, h, colors.first, colors.second)
             val composite = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
             val crop = plan.crop
             val src = Rect((crop.left * background.width).roundToInt().coerceIn(0, background.width - 1), (crop.top * background.height).roundToInt().coerceIn(0, background.height - 1), (crop.right * background.width).roundToInt().coerceIn(1, background.width), (crop.bottom * background.height).roundToInt().coerceIn(1, background.height))
@@ -54,8 +72,13 @@ class PreviewStore(private val renderer: AvatarRenderer) : PreviewInspector {
                 drawContactShadow(human.bounds, w, h, colors.second)
                 drawBitmap(human.bitmap, 0f, 0f, null)
             }
-            val result = PlanPreview(composite, human.bitmap, human.bounds)
+            val adopted = resolved.withActualAvatar(human.appliedAvatar ?: resolved.avatar)
+            val applied = adopted.copy(resolvedSpec = human.appliedSpec ?: adopted.resolvedSpec)
+            check(applied.resolvedSpec?.matches(applied) == true) { "RESOLVED_SPEC_MISMATCH" }
+            val result = PlanPreview(composite, human.bitmap, human.bounds, applied)
             cache[key] = result
+            // 请求和实际采用值共享同一张图，避免提交校准结果后再渲染、再次缩小。
+            cache[key(scene.id, applied)] = result
             while (cache.size > 6) cache.remove(cache.keys.first())
             result
         } finally { background.recycle() }
@@ -69,10 +92,15 @@ class PreviewStore(private val renderer: AvatarRenderer) : PreviewInspector {
     override suspend fun inspect(plan: CompositionPlan, scene: SceneSnapshot): PreviewInspection {
         val result = preview(scene, plan)
         val b = result.bounds
-        val originalFoot = PlanCoordinates.toOriginal(plan.avatar.foot, plan.crop)
+        val applied = result.appliedPlan
+        val originalFoot = PlanCoordinates.toOriginal(applied.avatar.foot, applied.crop)
         val errors = if (plan.shot in listOf(ShotType.ENVIRONMENT, ShotType.FULL) && (b.top < -.02f || b.bottom > 1.02f || b.left < -.02f || b.right > 1.02f)) listOf("全身/环境方案的实际人偶被画面裁掉，请缩小或移动人物") else emptyList()
-        return PreviewInspection(b, listOf("原图脚底锚点=(${originalFoot.x},${originalFoot.y})"), errors)
+        return PreviewInspection(b, listOf("原图脚底锚点=(${originalFoot.x},${originalFoot.y})"), errors, applied.avatar, applied.resolvedSpec)
     }
+
+    private fun key(sceneId: String, plan: CompositionPlan, purpose: AvatarRenderPurpose = AvatarRenderPurpose.COMPOSITION): String =
+        sceneId + VlmJson.encodeToString(plan) + ":" + plan.avatar.projectionCalibrated + ":" + purpose + ":" +
+            plan.resolvedSpec?.action?.cacheIdentity()
 
     /** 从稀疏像素估计色温倾向与亮度。
      * @param bitmap 原始相机背景，不包含虚拟人偶。

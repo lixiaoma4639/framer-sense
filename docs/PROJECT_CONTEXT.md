@@ -17,7 +17,7 @@ Framer_Sense 是一个基于 Android 官方多模块架构模板演进而来的 
 | 异步与状态 | Kotlin Coroutines、Flow、Lifecycle Compose |
 | 导航 | 底部导航状态切换、Navigation3 模板能力保留 |
 | 图片加载 | Coil 3 |
-| 相机与端侧 AI | CameraX、MNN 3.6.1 离线 VLM、云端导演网关、Filament 1.76.0；旧 ONNX 与 ML Kit 方案保留 |
+| 相机与端侧 AI | CameraX、MNN 3.6.1 离线 VLM、云端导演网关、Filament 1.75.1；旧 ONNX 与 ML Kit 方案保留 |
 | 测试 | JUnit、Compose UI Test、Android Instrumented Test、Hilt Test |
 
 当前源码基准包名和 app `applicationId` 为 `com.framer.sense`。各 module 的 Gradle `namespace` 默认以 `com.framer.sense` 为前缀，并按模块边界追加 `core.*`、`feature.*`、`test.*` 等后缀。
@@ -25,7 +25,7 @@ Framer_Sense 是一个基于 Android 官方多模块架构模板演进而来的 
 当前应用主体验是一个三栏导航 App；拍照 Tab 在横屏时改用右侧竖向导航栏，其余状态保持底部导航：
 
 - 首页：推荐流和系统相册。
-- 拍照：CameraX 冻结构图、离线/云端 VLM 导演、程序化 3D 人偶参考和系统相册保存。
+- 拍照：CameraX 冻结构图、离线/云端 VLM 导演、Rocketbox GLB 人像参考和系统相册保存。
 - 我的：个人主页、内容 Tab、扫一扫说明页、消息列表页和设置页。
 
 拍照模块当前按 MVI 组织：Composable 负责渲染状态、转发 Intent 和执行一次性 Effect，ViewModel 负责状态归约。非拍照模块当前按 MVVM 组织：Composable 负责渲染和事件转发，ViewModel 持有页面 UI 状态。模板中的 MyModel Repository/Room 数据层仍保留在 `core-data`、`core-database`，但不再接入底部导航中的“我的”主页。
@@ -156,13 +156,16 @@ MyApplication
 - 模型设置支持大陆/海外、强制离线/指定云端/自动，以及网关令牌和离线模型管理。离线模型主要通过 OkHttp + 协程直接下载官方 MNN 目录，使用 dataSync 前台服务、固定提交和断点续传；保留目录/ZIP 导入。下载完成后仅在相机前台空闲时加载，原生加载成功才激活。
 - 大陆自动路由为千问、Seed、离线；海外为 GPT、Gemini、离线。内容拒绝、取消和参数错误不触发自动切换。
 - 首个离线目标为 Qwen3-VL-2B-Instruct 的 MNN 3.6.1 模型包，ARM64 CPU JNI 串行推理；权重不随 APK 打包。
-- 离线加载及首 token 不限时；开始输出后连续 39 秒无新 token 才终止等待，正常持续输出不受总时长限制。本地使用短数组协议、最多调用一次并限制输出 512 token；校验失败直接结束，修改只生成选中方案，云端保留最多两轮。完整 JSON 的展示包装兼容不放宽业务校验。
-- Filament 1.76.0 使用球体、椭球和胶囊关节人偶，支持 12 站姿与 4 表情。卡片按需离屏渲染，应用后只叠加屏幕参考，不做真实空间锚定。
+- 离线加载及首 token 不限时；开始输出后连续 39 秒无新 token 才终止等待，正常持续输出不受总时长限制。本地使用 50 字内短场景观察，最多调用一次并限制输出 96 token；兼容旧意图/数组协议，校验失败直接结束，修改保留未选中方案；云端保留最多两轮。完整 JSON 的展示包装兼容不放宽业务校验。
+- Filament 1.75.1 使用四个 Rocketbox 骨骼 GLB，支持 12 个受限姿势与 6 个表情，另有身体/手臂/头部/站姿的细分动作。表情使用实际 GLB 通道名称；缺失必需骨骼/表情或渲染为空时明确失败。卡片按需离屏渲染，应用后只叠加屏幕参考，不做真实空间锚定。
+- P2 的版本化动作目录支持基础受控姿势、完整骨骼快照与命名 GLB 动画静帧采样；筛选角色、景别、资源/骨架和条件，外物接触动作及五个待素材验收的专业样片不可选。每次恢复全部绑定节点与表情，再执行动作、布局与最终表情，最后更新蒙皮。
+- `ResolvedPhotoSpec` 统一最终布局、动作/角色资源版本、采样、表情与指导，不进入 v1 网关 JSON。`CompositionGuidance` 从最终方案派生本地化指导；模型原文单独作为分析依据。`AvatarPreview.appliedAvatar/appliedSpec → PlanPreview.appliedPlan → CompositionResult/referencePlan` 回传实际渲染布局，更新预览与文字后才能应用。校准标记只在 App 内保存，半身/特写校准保留裁切比例；拖动/缩放时清除旧预览，并以请求令牌和 revision 拦截迟到结果。
+- 手动动作/表情/强度仅修改选中方案、递增 revision，不调用大模型；失败保留原方案。切换、拖动和缩放保留选择，重新生成/导演修改按新结果解析。同角色脸部示范独立按需渲染；缓存键包含动作/资产版本、采样、用途与校准标记，预览缓存最多六键、脸部最多两张。
 - 保留主导航蓝色“拍摄”和横屏侧栏；冻结、生成、修改和资源管理期间禁止拍摄，不排队补拍。真实照片通过 MediaStore 保存，不合入虚拟人偶。
 - 横竖屏变化保留 ViewModel 会话；进程回收后回到实时相机并提示重新构图。
 - App 不再启动预热 ONNX；旧相机模块和专题文档保留作为历史实现。
 
-详细接入、模型准备、网关启动、协议和验收说明见 `docs/FEATURE_CAMERA_VLM.md`。本次已编写实现及自动化测试，未运行构建/测试，真实设备与供应商需本地验收。后续拍照功能优先在 `feature-camera-vlm` 内实现。
+详细接入、模型准备、网关启动、协议和验收说明见 `docs/FEATURE_CAMERA_VLM.md`。2026-10-02 的 P1 与 P2 软件接入完成，累计 73 项 JVM 测试通过，主 App/设备测试代码编译和模块 Lint 通过。P2 未生成 APK，五个专业样片仍待素材验收，接入规范见 `docs/CAMERA_POSE_ASSET_INTEGRATION.md`；真实设备、视觉质量与供应商流程由用户验收。完整扫描 Agent 尚在后续批次，见 `docs/CAMERA_SCAN_AGENT_IMPLEMENTATION_PLAN.md`。后续拍照功能优先在 `feature-camera-vlm` 内实现。
 
 ### 我的模块
 
@@ -277,7 +280,7 @@ bash feature-camera-vlm/scripts/prepare_mnn.sh
 当前仓库包含多类测试：
 
 - `core-data`：Repository 单元测试。
-- `feature-camera-vlm`：协议、坐标、区域路由和导演预算单元测试；下载续传与校验单元测试；模型导入、加载事务、取消/重复点击/进程恢复仪器测试。代码已编写，本次未执行。
+- `feature-camera-vlm`：协议、坐标、区域路由和导演预算，下载续传与校验，真实 GLB 元数据、动作能力/版本、快照/动画采样与最终指导一致性共 73 项 JVM 测试已通过；模型导入、加载事务、会话门控、校准回传、Compose 指导、手动选择/失败保留、迟到脸部示范和真实 GPU 姿态/动画/表情重置设备测试已编译，设备运行待用户执行。
 - `services/vlm-gateway`：模拟四家上游及鉴权、拒绝、限流的 pytest 测试。本次未执行。
 - `feature-camera-pytorch-v2`：ONNX 3D 构图规则、3D 人像投影、pose 模板、MVI ViewModel 本地单元测试和拍照页 Compose 仪器测试。
 - `feature-camera-pytorch`：上一版 ONNX 构图规则本地单元测试和拍照页 Compose 仪器测试。

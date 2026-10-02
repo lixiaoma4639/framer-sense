@@ -20,14 +20,16 @@ object DirectorOutput {
             return errors
         }
         val singleIntent = "id" in root && "shot" in root && "zone" in root
+        val singleLegacyPlan = "id" in root && "shot" in root && "avatar" in root
         if (singleIntent) errors += "当前仅返回单个构图意图；它必须放入顶层 intents 数组，并生成另外两个不同意图"
+        if (singleLegacyPlan) errors += "当前仅返回单个方案；请改用 intents 协议并生成另外两个不同意图"
         val missing = listOf("version", "imageId", "action").filterNot { it in root }
         if (missing.isNotEmpty()) errors += "顶层缺少字段：${missing.joinToString()}；version=1，imageId=$imageId，action=FINAL"
         val intents = root["intents"] as? JsonArray
         if ("intents" !in root) errors += "顶层缺少 intents 数组；完整旧协议可以使用 plans，但新协议请使用 intents"
         if ("intents" in root && intents == null) errors += "intents 必须是数组"
         if (intents != null && intents.size != 3) errors += "intents 当前有 ${intents.size} 项，必须恰好三项"
-        val candidates = if (singleIntent) listOf(root) else intents?.toList().orEmpty()
+        val candidates = if (singleIntent || singleLegacyPlan) listOf(root) else intents?.toList().orEmpty()
         candidates.forEachIndexed { index, element ->
             val plan = element as? JsonObject
             if (plan == null) {

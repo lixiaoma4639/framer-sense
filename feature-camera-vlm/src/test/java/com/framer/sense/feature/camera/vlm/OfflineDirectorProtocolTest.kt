@@ -32,11 +32,11 @@ class OfflineDirectorProtocolTest {
         assertTrue(PlanValidator().validate(result.plans, input).isEmpty())
     }
 
-    @Test fun clampsOnlyInvalidWholePersonGeometryCopiedFromHalfBodyExample() {
+    @Test fun remapsLegacyWholePersonGeometryUsingSafeShotPlacement() {
         val output = OfflineDirectorProtocol.decode(raw.replace("[0.5,0.92,0.65,0,1,0,0.5]", "[0.5,1.4,1.25,0,1,0,0.5]"), input)
         assertEquals(ShotType.FULL, output.plans[1].shot)
-        assertEquals(1f, output.plans[1].avatar.foot.y, 0f)
-        assertEquals(1f, output.plans[1].avatar.height, 0f)
+        assertEquals(.93f, output.plans[1].avatar.foot.y, 0f)
+        assertEquals(.46f, output.plans[1].avatar.height, 0f)
         assertTrue(PlanValidator().validate(output.plans, input).isEmpty())
     }
 
@@ -72,7 +72,7 @@ class OfflineDirectorProtocolTest {
         assertEquals("p2", revised[1].id)
         assertEquals("自然侧身", revised[1].guidance)
         val prompt = OfflineDirectorProtocol.prompt(editing)
-        assertTrue(prompt.contains("仅输出1项"))
+        assertTrue(prompt.contains("一句简体中文、50字以内"))
         assertFalse(prompt.contains("保留建筑"))
     }
 

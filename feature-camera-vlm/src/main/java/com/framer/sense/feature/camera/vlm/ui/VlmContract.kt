@@ -5,6 +5,7 @@ import android.net.Uri
 import com.framer.sense.feature.camera.vlm.agent.DirectorProgress
 import com.framer.sense.feature.camera.vlm.data.ModelDownloadState
 import com.framer.sense.feature.camera.vlm.avatar.PlanPreview
+import com.framer.sense.feature.camera.vlm.avatar.PhotoActionDefinition
 import com.framer.sense.feature.camera.vlm.model.*
 
 enum class VlmStage { LIVE, FREEZING, FROZEN, GENERATING, READY, MODIFYING }
@@ -22,6 +23,11 @@ data class VlmUiState(
     val selectedId: String? = null,
     val selectedAvatar: AvatarId = AvatarId.ADULT_FEMALE,
     val previews: Map<String, PlanPreview> = emptyMap(),
+    val availableActions: Map<String, List<PhotoActionDefinition>> = emptyMap(),
+    val availableExpressions: Map<String, List<ExpressionId>> = emptyMap(),
+    val faceVisible: Boolean = false,
+    val facePreview: Bitmap? = null,
+    val faceLoading: Boolean = false,
     val reference: PlanPreview? = null,
     val referencePlan: CompositionPlan? = null,
     val error: String? = null,
@@ -51,6 +57,10 @@ sealed interface VlmIntent {
     data class Select(val id: String) : VlmIntent
     data class Move(val dx: Float, val dy: Float) : VlmIntent
     data class Resize(val height: Float) : VlmIntent
+    data class ActionSelected(val actionId: String) : VlmIntent
+    data class ExpressionSelected(val expression: ExpressionId) : VlmIntent
+    data class ExpressionIntensityChanged(val intensity: Float) : VlmIntent
+    data class FaceVisible(val visible: Boolean) : VlmIntent
     data object Apply : VlmIntent
     data class ZoomChanged(val zoom: Float) : VlmIntent
     data class SettingsVisible(val visible: Boolean) : VlmIntent

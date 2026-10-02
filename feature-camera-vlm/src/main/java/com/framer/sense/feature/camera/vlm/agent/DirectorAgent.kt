@@ -7,7 +7,13 @@ import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 
 /** 渲染工具的结构化观察；无 GPU 的测试可以省略 bounds。 */
-data class PreviewInspection(val bounds: CropRect? = null, val messages: List<String> = emptyList(), val errors: List<String> = emptyList())
+data class PreviewInspection(
+    val bounds: CropRect? = null,
+    val messages: List<String> = emptyList(),
+    val errors: List<String> = emptyList(),
+    val appliedAvatar: AvatarPlacement? = null,
+    val appliedSpec: ResolvedPhotoSpec? = null
+)
 
 /** 导演任务向界面报告的当前执行阶段；仅描述真实运行中的一步，不保存历史。 */
 sealed interface DirectorProgress {
@@ -148,7 +154,10 @@ class DirectorAgent(
                     return@repeat
                 }
                 val mapped = try {
-                    CompositionIntentMapper.map(intentDecision, input)
+                    // 旧本地协议的合法中间动作仍可一次完成；云端保持 FINAL 提交约束。
+                    val executable = if (localReply && intentDecision.action in listOf(ActionKind.VALIDATE, ActionKind.RENDER))
+                        intentDecision.copy(action = ActionKind.FINAL) else intentDecision
+                    CompositionIntentMapper.map(executable, input)
                 } catch (error: IllegalArgumentException) {
                     logger.warn("构图意图安全映射失败 turn=${turn + 1} reason=${error.message}")
                     observations += ToolObservation("map_composition_intents", listOf(error.message.orEmpty()), listOf(ToolIssue("INVALID_INTENT", error.message.orEmpty())))
@@ -178,10 +187,25 @@ class DirectorAgent(
                 observations += ToolObservation("render_preview", inspections.flatMap { (id, value) -> value.messages.map { "$id: $it" } }, issues,
                     inspections.mapNotNull { (id, value) -> value.bounds?.let { id to it } }.toMap())
                 if (issues.isNotEmpty()) return@repeat
+                val resolved = decision.plans.map { plan ->
+                    plan.withActualAvatar(inspections[plan.id]?.appliedAvatar ?: plan.avatar).let {
+                        it.copy(resolvedSpec = inspections[plan.id]?.appliedSpec ?: it.resolvedSpec)
+                    }
+                }
+                // 渲染调整后仍须通过同一业务校验，修改任务仍只能改变选中方案。
+                val resolvedErrors = validator.validate(resolved, input)
+                if (resolved.any { it.avatar.avatarId != input.avatarId }) {
+                    observations += ToolObservation("validate_rendered_plan", emptyList(), issues = listOf(ToolIssue("AVATAR_ID_CHANGED", "AVATAR_ID_CHANGED")))
+                    return@repeat
+                }
+                if (resolvedErrors.isNotEmpty()) {
+                    observations += ToolObservation("validate_rendered_plan", resolvedErrors, resolvedErrors.map { ToolIssue("INVALID_RENDERED_PLAN", it) })
+                    return@repeat
+                }
                 if (decision.action == ActionKind.FINAL || localReply) {
-                    val revised = decision.plans.map { plan ->
+                    val revised = resolved.map { plan ->
                         val old = input.existing.find { it.id == plan.id }
-                        if (plan.id == input.selectedId && old != null) plan.copy(revision = old.revision + 1) else plan
+                        if (plan.id == input.selectedId && old != null) plan.withRevision(old.revision + 1) else plan
                     }
                     logger.info("导演任务完成 image=${input.scene.id.take(8)} turns=${turn + 1} plans=${revised.size}")
                     return CompositionResult(revised, traces, observations, outputs)

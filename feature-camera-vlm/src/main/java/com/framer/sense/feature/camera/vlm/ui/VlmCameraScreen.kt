@@ -51,6 +51,8 @@ import androidx.lifecycle.LifecycleEventObserver
 import com.framer.sense.feature.camera.vlm.BuildConfig
 import com.framer.sense.feature.camera.vlm.camera.VlmCameraController
 import com.framer.sense.feature.camera.vlm.model.*
+import com.framer.sense.feature.camera.vlm.avatar.PhotoActionCatalog
+import kotlin.math.roundToInt
 import kotlinx.serialization.encodeToString
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
@@ -79,9 +81,10 @@ fun VlmCameraScreen(
     val modelLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri -> uri?.let { viewModel.onIntent(VlmIntent.ImportModel(it)) } }
     val directoryLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri -> uri?.let { viewModel.onIntent(VlmIntent.ImportModelDirectory(it)) } }
     var requestedDownload by remember { mutableStateOf<VlmEffect.DownloadModel?>(null) }
+    val downloadServiceFailed = stringResource(R.string.vlm_download_service_failed)
     val startDownload: (VlmEffect.DownloadModel) -> Unit = { request ->
         try { ModelDownloadService.start(context, request.source, request.allowMetered) }
-        catch (_: Exception) { viewModel.onIntent(VlmIntent.UserMessage(context.getString(R.string.vlm_download_service_failed))) }
+        catch (_: Exception) { viewModel.onIntent(VlmIntent.UserMessage(downloadServiceFailed)) }
     }
     val notificationLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {
         // 用户拒绝通知权限仍可使用系统允许的前台服务，进度继续在 App 内展示。
@@ -299,7 +302,7 @@ private fun Controls(state: VlmUiState, onEvent: (VlmIntent) -> Unit, importImag
                     TextButton(onClick = { onEvent(VlmIntent.ZoomChanged(ratio)) }, enabled = !busy && state.cameraReady) { Text("${"%.1f".format(ratio)}×") }
                 }
             }
-            state.referencePlan?.let { Text(it.guidance, style = MaterialTheme.typography.bodyMedium) }
+            state.referencePlan?.let { Text(compositionGuidanceText(it), style = MaterialTheme.typography.bodyMedium, modifier = Modifier.testTag("vlm_reference_guidance")) }
         } else {
             if (state.stage == VlmStage.FROZEN && state.result == null) {
                 AvatarSelector(state, onEvent, busy)
@@ -313,7 +316,7 @@ private fun Controls(state: VlmUiState, onEvent: (VlmIntent) -> Unit, importImag
                             modifier = Modifier.width(130.dp).border(if (plan.id == state.selectedId) 2.dp else 0.dp, MaterialTheme.colorScheme.primary, MaterialTheme.shapes.medium)) {
                             state.previews[plan.id]?.let { Image(it.composite.asImageBitmap(), plan.title, Modifier.fillMaxWidth().height(98.dp), contentScale = ContentScale.Fit) }
                             Text(displayTitle, Modifier.padding(horizontal = 6.dp), maxLines = 1, style = MaterialTheme.typography.labelLarge)
-                            Text(stringResource(R.string.vlm_composition_pose_expression, poseLabel(plan.avatar.pose), expressionLabel(plan.avatar.expression)), Modifier.padding(horizontal = 6.dp), style = MaterialTheme.typography.labelSmall)
+                            Text(stringResource(R.string.vlm_composition_pose_expression, resolvedArmLabel(CompositionGuidance.from(plan)), expressionLabel(CompositionGuidance.from(plan).expression)), Modifier.padding(horizontal = 6.dp), style = MaterialTheme.typography.labelSmall)
                             Text(stringResource(R.string.vlm_composition_attributes, shotLabel(plan.shot), placementZoneLabel(plan.avatar.foot.x), facingLabel(plan.avatar.yaw)), Modifier.padding(6.dp), style = MaterialTheme.typography.labelSmall)
                         }
                     }
@@ -321,6 +324,7 @@ private fun Controls(state: VlmUiState, onEvent: (VlmIntent) -> Unit, importImag
                 CompositionDescriptions(result, state.selectedId)
                 val plan = result.plans.find { it.id == state.selectedId }
                 if (plan != null) {
+                    PhotoActionControls(state, plan, busy, onEvent)
                     if (plan.needsRetake) Text("需重新取景 · 预览仅供构图参考", color = MaterialTheme.colorScheme.tertiary, style = MaterialTheme.typography.labelSmall)
                     val visibleUncertainties = plan.uncertainties.filterNot { it == CompositionIntentMapper.SCENE_FALLBACK_MARKER }
                     if (visibleUncertainties.isNotEmpty()) Text(visibleUncertainties.joinToString("；"), style = MaterialTheme.typography.labelSmall)
@@ -342,7 +346,7 @@ private fun Controls(state: VlmUiState, onEvent: (VlmIntent) -> Unit, importImag
 
 /** 展示当前选中方案的 VLM 依据与实际采用的人像构图。 */
 @Composable
-private fun CompositionDescriptions(result: CompositionResult, selectedId: String?) {
+internal fun CompositionDescriptions(result: CompositionResult, selectedId: String?) {
     val index = result.plans.indexOfFirst { it.id == selectedId }
     val plan = result.plans.getOrNull(index) ?: return
     Text(stringResource(R.string.vlm_composition_recommendations), style = MaterialTheme.typography.titleSmall)
@@ -359,23 +363,81 @@ private fun CompositionDescriptions(result: CompositionResult, selectedId: Strin
         if (fallback) Text(title, style = MaterialTheme.typography.labelLarge)
         else Text(stringResource(R.string.vlm_composition_plan_title, index + 1, title), style = MaterialTheme.typography.labelLarge)
         Text(stringResource(R.string.vlm_actual_composition, actual), style = MaterialTheme.typography.labelSmall)
-        val directive = plan.avatar.poseDirective ?: AvatarPoseDirective.fromLegacy(plan.avatar.pose)
+        val guidance = CompositionGuidance.from(plan)
+        val directive = guidance.directive
         Text(
             stringResource(
                 R.string.vlm_composition_pose_detail,
-                bodyLabel(directive.body), armLabel(directive.arms), headLabel(directive.head),
-                stanceLabel(directive.stance), expressionLabel(plan.avatar.expression), distanceLabel(plan.avatar.subjectDistance)
+                bodyLabel(directive.body), resolvedArmLabel(guidance), headLabel(directive.head),
+                stanceLabel(directive.stance), expressionLabel(guidance.expression), distanceLabel(guidance.distance)
             ),
             style = MaterialTheme.typography.labelSmall
         )
-        if (fallback) {
-            Text(stringResource(R.string.vlm_environment_person_evidence, plan.guidance), style = MaterialTheme.typography.bodySmall)
-        } else {
-            Text(stringResource(R.string.vlm_composition_guidance, plan.guidance), style = MaterialTheme.typography.bodySmall)
-            Text(stringResource(R.string.vlm_composition_reason, plan.reason), style = MaterialTheme.typography.bodySmall)
+        Text(stringResource(R.string.vlm_composition_guidance, compositionGuidanceText(plan)), style = MaterialTheme.typography.bodySmall, modifier = Modifier.testTag("vlm_resolved_guidance"))
+        Text(stringResource(R.string.vlm_guidance_size, guidance.heightPercent, guidance.horizontalPercent), style = MaterialTheme.typography.labelSmall)
+        // 原文只作为可追溯分析来源，不能与实际动作指令混在同一区域。
+        if (fallback) Text(stringResource(R.string.vlm_model_scene_observation, plan.guidance), style = MaterialTheme.typography.bodySmall)
+        else Text(stringResource(R.string.vlm_model_scene_observation, plan.reason), style = MaterialTheme.typography.bodySmall)
+    }
+}
+
+/** 文字由最终布局和渲染动作派生，拖动、缩放或去重后自动跟随。 */
+@Composable
+internal fun compositionGuidanceText(plan: CompositionPlan): String {
+    val guide = CompositionGuidance.from(plan)
+    val camera = stringResource(if (guide.needsRetake) R.string.vlm_guidance_camera_retake else R.string.vlm_guidance_camera, shotLabel(guide.shot), guide.zoom)
+    val placement = if (guide.shot in listOf(ShotType.FULL, ShotType.ENVIRONMENT))
+        stringResource(R.string.vlm_guidance_placement, placementZoneLabel(plan.avatar.foot.x))
+    else stringResource(R.string.vlm_guidance_placement_cropped, placementZoneLabel(plan.avatar.foot.x), shotLabel(guide.shot))
+    val pose = stringResource(R.string.vlm_guidance_pose, facingLabel(plan.avatar.yaw), bodyLabel(guide.directive.body), resolvedArmLabel(guide), headLabel(guide.directive.head), stanceLabel(guide.directive.stance), expressionLabel(guide.expression))
+    val steps = plan.resolvedSpec?.action?.stepResources.orEmpty().map { stringResource(it) }
+    return (listOf(camera, placement, pose) + steps).joinToString("\n")
+}
+
+/** 手动选择仅发 MVI 事件；目录能力由状态机提供，技术版本不进入用户文案。 */
+@Composable
+internal fun PhotoActionControls(state: VlmUiState, plan: CompositionPlan, busy: Boolean, onEvent: (VlmIntent) -> Unit) {
+    Text(stringResource(R.string.vlm_photo_actions), style = MaterialTheme.typography.labelLarge)
+    if (plan.resolvedSpec?.action?.id == PhotoActionCatalog.DIRECTIVE_ID) {
+        Text(stringResource(R.string.vlm_photo_model_action), style = MaterialTheme.typography.bodySmall)
+    }
+    LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        items(state.availableActions[plan.id].orEmpty(), key = { it.id }) { action ->
+            FilterChip(selected = plan.resolvedSpec?.action?.id == action.id,
+                onClick = { onEvent(VlmIntent.ActionSelected(action.id)) }, enabled = !busy,
+                label = { Text(action.labelResource?.let { stringResource(it) } ?: poseLabel(action.legacyLabel)) },
+                modifier = Modifier.testTag("vlm_action_${action.id}"))
+        }
+    }
+    Text(stringResource(R.string.vlm_photo_expressions), style = MaterialTheme.typography.labelLarge)
+    LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        items(state.availableExpressions[plan.id].orEmpty(), key = { it.name }) { expression ->
+            FilterChip(selected = plan.avatar.expression == expression,
+                onClick = { onEvent(VlmIntent.ExpressionSelected(expression)) }, enabled = !busy,
+                label = { Text(expressionLabel(expression)) }, modifier = Modifier.testTag("vlm_expression_${expression.name}"))
+        }
+    }
+    var intensity by remember(plan.id, plan.revision, busy) { mutableFloatStateOf(plan.avatar.expressionIntensity) }
+    Text(stringResource(R.string.vlm_photo_intensity, (intensity * 100f).roundToInt()))
+    Slider(value = intensity, onValueChange = { intensity = it }, valueRange = 0f..1f,
+        onValueChangeFinished = { onEvent(VlmIntent.ExpressionIntensityChanged(intensity)) },
+        enabled = !busy && plan.avatar.expression != ExpressionId.NEUTRAL, modifier = Modifier.testTag("vlm_expression_intensity"))
+    TextButton(onClick = { onEvent(VlmIntent.FaceVisible(!state.faceVisible)) }, enabled = !busy,
+        modifier = Modifier.testTag("vlm_show_face")) {
+        Text(stringResource(if (state.faceVisible) R.string.vlm_photo_hide_face else R.string.vlm_photo_show_face))
+    }
+    if (state.faceVisible) {
+        if (state.faceLoading) Text(stringResource(R.string.vlm_photo_face_loading))
+        state.facePreview?.let { bitmap ->
+            Image(bitmap.asImageBitmap(), stringResource(R.string.vlm_photo_face_description),
+                Modifier.size(160.dp).testTag("vlm_face_preview"), contentScale = ContentScale.Fit)
         }
     }
 }
+
+@Composable
+private fun resolvedArmLabel(guide: CompositionGuidance): String =
+    if (guide.legacyHandNearFace) poseLabel(PoseId.HAT) else armLabel(guide.directive.arms)
 
 /** 在生成前由用户固定本次构图参考的角色，模型不会根据图片替换该选择。 */
 @Composable

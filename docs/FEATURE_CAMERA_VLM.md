@@ -4,6 +4,8 @@
 
 本次提交的是 Android 客户端、MNN JNI 桥接、Rocketbox 骨骼 GLB 人像及可本地启动的 Python 网关代码。已在 Android Debug 包和导入的 Qwen3-VL-2B MNN 模型上验证一次真实离线流程：模型画面分析、三方案校验、人偶投影和预览均完成；不同设备的成功率、延迟与内存仍需继续验收。
 
+2026-10-02：P1 一致性修复与 P2 软件接入完成。已加入版本化动作目录、完整姿态/动画采样、手动动作/表情与脸部示范；五个专业样片待素材验收。当前入口仍是单张“开始构图”，开始/结束扫描、多视角选景和成片检查属于后续批次，进度见 [执行计划](CAMERA_SCAN_AGENT_IMPLEMENTATION_PLAN.md)。本批未生成 APK，也未运行真机 GPU 或真实供应商测试。
+
 主 App 拍照入口为 `feature-camera-vlm`，包名 `com.framer.sense.feature.camera.vlm`。保留三个旧相机模块源码，但 App 不再依赖 ONNX v2，也不再在 Application 启动时预加载 ONNX。本次不创建 iOS 工程；JSON 协议、坐标、姿态编号和关节配置可作为后续 iOS 实现依据，Kotlin/Android 渲染和 JNI 本身不是跨平台二进制。
 
 ## 从哪里开始
@@ -19,10 +21,10 @@
 | 路径 | 责任 |
 | --- | --- |
 | `feature-camera-vlm/.../camera` | CameraX 绑定、冻结复制、转正裁剪、JPEG 缩略图、MediaStore 保存 |
-| `.../model` | JSON 协议、坐标换算、模型配置和会话输入 |
+| `.../model` | JSON 协议、坐标、最终事实 ResolvedPhotoSpec、指导、模型配置和会话输入 |
 | `.../data` | 网关适配、区域路由、OkHttp 下载与前台服务、目录/ZIP 导入、MNN 串行推理、加密设置 |
 | `.../agent` | 提示词、结构与几何校验、本地单次/云端两轮导演循环、Repository |
-| `.../avatar` | 4 个 Rocketbox GLB 角色、12 个受限姿势、6 个表情、Filament 按需离屏渲染和合成缓存 |
+| `.../avatar` | 4 个角色、版本化动作/能力目录、受控姿势/完整快照/动画采样、独立脸部示范和预览缓存 |
 | `.../ui` | MVI 状态、Intent、Effect、ViewModel、相机和模型设置面板 |
 | `.../di` | Hilt 进程级依赖装配 |
 | `feature-camera-vlm/src/main/cpp` | CMake 与 MNN JNI 桥接 |
@@ -33,7 +35,15 @@
 
 状态为 `LIVE → FREEZING → FROZEN → GENERATING → READY → MODIFYING → LIVE`。冻结使用 CameraX 内存拍摄，得到独立 Bitmap 后立即关闭 ImageProxy；预览和 ImageCapture 使用同一 ViewPort，并统一裁剪及旋转。显示图 JPEG 质量 95，模型输入长边最多 768 像素、JPEG 质量 85。
 
-首次生成前由用户选择成年女性、成年男性、女孩或男孩作为指导人像：实时取景时在“开始构图”前选择，导入图片时可在冻结页选择；角色身份始终由用户控制，VLM 只产生构图、姿势和表情建议，不能从画面推断或替换角色。三方案卡片显示预览、景别、倍率、姿态、表情。选中后可拖动人物、调整大小、重新生成或发送文字修改。修改只允许选中方案变化。基础校验和实际投影范围都通过后才允许应用；应用恢复实时预览、设置设备支持的倍率并叠加透明人偶参考，真实照片仍由 CameraX 单独保存到 `Pictures/FramerSense`，不合入人偶。生成、重新生成、修改和冻结后的自动生成期间，加载遮罩只实时展示当前真实处理步骤（请求准备、模型分析或切换、结果校验、投影检验、预览渲染），不展示原始输出或步骤历史。
+首次生成前由用户选择成年女性、成年男性、女孩或男孩作为指导人像：实时取景时在“开始构图”前选择，导入图片时可在冻结页选择；角色身份始终由用户控制，VLM 只产生构图、姿势和表情建议，不能从画面推断或替换角色。三方案卡片显示预览、景别、倍率、姿态、表情。选中后可拖动人物、调整大小、手动选择动作/表情及强度、查看脸部示范、重新生成或发送文字修改。修改只允许选中方案变化。基础校验和实际投影范围都通过后才允许应用；应用恢复实时预览、设置设备支持的倍率并叠加透明人偶参考，真实照片仍由 CameraX 单独保存到 `Pictures/FramerSense`，不合入人偶。生成、重新生成、修改和冻结后的自动生成期间，加载遮罩只实时展示当前真实处理步骤（请求准备、模型分析或切换、结果校验、投影检验、预览渲染），不展示原始输出或步骤历史。
+
+操作指导由 `CompositionGuidance` 读取最终方案，用资源模板分别说明持机者取景、入镜者位置、身体/手臂/头部/站姿和表情。原始模型文字单独显示为场景观察，不再直接指挥各备选方案。去重、拖动、缩放和应用后均重新派生；零表情强度显示平静。显示的“可见参考高度”是画面内人体参考范围，半身/特写不会显示完整人体大于 100% 的高度作为画面占比。旧动作未实际改变腿部重心时，文字不会声称新增的重心动作。
+
+动作和表情修改走 `READY → MODIFYING → READY` 的本地渲染事务，不调用大模型；成功后只替换选中方案并递增 revision，资源或渲染失败保留原方案。生成/修改期间禁用选择。手动选择在切换方案、拖动和缩放后保留；重新生成和“让导演修改”采用新的模型结果重新解析。表情强度在滑块松手后提交，零强度的指导为平静。脸部示范点击后才独立渲染同角色的头部，沿用最终动作、表情及强度，不改变方案的布局与校准。
+
+`ResolvedPhotoSpec` 保存方案 ID/revision、最终布局、动作/角色资源版本、采样、表情及指导；`CompositionPlan.resolvedSpec` 使用 `@Transient`，不进入现有网关 JSON。无解析结果的旧方案继续兼容；布局回传同步旧字段和解析结果，并校验布局、执行数据与指导一致。预览、文字与应用参考共同读取这个最终结果。
+
+`AvatarPreview.appliedAvatar/appliedSpec` 回传真实采用的布局和最终事实，`PlanPreview.appliedPlan` 把它传给导演、UI 和实时参考。渲染校准后再走业务校验；校准标记不进入网关 JSON。拖动/缩放时立即移除对应旧预览，按请求令牌和 revision 原子提交新图与实际布局，迟到结果或错误不能覆盖新版本。
 
 保留底部蓝色“拍摄”和横屏侧栏导航。冻结、生成、修改、模型管理和保存期间禁止拍摄；不排队补拍。相机默认自动曝光、白平衡、对焦，支持点击对焦测光。`1×/2×/3×` 是设备 zoom ratio，不承诺对应独立光学镜头，也不能由单张冻结图推断精确焦距、人物距离或安全站位。
 
@@ -71,12 +81,12 @@ Debug 原始输出可在“调试详情”中展开，也会按用户排障需�
 }
 ```
 
-上例仅解释一项字段；模型必须给出恰好三条意图。景别包括 `ENVIRONMENT/FULL/HALF/CLOSE_UP`，方位为 `LEFT/CENTER/RIGHT`，朝向为 `FRONT/THREE_QUARTER_LEFT/THREE_QUARTER_RIGHT`，其余枚举以 `CompositionModels.kt` 与网关 `models.py` 为准。用户在拍摄前选择的人偶角色不属于模型协议，映射时始终保留。
+上例仅解释一项字段；初次生成要求恰好三条意图，修改提示词要求只返回选中 ID 的一条替换意图，客户端兼容旧三条响应但保留未选中方案。景别包括 `ENVIRONMENT/FULL/HALF/CLOSE_UP`，方位为 `LEFT/CENTER/RIGHT`，朝向为 `FRONT/THREE_QUARTER_LEFT/THREE_QUARTER_RIGHT`，其余枚举以 `CompositionModels.kt` 与网关 `models.py` 为准。用户在拍摄前选择的人偶角色不属于模型协议，映射时始终保留。
 
 - 云端意图可额外携带 `poseDirective`（身体、手臂、头部、站姿）和 `subjectDistance`（远中近）；旧响应没有它们时由旧姿态编号安全转换。
 - App 根据景别、远中近、方位和设备限制生成裁剪、倍率、脚点和人偶高度；环境人像限制在画面高度约 14%–30%，全身限制在约 30%–58%，再由透明像素投影检查异常 GLB 包围盒并只向下缩小一次。模型提出的方位不会直接成为未校验的像素坐标。
 - 原点在左上角，x 向右、y 向下。crop 使用冻结原图归一化坐标。
-- avatar 使用**裁剪后的方案画面**坐标。foot 是脚底，height 是整个人偶的投影高度；半身和特写通过真实裁切实现，脚可以在画面外。
+- avatar 使用**裁剪后的方案画面**坐标。foot 是脚底，height 是整个人偶的投影高度；半身和特写通过真实裁切实现，脚可以在画面外。映射按半身 40%、特写 68% 的身体裁切比例反推完整高度和脚底；渲染缩小同步调整脚底以保持裁切比例，避免方案自身无法通过景别校验。
 - 原图坐标：`originalX = crop.left + planX × crop.width`，y 同理。`PlanCoordinates` 提供双向换算。
 - 首版保持原画幅，所以归一化 crop 的宽高跨度相同。同机位居中变焦满足 `zoom = currentZoom / crop.width`。
 - 偏心构图、向外扩大视场或移动机位需标记 `needsRetake=true`。冻结图只能展示已有图像范围，不能预览画面外新增内容。
@@ -84,11 +94,15 @@ Debug 原始输出可在“调试详情”中展开，也会按用户排障需�
 
 ## 人偶渲染
 
-固定依赖 `filament-android`、`filamat-android` 和 `gltfio-android`。内置的 `src/main/assets/vlm_avatars/` 含四个由 Microsoft Rocketbox（MIT）导出的 GLB：成人女、成人男、女孩和男孩；资产来源与授权记录在该目录的 `NOTICE.md`。GLB 保留真实网格、纹理、蒙皮骨骼与 ARKit BlendShape，不再以球体或胶囊体拼接人形。
+使用版本目录中固定的 Filament 1.75.1，依赖 `filament-android`、`filamat-android` 和 `gltfio-android`。内置的 `src/main/assets/vlm_avatars/` 含四个由 Microsoft Rocketbox（MIT）导出的 GLB：成人女、成人男、女孩和男孩；资产来源与授权记录在该目录的 `NOTICE.md`。GLB 保留真实网格、纹理、蒙皮骨骼与 ARKit BlendShape，不再以球体或胶囊体拼接人形。
 
-姿态：自然站立、侧身重心、回眸、身前交叠、单手叉腰、双手叉腰、轻抬手、前伸手势、手靠脸侧、抬头望远、低头沉思、双手轻开。细分指令由身体朝向、手臂动作、头部方向、轻微站姿和表情组成；每项都限制为 Rocketbox 已验证骨骼的安全局部旋转，缺失骨骼时降级为自然站姿。表情：平静、自然微笑、开朗微笑、惊喜、沉思、自信。当前阶段以稳定的骨骼局部旋转和少量表情形变为主；后续第三阶段可在同一 GLB/骨骼接口上增加动作片段、IK、手指和注视控制，而无需改动 VLM 协议。
+姿态：自然站立、侧身重心、回眸、身前交叠、单手叉腰、双手叉腰、轻抬手、前伸手势、手靠脸侧、抬头望远、低头沉思、双手轻开。细分指令由身体朝向、手臂动作、头部方向、轻微站姿和表情组成；每项都限制为 Rocketbox 骨骼局部旋转。执行时验证当前动作必需骨骼和正权重表情通道，缺失时明确报错，不再静默跳过；渲染无透明人像像素时也明确失败。表情：平静、自然微笑、开朗微笑、惊喜、沉思、自信。通道使用实际 GLB 名称，例如 `AK_44_MouthSmileLeft` 和 `AK_45_MouthSmileRight`，无 FBX 前缀且左右编号不同。生产内容目前仍以基础骨骼局部旋转和少量表情形变为主，专业摄影质量、手指和注视控制待真实素材审核；软件已支持完整姿态快照和动画静帧采样。
 
-Filament 由专用 HandlerThread 使用，gltfio 只在首次使用角色时加载 GLB，最多缓存两个角色；每次渲染只临时加入当前角色到 Scene，读回透明 Bitmap 后释放场景资源。最多缓存六张方案预览；没有三个持续运行的渲染循环。光照使用背景稀疏像素估计的亮度/暖色倾向，以及柔和环境光和方向光。实际阴影遮挡、人体与地面空间锚定、VR 和个人形象重建均不在首版内。
+Filament 由专用 HandlerThread 使用，gltfio 只在首次使用角色时加载 GLB，最多缓存两个角色资源；每次渲染只临时加入当前角色到 Scene，读回透明 Bitmap 后释放场景资源。预览缓存最多六个键，请求值与校准值可共享同一张图，键包含动作版本、角色资源版本、执行采样、渲染用途及 App 内校准标记。脸部示范单独缓存最多两张；没有持续运行的动画循环。光照使用背景稀疏像素估计的亮度/暖色倾向，以及柔和环境光和方向光。实际阴影遮挡、人体与地面空间锚定、VR 和个人形象重建均不在首版内。
+
+`PhotoActionCatalog` 为动作提供稳定 ID/版本、骨架、支持角色/景别、环境条件、执行数据和本地化步骤。实际 GLB 骨骼、形变、动画及快照参与能力筛选；资源缺失、骨架不匹配或座椅/墙面/道具条件未确认时不可选。模型只能提出结构化动作语义，不能选择任意资源；自动推荐只采用当前角色实际可执行且语义匹配的审核动作。五个专业样片登记为 `AWAITING_ASSET`，不会显示为正式动作。
+
+渲染前恢复完整绑定局部变换并清零表情，再应用受控姿势、完整快照或动画指定时刻，随后应用整体布局与最终表情，最后更新蒙皮矩阵。动画中的面部权重由最终表情覆盖，不新增持续播放。接口和素材交付/授权/审核规范见 [动作素材接入与验收](CAMERA_POSE_ASSET_INTEGRATION.md)。测试用两关节 GLB 仅放在 `androidTest/assets`，不进入正式 App，也不作为专业样片。
 
 ## 准备 MNN 和模型包
 
@@ -156,7 +170,25 @@ Android 不保存供应商 API key，也不写死云端模型 ID。设置中的�
 
 ## 本地验收
 
-以下命令仅供用户执行，本次没有代为运行：
+P1 历史验证（此前批次已执行打包）：
+
+```bash
+./gradlew :feature-camera-vlm:testDebugUnitTest :feature-camera-vlm:compileDebugAndroidTestKotlin :app:assembleDebug :feature-camera-vlm:lintDebug --offline --console=plain
+```
+
+结果：62 项 JVM 测试全部通过，设备测试编译通过，Debug APK 构建成功，模块 Lint 0 错误、16 项非阻断警告（KTX 建议、ARM64 ABI、存储空间 API 等）。已修复基线暴露的几何/修改兼容问题、设备测试导入错误和 Compose 资源读取错误；旧协议测试断言同步到现行意图/短场景观察协议。未运行设备仪器测试及真实云端/离线推理。
+
+P2 本批按用户授权执行下列验证，未执行 APK 打包任务：
+
+```bash
+./gradlew :feature-camera-vlm:testDebugUnitTest :feature-camera-vlm:compileDebugAndroidTestKotlin :app:compileDebugJavaWithJavac :feature-camera-vlm:lintDebug --offline --console=plain
+```
+
+结果：累计 73 项 JVM 测试全部通过，无失败或跳过；主 App 与设备测试代码编译通过；模块 Lint 0 错误、16 项非阻断警告。P2 新增能力筛选、旧方案兼容、版本变化、完整快照/动画采样及最终指导一致性回归。设备测试还覆盖仅选中方案修改、无需模型调用、失败保留原方案、迟到脸部示范，以及专用最小动画/快照资产的真实 GPU 切换重置；本批只编译这些设备测试，未运行。
+
+P2 手工验收：先生成三方案，在选中方案中切换动作、表情及强度，确认只有当前卡片变化且不触发模型请求；打开脸部示范，比对角色、表情和强度。拖动/缩放后切换到另一方案再回来，确认选择保留；快速切换与返回后台检查旧示范不会覆盖新方案。应用参考时核对动作、表情、位置与校准比例；重新生成/导演修改应采用新的模型结果。四角色与环境/全身/半身/特写分别验收。专业样片和商业摄影质量另行审核。
+
+以下为后续本地验收命令：
 
 ```bash
 # 先准备 MNN 源码，再构建
@@ -172,7 +204,9 @@ cd services/vlm-gateway
 python -m pytest tests
 ```
 
-新增自动化测试覆盖：模拟 OkHttp 响应的 Range 续传与重写、分页固定版本、取消 socket、摘要损坏；官方目录共享/独立嵌入、Git blob 摘要、路径和空间检查；进程恢复、重复继续、网络计费门控、取消保留旧安装、模拟原生加载失败和成功提交。测试均仅编写，未运行。
+JVM 测试覆盖协议、导演预算、坐标、下载续传和完整性、真实 GLB 蒙皮骨骼/表情通道、方案指导、所有景别与远中近映射、校准后裁切、渲染参数回传与重新校验。设备测试覆盖模型导入/加载事务/会话门控，以及本轮新增的校准缓存、迟到预览与应用同步、Compose 指导更新和四角色真实 GPU 的平静/微笑差异与表情重置；设备测试仅编译通过，尚未运行。
+
+P1 手工验收：固定同一测试图片，分别生成四角色方案，检查姿势/表情与文字；切换备选，确认共用模型观察但动作指导不同；拖动人物和连续缩放，检查位置/大小文字与最新预览同步；文字修改只更新选中方案；应用后实时参考的比例和指导与卡片一致。全身保留头脚，半身/特写保留头部并按身体部位裁切。表情是否足够明显、动作是否自然及左右是否正确需要真机人工确认。
 
 真机另需检查：前后台切换和通知进度、系统终止后继续、计费网络切换暂停、镜像可用性、下载后首次加载与断网图片推理。当前没有真实下载、原生加载或断网推理的验收结论。
 
@@ -186,6 +220,6 @@ python -m pytest tests
 - [MNN 3.6.1 LLM 接口](https://github.com/alibaba/MNN/blob/3.6.1/transformers/llm/engine/include/llm/llm.hpp)
 - [MNN Omni 图像解析](https://github.com/alibaba/MNN/blob/3.6.1/transformers/llm/engine/src/omni.cpp)
 - [MNN 3.6.1 导出工具](https://github.com/alibaba/MNN/blob/3.6.1/transformers/llm/export/llmexport.py)
-- [Filament 1.76.0](https://github.com/google/filament/tree/v1.76.0)
+- [Filament 1.75.1](https://github.com/google/filament/tree/v1.75.1)
 - [OpenAI Structured Outputs](https://developers.openai.com/api/docs/guides/structured-outputs)
 - [Gemini 结构化输出](https://ai.google.dev/gemini-api/docs/structured-output)

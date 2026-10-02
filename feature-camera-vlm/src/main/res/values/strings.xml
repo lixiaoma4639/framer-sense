@@ -1,4 +1,16 @@
 <resources>
+    <string name="vlm_photo_action_unavailable">当前角色或资源不支持此动作或表情，请选择其他方案</string>
+    <string name="vlm_photo_change_failed">动作或表情更新失败，原方案已保留，请重试</string>
+    <string name="vlm_photo_face_unavailable">当前角色无法显示脸部示范</string>
+    <string name="vlm_photo_actions">动作</string>
+    <string name="vlm_photo_expressions">表情</string>
+    <string name="vlm_photo_intensity">表情强度：%1$d%%</string>
+    <string name="vlm_photo_show_face">查看表情示范</string>
+    <string name="vlm_photo_hide_face">收起表情示范</string>
+    <string name="vlm_photo_face_loading">正在生成脸部示范</string>
+    <string name="vlm_photo_face_description">当前角色的表情示范</string>
+    <string name="vlm_photo_model_action">模型推荐的组合动作</string>
+    <string name="vlm_photo_spec_invalid">方案参数与实际动作不一致，请重新生成</string>
     <string name="app_name">feature-camera-vlm</string>
     <string name="vlm_model_absent">尚未安装离线模型，请下载或导入模型文件夹</string>
     <string name="vlm_model_installed">离线模型文件已安装</string>
@@ -122,7 +134,7 @@
     <string name="vlm_arms_wave">轻抬手</string>
     <string name="vlm_arms_point">前伸指向</string>
     <string name="vlm_arms_open">双手轻开</string>
-    <string name="vlm_head_front">正视镜头</string>
+    <string name="vlm_head_front">头部与身体同向</string>
     <string name="vlm_head_turn_left">头部向左</string>
     <string name="vlm_head_turn_right">头部向右</string>
     <string name="vlm_head_look_up">轻抬头</string>
@@ -135,4 +147,17 @@
     <string name="vlm_distance_far">远处人物</string>
     <string name="vlm_distance_mid">中距离人物</string>
     <string name="vlm_distance_near">近处人物</string>
+    <string name="vlm_avatar_missing_capabilities">当前人像资源不支持此动作或表情：%1$s</string>
+    <string name="vlm_avatar_empty_projection">人像未能显示，请重新生成方案</string>
+    <string name="vlm_avatar_preview_failed">预览失败：%1$s</string>
+    <string name="vlm_avatar_invalid_resolution">人偶实际布局未通过校验，请调整方案后重试</string>
+    <string name="vlm_reference_retake">此方案需要重新取景；参考人偶不是空间锚点</string>
+    <string name="vlm_reference_applied">按参考调整站位；移动机位后请重新构图</string>
+    <string name="vlm_model_scene_observation">模型场景观察：%1$s</string>
+    <string name="vlm_guidance_camera">持机者：按%1$s取景，设置 %2$.1f× 倍率，对齐背景参考。</string>
+    <string name="vlm_guidance_camera_retake">持机者：按%1$s取景，设置 %2$.1f× 倍率，重新对齐背景参考。</string>
+    <string name="vlm_guidance_placement">入镜者：位于%1$s，按参考轮廓调整位置与大小，保持头脚完整。</string>
+    <string name="vlm_guidance_placement_cropped">入镜者：位于%1$s，按参考轮廓调整位置与大小，以%2$s保留所需身体范围。</string>
+    <string name="vlm_guidance_pose">入镜者：整体%1$s，身体%2$s；手臂%3$s；%4$s；%5$s；表情%6$s。</string>
+    <string name="vlm_guidance_size">人物可见参考高度 %1$d%% · 横向位置 %2$d%%</string>
 </resources>

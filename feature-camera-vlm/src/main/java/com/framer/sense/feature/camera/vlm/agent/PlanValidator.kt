@@ -17,6 +17,7 @@ class PlanValidator {
         plans.forEach { p ->
             val c = p.crop
             val a = p.avatar
+            if (p.resolvedSpec?.matches(p) == false) add("${p.id}: RESOLVED_SPEC_MISMATCH")
             val numbers = listOf(c.left, c.top, c.right, c.bottom, p.zoom, a.foot.x, a.foot.y, a.height, a.yaw, a.expressionIntensity)
             if (numbers.any { !it.isFinite() }) add("${p.id}: 存在非有限数值")
             if (p.revision < 0) add("${p.id}: 方案版本不能为负数")

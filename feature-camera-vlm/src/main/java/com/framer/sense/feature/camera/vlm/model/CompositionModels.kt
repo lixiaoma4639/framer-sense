@@ -49,7 +49,9 @@ val VlmJson = Json { encodeDefaults = true; explicitNulls = true }
     /** 新协议的细分姿势；为空时按旧 PoseId 渲染，保证历史方案兼容。 */
     val poseDirective: AvatarPoseDirective? = null,
     /** 用于说明与比例策略的摄影距离语义。 */
-    val subjectDistance: SubjectDistance = SubjectDistance.MID
+    val subjectDistance: SubjectDistance = SubjectDistance.MID,
+    /** 仅在 App 内避免已校准的投影再次缩小；不进入 v1 云端协议。 */
+    @kotlinx.serialization.Transient val projectionCalibrated: Boolean = false
 )
 
 /**
@@ -106,7 +108,8 @@ val VlmJson = Json { encodeDefaults = true; explicitNulls = true }
     val reason: String,
     @Required val needsRetake: Boolean = false,
     @Required val uncertainties: List<String> = emptyList(),
-    @Required val revision: Int = 0
+    @Required val revision: Int = 0,
+    @kotlinx.serialization.Transient val resolvedSpec: ResolvedPhotoSpec? = null
 )
 /** 模型仅表达摄影意图；坐标、裁剪和倍率由客户端映射并校验。 */
 @Serializable data class CompositionIntent(

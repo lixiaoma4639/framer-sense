@@ -108,6 +108,10 @@ object OfflineDirectorProtocol {
                 revision = selected?.revision ?: 0
             )
         }
+        require(plans.all { p ->
+            p.crop.left >= 0f && p.crop.top >= 0f && p.crop.right <= 1f && p.crop.bottom <= 1f &&
+                p.crop.right > p.crop.left && p.crop.bottom > p.crop.top && p.zoom > 0f
+        }) { "Invalid legacy crop or zoom" }
         return DirectorDecision(ActionKind.FINAL, plans, imageId = input.scene.id)
     }
 
