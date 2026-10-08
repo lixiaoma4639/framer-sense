@@ -10,6 +10,9 @@
 #include <string>
 #include <vector>
 #include <cctype>
+#include <sstream>
+#include "local_image_prompt.h"
+#include "local_view_choice.h"
 
 using MNN::Transformer::Llm;
 // 离线协议只需要一句场景观察；较小预算避免低端 CPU 在模型忽略停止指令时长时间续写。
@@ -120,16 +123,14 @@ Java_com_framer_sense_feature_camera_vlm_data_MnnNative_load(JNIEnv* env, jobjec
 
 /** 将图片作为 MNN Omni 的 img 标签视觉输入，分 token 检查取消。
  * @param env JNI 环境。
- * @param self Kotlin 单例。
  * @param handle 串行线程独占模型句柄。
- * @param imagePath 私有 JPEG 路径，由 Omni 读取并编码为视觉特征。
+ * @param paths 按编号排列的私有 JPEG 路径，由 Omni 逐张读取并编码为视觉特征。
  * @param promptBytes UTF-8 导演提示词。
  * @param cancelled Java AtomicBoolean；不能在本函数执行中释放 handle。
  * @param progress 每次实际输出 token 时通知 Kotlin，加载和首 token 不设超时。
  * @return UTF-8 输出；取消返回空输出并由 Kotlin 丢弃。
  */
-extern "C" JNIEXPORT jbyteArray JNICALL
-Java_com_framer_sense_feature_camera_vlm_data_MnnNative_infer(JNIEnv* env, jobject self, jlong handle, jstring imagePath, jbyteArray promptBytes, jobject cancelled, jobject progress) {
+static jbyteArray inferImages(JNIEnv* env, jlong handle, const std::vector<std::string>& paths, jbyteArray promptBytes, jobject cancelled, jobject progress) {
     try {
         auto* llm = reinterpret_cast<Llm*>(handle);
         if (!llm) throw std::runtime_error("模型尚未加载");
@@ -144,16 +145,9 @@ Java_com_framer_sense_feature_camera_vlm_data_MnnNative_infer(JNIEnv* env, jobje
         TokenOutputBuffer buffer(env, progress, onToken);
         std::ostream output(&buffer);
         llm->reset();
-        // 用户文本不得引入额外媒体标签；只有应用生成的私有图像路径可进入视觉通道。
-        std::string escaped;
-        for (char c : prompt) {
-            if (c == '<') escaped += "\\u003c";
-            else if (c == '>') escaped += "\\u003e";
-            else escaped += c;
-        }
         // MNN Omni::tokenizer_encode 实际解析 img 标签并运行视觉编码器。
-        const std::string visualPrompt = "<img>" + pathString(env, imagePath) + "</img>\n" + escaped;
-        __android_log_print(ANDROID_LOG_INFO, "VlmOffline", "MNN 开始视觉预填充 promptBytes=%zu", visualPrompt.size());
+        const std::string visualPrompt = localVisualPrompt(paths, prompt);
+        __android_log_print(ANDROID_LOG_INFO, "VlmOffline", "MNN 开始视觉预填充 images=%zu promptBytes=%zu", paths.size(), visualPrompt.size());
         const auto prefillStarted = std::chrono::steady_clock::now();
         // response(..., 1) 同时完成预填充、采样并输出第一个真实 token。不能用 0：
         // 普通 Llm 的预填充不会设置 current_token，手动解码 -1 会使后续解码退化为重复符号。
@@ -196,6 +190,93 @@ Java_com_framer_sense_feature_camera_vlm_data_MnnNative_infer(JNIEnv* env, jobje
         }
         return result;
     } catch (const std::exception& e) { fail(env, e.what()); return nullptr; }
+}
+
+/** 一次真实视觉预填充后，按模型分数在合法编号中作选择，不自由生成格式文本。 */
+static jbyteArray chooseView(JNIEnv* env, jlong handle, const std::vector<std::string>& paths,
+                            jbyteArray promptBytes, jobject cancelled) {
+    try {
+        auto* llm = reinterpret_cast<Llm*>(handle);
+        if (!llm) throw std::runtime_error("模型尚未加载");
+        const auto cancelClass = env->GetObjectClass(cancelled);
+        const auto get = env->GetMethodID(cancelClass, "get", "()Z");
+        if (!get || env->ExceptionCheck()) return nullptr;
+        const auto isCancelled = [&]() { return env->CallBooleanMethod(cancelled, get) == JNI_TRUE; };
+        if (isCancelled()) return env->NewByteArray(0);
+        std::string prompt(env->GetArrayLength(promptBytes), '\0');
+        env->GetByteArrayRegion(promptBytes, 0, static_cast<jsize>(prompt.size()), reinterpret_cast<jbyte*>(prompt.data()));
+        if (env->ExceptionCheck()) return nullptr;
+        llm->reset();
+        std::vector<int> digitTokens;
+        for (size_t i = 1; i <= paths.size(); ++i) {
+            const auto digit = std::to_string(i);
+            const auto tokens = llm->tokenizer_encode(digit);
+            if (tokens.size() != 1 || llm->tokenizer_decode(tokens[0]) != digit || llm->is_stop(tokens[0]))
+                throw std::runtime_error("LOCAL_VIEW_CHOICE_UNSUPPORTED");
+            digitTokens.push_back(tokens[0]);
+        }
+        const auto visualPrompt = localVisualPrompt(paths, prompt);
+        __android_log_print(ANDROID_LOG_INFO, "VlmOffline", "MNN 开始编号选景 images=%zu method=constrained_logits promptBytes=%zu", paths.size(), visualPrompt.size());
+        std::ostringstream ignoredText;
+        // 0 只作预填充。此分支读取 logits 作一次编号选择，不继续 generate(current_token=-1)。
+        llm->response(visualPrompt, &ignoredText, "", 0);
+        if (env->ExceptionCheck()) return nullptr;
+        if (isCancelled()) return env->NewByteArray(0);
+        const auto* context = llm->getContext();
+        if (context->status == MNN::Transformer::LlmStatus::TIMEOUT) {
+            env->ThrowNew(env->FindClass("java/util/concurrent/TimeoutException"), "MNN inference timeout");
+            return nullptr;
+        }
+        if (context->status == MNN::Transformer::LlmStatus::INTERNAL_ERROR || context->all_seq_len <= 0)
+            throw std::runtime_error("LOCAL_VIEW_CHOICE_INVALID");
+        const auto outputs = llm->getOutputs();
+        if (outputs.empty() || outputs[0].get() == nullptr) throw std::runtime_error("LOCAL_VIEW_CHOICE_INVALID");
+        const auto* info = outputs[0]->getInfo();
+        if (!info || info->dim.empty() || info->dim.back() <= 0) throw std::runtime_error("LOCAL_VIEW_CHOICE_INVALID");
+        const auto vocabulary = static_cast<size_t>(info->dim.back());
+        __android_log_print(ANDROID_LOG_INFO, "VlmOffline", "MNN 编号输出检查 vocabulary=%zu elements=%zu type=%d bits=%d promptTokens=%d", vocabulary, info->size, static_cast<int>(info->type.code), static_cast<int>(info->type.bits), context->prompt_len);
+        if (info->type.code != halide_type_float || info->type.bits != 32)
+            throw std::runtime_error("LOCAL_VIEW_CHOICE_UNSUPPORTED");
+        const auto offset = localViewLogitOffset(info->size, vocabulary, context->prompt_len);
+        const auto* logits = outputs[0]->readMap<float>();
+        if (!logits) throw std::runtime_error("LOCAL_VIEW_CHOICE_INVALID");
+        const auto choice = chooseLocalView(logits + offset, vocabulary, digitTokens);
+        std::ostringstream scores;
+        for (size_t i = 0; i < choice.scores.size(); ++i) {
+            if (i) scores << ',';
+            scores << i + 1 << ':' << choice.scores[i];
+        }
+        __android_log_print(ANDROID_LOG_INFO, "VlmOffline", "MNN 编号选择结束 method=constrained_logits images=%zu selected=%d scores=%s visionMs=%lld prefillMs=%lld generatedTokens=%zu", paths.size(), choice.ordinal, scores.str().c_str(), static_cast<long long>(context->vision_us / 1000), static_cast<long long>(context->prefill_us / 1000), context->output_tokens.size());
+        if (isCancelled()) return env->NewByteArray(0);
+        const auto digit = std::to_string(choice.ordinal);
+        auto result = env->NewByteArray(static_cast<jsize>(digit.size()));
+        if (result) env->SetByteArrayRegion(result, 0, static_cast<jsize>(digit.size()), reinterpret_cast<const jbyte*>(digit.data()));
+        return result;
+    } catch (const std::exception& error) { fail(env, error.what()); return nullptr; }
+}
+
+/** 单图兼容入口，保持原有视觉提示前缀。 */
+extern "C" JNIEXPORT jbyteArray JNICALL
+Java_com_framer_sense_feature_camera_vlm_data_MnnNative_infer(JNIEnv* env, jobject, jlong handle, jstring path, jbyteArray prompt, jobject cancelled, jobject progress) {
+    try { return inferImages(env, handle, {pathString(env, path)}, prompt, cancelled, progress); }
+    catch (const std::exception& error) { fail(env, error.what()); return nullptr; }
+}
+
+/** 本地多图入口，禁止超限路径或媒体标签注入。 */
+extern "C" JNIEXPORT jbyteArray JNICALL
+Java_com_framer_sense_feature_camera_vlm_data_MnnNative_inferImages(JNIEnv* env, jobject, jlong handle, jobjectArray images, jbyteArray prompt, jobject cancelled, jobject progress) {
+    try {
+        const auto count = env->GetArrayLength(images);
+        if (count < 1 || count > static_cast<jsize>(kMaxLocalImages)) throw std::runtime_error("LOCAL_VIEW_INPUT");
+        std::vector<std::string> paths;
+        for (jsize i = 0; i < count; ++i) {
+            auto path = static_cast<jstring>(env->GetObjectArrayElement(images, i));
+            if (!path) throw std::runtime_error("LOCAL_VIEW_INPUT");
+            paths.push_back(pathString(env, path));
+            env->DeleteLocalRef(path);
+        }
+        return chooseView(env, handle, paths, prompt, cancelled);
+    } catch (const std::exception& error) { fail(env, error.what()); return nullptr; }
 }
 
 /** 释放已空闲的模型句柄。

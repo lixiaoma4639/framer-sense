@@ -17,7 +17,7 @@ Framer_Sense 是一个基于 Android 官方多模块架构模板演进而来的 
 | 异步与状态 | Kotlin Coroutines、Flow、Lifecycle Compose |
 | 导航 | 底部导航状态切换、Navigation3 模板能力保留 |
 | 图片加载 | Coil 3 |
-| 相机与端侧 AI | CameraX、MNN 3.6.1 离线 VLM、云端导演网关、Filament 1.75.1；旧 ONNX 与 ML Kit 方案保留 |
+| 相机与端侧 AI | CameraX、OpenCV 4.12.0、MNN 3.6.1 离线 VLM、云端导演网关、Filament 1.75.1；旧 ONNX 与 ML Kit 方案保留 |
 | 测试 | JUnit、Compose UI Test、Android Instrumented Test、Hilt Test |
 
 当前源码基准包名和 app `applicationId` 为 `com.framer.sense`。各 module 的 Gradle `namespace` 默认以 `com.framer.sense` 为前缀，并按模块边界追加 `core.*`、`feature.*`、`test.*` 等后缀。
@@ -64,7 +64,7 @@ Framer_Sense 是一个基于 Android 官方多模块架构模板演进而来的 
 | `feature-camera` | 旧 ML Kit 拍照模块，包含 CameraX 预览、ML Kit 画面分析、构图引导虚线覆盖层、拍摄保存和相机权限 UI；当前不再作为 app 拍照入口。 |
 | `feature-camera-pytorch` | 上一版 ONNX 拍照模块，包含 CameraX 预览、ONNX Runtime SSD MobileNet 端侧检测、构图引导虚线覆盖层、拍摄保存和相机权限 UI；当前不再作为 app 拍照入口。 |
 | `feature-camera-pytorch-v2` | 保留的 ONNX v2 模块，当前不再作为 app 拍照入口，包含 CameraX 预览、ONNX Runtime YOLO/YOLO Pose/可选 YOLO Seg/可选 WholeBody Landmark 约定模型加载、基于物体检测的场景推断、场景构图评分、线条式 3D 虚拟人像覆盖层、拍摄保存和相机权限 UI。 |
-| `feature-camera-vlm` | 当前拍照入口，采用 MVI，负责 CameraX 冻结图、VLM 路由、本地单次/云端两轮导演、App 内模型下载、目录/ZIP 导入、MNN JNI 和 Filament 人偶。 |
+| `feature-camera-vlm` | 当前拍照入口，采用 MVI，负责 CameraX 扫描/冻结图、多图选景、OpenCV 背景找回、VLM 路由、本地单次/云端两轮导演、App 内模型下载、目录/ZIP 导入、MNN JNI 和 Filament 人偶。 |
 | `feature-mymodel` | 我的模块，包含个人主页、扫一扫说明页、消息列表页和设置页；主页资料、内容 Tab、扫一扫说明、消息列表、设置项列表由 ViewModel 管理状态。 |
 
 ### services/vlm-gateway
@@ -156,16 +156,16 @@ MyApplication
 - 模型设置支持大陆/海外、强制离线/指定云端/自动，以及网关令牌和离线模型管理。离线模型主要通过 OkHttp + 协程直接下载官方 MNN 目录，使用 dataSync 前台服务、固定提交和断点续传；保留目录/ZIP 导入。下载完成后仅在相机前台空闲时加载，原生加载成功才激活。
 - 大陆自动路由为千问、Seed、离线；海外为 GPT、Gemini、离线。内容拒绝、取消和参数错误不触发自动切换。
 - 首个离线目标为 Qwen3-VL-2B-Instruct 的 MNN 3.6.1 模型包，ARM64 CPU JNI 串行推理；权重不随 APK 打包。
-- 离线加载及首 token 不限时；开始输出后连续 39 秒无新 token 才终止等待，正常持续输出不受总时长限制。本地使用 50 字内短场景观察，最多调用一次并限制输出 96 token；兼容旧意图/数组协议，校验失败直接结束，修改保留未选中方案；云端保留最多两轮。完整 JSON 的展示包装兼容不放宽业务校验。
+- 离线加载及首 token 不限时；开始输出后连续 39 秒无新 token 才终止等待，正常持续输出不受总时长限制。本地构图使用 50 字内短场景观察，子任务最多调用一次并限制输出 96 token；兼容旧意图/数组协议，校验失败直接结束，修改保留未选中方案；云端构图保留最多两轮。离线多图选景另执行一次真实调用，离线推理不读取或消耗云端扫描预算，不设用户重复操作的会话累计次数上限。完整 JSON 的展示包装兼容不放宽业务校验。
 - Filament 1.75.1 使用四个 Rocketbox 骨骼 GLB，支持 12 个受限姿势与 6 个表情，另有身体/手臂/头部/站姿的细分动作。表情使用实际 GLB 通道名称；缺失必需骨骼/表情或渲染为空时明确失败。卡片按需离屏渲染，应用后只叠加屏幕参考，不做真实空间锚定。
 - P2 的版本化动作目录支持基础受控姿势、完整骨骼快照与命名 GLB 动画静帧采样；筛选角色、景别、资源/骨架和条件，外物接触动作及五个待素材验收的专业样片不可选。每次恢复全部绑定节点与表情，再执行动作、布局与最终表情，最后更新蒙皮。
 - `ResolvedPhotoSpec` 统一最终布局、动作/角色资源版本、采样、表情与指导，不进入 v1 网关 JSON。`CompositionGuidance` 从最终方案派生本地化指导；模型原文单独作为分析依据。`AvatarPreview.appliedAvatar/appliedSpec → PlanPreview.appliedPlan → CompositionResult/referencePlan` 回传实际渲染布局，更新预览与文字后才能应用。校准标记只在 App 内保存，半身/特写校准保留裁切比例；拖动/缩放时清除旧预览，并以请求令牌和 revision 拦截迟到结果。
 - 手动动作/表情/强度仅修改选中方案、递增 revision，不调用大模型；失败保留原方案。切换、拖动和缩放保留选择，重新生成/导演修改按新结果解析。同角色脸部示范独立按需渲染；缓存键包含动作/资产版本、采样、用途与校准标记，预览缓存最多六键、脸部最多两张。
 - 保留主导航蓝色“拍摄”和横屏侧栏；冻结、生成、修改和资源管理期间禁止拍摄，不排队补拍。真实照片通过 MediaStore 保存，不合入虚拟人偶。
-- 横竖屏变化保留 ViewModel 会话；进程回收后回到实时相机并提示重新构图。
+- 横竖屏变化保留 ViewModel 会话；进程回收后回到实时相机并提示重新扫描。
 - App 不再启动预热 ONNX；旧相机模块和专题文档保留作为历史实现。
 
-详细接入、模型准备、网关启动、协议和验收说明见 `docs/FEATURE_CAMERA_VLM.md`。2026-10-02 的 P1 与 P2 软件接入完成，累计 73 项 JVM 测试通过，主 App/设备测试代码编译和模块 Lint 通过。P2 未生成 APK，五个专业样片仍待素材验收，接入规范见 `docs/CAMERA_POSE_ASSET_INTEGRATION.md`；真实设备、视觉质量与供应商流程由用户验收。完整扫描 Agent 尚在后续批次，见 `docs/CAMERA_SCAN_AGENT_IMPLEMENTATION_PLAN.md`。后续拍照功能优先在 `feature-camera-vlm` 内实现。
+详细接入、模型准备、网关启动、协议和验收说明见 `docs/FEATURE_CAMERA_VLM.md`。2026-10-02 的 P1 与 P2 软件接入完成，累计 73 项 JVM 测试通过，主 App/设备测试代码编译和模块 Lint 通过。P2 未生成 APK，五个专业样片仍待素材验收，接入规范见 `docs/CAMERA_POSE_ASSET_INTEGRATION.md`；真实设备、视觉质量与供应商流程由用户验收。P3＋P4 软件接入完成，扫描、多图与背景确认见 `docs/CAMERA_SCAN_P3_P4_ACCEPTANCE.md`；P5/P6 尚未实施，进度见 `docs/CAMERA_SCAN_AGENT_IMPLEMENTATION_PLAN.md`。后续拍照功能优先在 `feature-camera-vlm` 内实现。
 
 ### 我的模块
 
@@ -306,3 +306,17 @@ bash feature-camera-vlm/scripts/prepare_mnn.sh
 - 推荐页使用网络图片 URL，网络环境会影响图片加载结果。
 - 相册页依赖系统权限和设备媒体库，测试或演示时可能出现空相册、权限拒绝或加载失败。
 - 旧文档可以保留用于理解演进历史；后续编程优先以本文档和源码为准。
+
+### P3＋P4 数据流、依赖与验证补充
+
+拍照仍采用 MVI：`CameraX ImageAnalysis → 独立 YUV 缓冲 → 有界串行 ScanCollector/PhotoSessionController → 不可变 ScanSnapshot → ScanViewAgent → DirectorAgent → ResolvedPhotoSpec/预览 → 背景确认 → 人像参考 → 手动拍照`。扫描期关闭构图/渲染/拍照/倍率调整；后台中断保留帧，旋转重绑建立新配置。只有 REALTIME 时间源才与光轴姿态关联。扫描来源只在 App 内保存，统一校验最终方案、预览缓存和应用参考。
+
+每个扫描的云端请求共同限制 6 次调用、12 MiB 上传，云端选景累计两次；离线选景和构图不读取或消耗这些额度，即使云端预算耗尽，离线仍可继续。云端最多 8 张/3 MiB；强制离线使用 `OfflineScanViewAgent → MnnProvider.compareViews → MnnNative.inferImages`，最多 4 张独立视觉输入，一次短协议选景后自动冻结并调用一次原离线三构图，不查询网关、零上传。4 张是应用限制；JPEG 副本长边最多 448，保留到原生任务退出后删除，编号严格绑定本次提交帧。旧网关/未声明多图保留主动展开的手动选帧与 v1 构图。背景 ORB/RANSAC 每秒最多 5 次，不上传；自动和人工确认分别记录，未验收真人姿势。P5/P6 尚未实施。
+
+App 与模块保持 ARM64、NDK 28.2.13676358；OpenCV 4.12.0 官方 AAR 转换仅移除重复 C++ 库，其他 AAR 原样转交，统一使用工程 NDK 运行库。使用 `:app:mergeDebugNativeLibs` 和 `python3 feature-camera-vlm/scripts/verify_native_alignment.py` 验证 16 KiB ELF 对齐与运行库来源。网关模拟测试在 `services/vlm-gateway` 中执行 `python -m pytest tests -q`；不需要 APK。部署与真机边界见 `docs/CAMERA_SCAN_P3_P4_ACCEPTANCE.md`。
+
+2026-10-03 交互约定：扫描后的默认流程由 Agent 选择一张最佳背景并自动生成构图，App 自动精简云端最多 8 张、强制离线最多 4 张作为多图输入；缓存帧列表默认不展示。多图降级必须说明具体原因，人工选帧与更换背景仅作为主动展开的备用入口，不要求用户在正常流程逐帧选择。离线视觉输入前缀测试用 `python3 feature-camera-vlm/scripts/verify_local_image_prompt.py` 在宿主 C++17 编译器运行，不加载权重、不打包 APK。
+
+离线空景任务明确人物稍后入镜，选景读取一个 1..N 的数字；兼容旧 SELECT 及说明字段，缺失说明保持未知，禁止把 0 或无效输出自动映射为首帧。2026-10-06 默认 JNI 改为一次视觉预填充后，在真实模型合法编号分数中选最高项，避免自由文本格式错误；校验 tokenizer、分数与输出位置，异常保持扫描输入并报错。后续单图构图保持原文本解码并建议未来人物站位和姿势。选景等待及失败时以 `VlmUiState.displayScene` 显示保存的扫描预览并标注未选定；该显示字段不改变构图输入 `scene`、来源绑定或触发模型。
+
+离线当前最多四帧：保留偏爱及不同视角的代表帧，按采集时间提交；仅离线改变呈现顺序，云端不变。摄影选景标准侧重人物空间和轮廓分离、背景主体与干扰、层次/引导线/视觉重心、可见曝光色彩和清晰度；偏爱在摄影条件相近时优先。日志版本为 `rubric=PORTRAIT_BACKGROUND_V2`，实际比较数量在界面显示。一次选景仍只有一次推理，实际质量、耗时与内存由真机验收。

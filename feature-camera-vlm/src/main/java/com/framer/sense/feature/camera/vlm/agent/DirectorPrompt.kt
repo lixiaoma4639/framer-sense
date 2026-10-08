@@ -29,6 +29,7 @@ object DirectorPrompt {
         场景尺寸=${input.scene.width}x${input.scene.height}；currentZoom=${input.scene.currentZoom}
         相机=${VlmJson.encodeToString(input.camera)}
         人偶=${capabilities()}
+        背景保留区域=${VlmJson.encodeToString(input.backgroundRegions)}，坐标属于当前图片。各方案需保留这些主体，人物不要遮挡主体。
         用户要求=${VlmJson.encodeToString(input.instruction)}
         已有方案=${VlmJson.encodeToString(input.existing)}
         选中方案=${input.selectedId ?: "无，生成新方案"}。修改时仅为选中 id 生成替换意图，客户端会保留其他方案。

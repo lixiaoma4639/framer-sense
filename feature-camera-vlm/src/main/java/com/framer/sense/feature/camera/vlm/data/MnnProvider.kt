@@ -1,6 +1,10 @@
 package com.framer.sense.feature.camera.vlm.data
 
 import android.os.Build
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import androidx.core.graphics.scale
+import com.framer.sense.feature.camera.vlm.agent.OfflineViewSelectionProtocol
 import android.util.Log
 import com.framer.sense.feature.camera.vlm.R
 import com.framer.sense.feature.camera.vlm.BuildConfig
@@ -21,14 +25,16 @@ object MnnNative {
     fun initialize() { System.loadLibrary("vlm_mnn") }
     /** 加载多模态模型。@param configPath 已校验模型包中的 config.json 绝对路径。@return 原生句柄。 */
     external fun load(configPath: String): Long
-    /** 执行真实图像推理。
+    /** 一次真实视觉预填充后返回模型选择的合法编号。
      * @param handle 活跃模型句柄。
-     * @param imagePath 私有 JPEG 绝对路径。
+     * @param imagePaths 按编号排列的私有 JPEG 绝对路径。
      * @param prompt UTF-8 编码的导演提示词。
      * @param cancelled Kotlin 协程取消标志，在生成边界读取。
-     * @param progress 真实 token 的输出回调，供停滞监控使用。
-     * @return UTF-8 输出字节。
+     * @param progress 兼容现有运行时接口；编号选择不进行自由文本解码。
+     * @return UTF-8 编号字节。
      */
+    external fun inferImages(handle: Long, imagePaths: Array<String>, prompt: ByteArray, cancelled: AtomicBoolean, progress: MnnTokenProgress): ByteArray
+    /** 单图兼容入口。 */
     external fun infer(handle: Long, imagePath: String, prompt: ByteArray, cancelled: AtomicBoolean, progress: MnnTokenProgress): ByteArray
     /** 释放空闲句柄。@param handle 已结束所有推理的模型句柄。 */
     external fun release(handle: Long)
@@ -44,6 +50,10 @@ interface MnnRuntime {
     fun release(handle: Long)
     /** 图像推理。@param handle 活跃句柄。@param image 私有图像路径。@param prompt UTF-8 提示。@param cancel 取消标志。@param onToken 实际输出新 token 的回调。@return 输出字节。 */
     fun infer(handle: Long, image: String, prompt: ByteArray, cancel: AtomicBoolean, onToken: () -> Unit): ByteArray
+    fun inferImages(handle: Long, images: List<String>, prompt: ByteArray, cancel: AtomicBoolean, onToken: () -> Unit): ByteArray {
+        if (images.size == 1) return infer(handle, images.single(), prompt, cancel, onToken)
+        throw UnsupportedOperationException("LOCAL_MULTIVIEW_UNSUPPORTED")
+    }
 }
 
 /** 默认真实 JNI 实现，不提供生产假响应。 */
@@ -57,6 +67,8 @@ object NativeMnnRuntime : MnnRuntime {
     /** 执行多模态推理。@param handle 活跃句柄。@param image 图片路径。@param prompt UTF-8 输入。@param cancel 取消标志。@return UTF-8 输出。 */
     override fun infer(handle: Long, image: String, prompt: ByteArray, cancel: AtomicBoolean, onToken: () -> Unit): ByteArray =
         MnnNative.infer(handle, image, prompt, cancel, MnnTokenProgress(onToken))
+    override fun inferImages(handle: Long, images: List<String>, prompt: ByteArray, cancel: AtomicBoolean, onToken: () -> Unit): ByteArray =
+        MnnNative.inferImages(handle, images.toTypedArray(), prompt, cancel, MnnTokenProgress(onToken))
 }
 
 /** 真正的本地 VLM；模型导入、加载失败不会返回规则结果。 */
@@ -168,6 +180,81 @@ class MnnProvider(
                 else -> ModelFailure("LOCAL_FAILED", if (error is ModelStorageException) store.errorMessage(error) else store.message(R.string.vlm_model_load_failed), true)
             }
         }
+    }
+
+    /** 单次多图选景；复制缩小输入隔离取消后的扫描缓存清理，不上传图片。 */
+    suspend fun compareViews(images: List<String>, prompt: String): StepReply {
+        val request = newVlmId().take(8)
+        Log.i(LOG_TAG, "离线多图任务开始 request=$request images=${images.size} promptBytes=${prompt.toByteArray(Charsets.UTF_8).size} nativeBusy=${nativeInferenceRunning.get()}")
+        require(images.size in 1..OfflineViewSelectionProtocol.MAX_FRAMES)
+        if (nativeInferenceRunning.get()) throw ModelFailure("LOCAL_BUSY", store.message(R.string.vlm_model_inference_busy), true)
+        return try {
+            withTokenInactivityWatchdog { onToken -> submit { cancel ->
+                try {
+                    ensureLoaded()
+                    Log.i(LOG_TAG, "离线多图模型就绪 request=$request model=${store.modelName()} cancelled=${cancel.get()}")
+                    if (cancel.get()) throw CancellationException()
+                    val dir = File(store.root.parentFile, "vlm-view-inputs/${newVlmId()}").apply { mkdirs() }
+                    try {
+                        val inputs = images.mapIndexed { index, path ->
+                            if (cancel.get()) throw CancellationException()
+                            val source = File(path)
+                            check(source.isFile && source.length() in 1..ScanLimits.MAX_REQUEST_BYTES) { "LOCAL_VIEW_INPUT" }
+                            val bitmap = requireNotNull(BitmapFactory.decodeFile(source.path)) { "LOCAL_VIEW_INPUT" }
+                            try {
+                                val ratio = minOf(1f, OfflineViewSelectionProtocol.INPUT_LONG_SIDE.toFloat() / maxOf(bitmap.width, bitmap.height))
+                                val small = bitmap.scale(maxOf(1, (bitmap.width * ratio).toInt()), maxOf(1, (bitmap.height * ratio).toInt()))
+                                val copy = File(dir, "$index.jpg")
+                                try { copy.outputStream().use { check(small.compress(Bitmap.CompressFormat.JPEG, 85, it)) } }
+                                finally { if (small !== bitmap) small.recycle() }
+                                Log.i(LOG_TAG, "离线选景输入准备 request=$request ordinal=${index + 1} sourceBytes=${source.length()} sourceSize=${bitmap.width}x${bitmap.height} inputSize=${maxOf(1, (bitmap.width * ratio).toInt())}x${maxOf(1, (bitmap.height * ratio).toInt())} jpegBytes=${copy.length()}")
+                                copy.path
+                            } finally { bitmap.recycle() }
+                        }
+                        if (cancel.get()) throw CancellationException()
+                        nativeInferenceRunning.set(true)
+                        val start = System.nanoTime()
+                        Log.i(LOG_TAG, "离线多图进入JNI request=$request images=${inputs.size}")
+                        val output = try { runtime.inferImages(handle, inputs, prompt.toByteArray(Charsets.UTF_8), cancel, onToken) }
+                            finally { nativeInferenceRunning.set(false) }
+                        if (cancel.get()) throw CancellationException()
+                        val elapsed = (System.nanoTime() - start) / 1_000_000
+                        val raw = output.toString(Charsets.UTF_8)
+                        Log.i(LOG_TAG, "离线多图推理返回 request=$request images=${inputs.size} elapsedMs=$elapsed outputBytes=${output.size} outputChars=${raw.length} awaitingProtocolValidation=true")
+                        if (BuildConfig.DEBUG) {
+                            val parts = VlmJson.encodeToString(raw).chunked(800)
+                            parts.forEachIndexed { index, part ->
+                                Log.d(LOG_TAG, "离线选景模型原始输出 request=$request part=${index + 1}/${parts.size} raw=$part")
+                            }
+                        }
+                        StepReply(store.modelName(), raw, elapsedMs = elapsed)
+                    } finally { dir.deleteRecursively() }
+                } catch (cancelled: CancellationException) { throw cancelled }
+                catch (failure: Throwable) { throw viewFailure(failure) }
+            } }
+        } catch (cancel: CancellationException) {
+            Log.i(LOG_TAG, "离线多图取消等待 request=$request nativeBusy=${nativeInferenceRunning.get()}")
+            throw cancel
+        }
+        catch (failure: Throwable) {
+            Log.e(LOG_TAG, "离线多图任务失败 request=$request code=${(failure as? ModelFailure)?.code} error=${failure::class.java.simpleName}", failure)
+            throw viewFailure(failure)
+        }
+    }
+
+    /** 在专用线程和停滞监控边界保留正确的多图失败原因。 */
+    private fun viewFailure(failure: Throwable): ModelFailure {
+        if (failure is ModelFailure && failure.code != "LOCAL_TIMEOUT") return failure
+        val resource = when {
+            failure is TimeoutException || (failure as? ModelFailure)?.code == "LOCAL_TIMEOUT" -> R.string.vlm_model_inference_timeout
+            failure is ModelStorageException -> R.string.vlm_model_load_failed
+            failure.message == "LOCAL_MULTIVIEW_UNSUPPORTED" -> R.string.vlm_scan_local_unsupported
+            failure.message == "LOCAL_VIEW_CHOICE_UNSUPPORTED" -> R.string.vlm_scan_local_choice_unsupported
+            failure.message == "LOCAL_VIEW_INPUT" -> R.string.vlm_scan_local_input_failed
+            else -> R.string.vlm_scan_local_select_failed
+        }
+        val code = failure.message?.takeIf { it in setOf("LOCAL_VIEW_CHOICE_INVALID", "LOCAL_VIEW_CHOICE_UNSUPPORTED") } ?: "LOCAL_VIEW_FAILED"
+        return ModelFailure(code, store.message(resource), false)
     }
 
     /** 确保当前模型已加载；无参数，只能在专用线程调用。 */

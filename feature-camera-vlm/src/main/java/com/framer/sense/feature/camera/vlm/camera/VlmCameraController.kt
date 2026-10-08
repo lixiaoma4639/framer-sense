@@ -14,7 +14,15 @@ import androidx.camera.view.PreviewView
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.LifecycleOwner
 import com.google.common.util.concurrent.ListenableFuture
-import com.framer.sense.feature.camera.vlm.model.CameraCapabilities
+import com.framer.sense.feature.camera.vlm.model.*
+import com.framer.sense.feature.camera.vlm.scan.AnalysisSample
+import com.framer.sense.feature.camera.vlm.scan.BackgroundMatchPolicy
+import android.hardware.camera2.CameraCharacteristics
+import android.os.SystemClock
+import androidx.camera.camera2.interop.Camera2CameraInfo
+import androidx.camera.camera2.interop.ExperimentalCamera2Interop
+import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.asExecutor
@@ -23,10 +31,16 @@ import kotlin.coroutines.resumeWithException
 
 /** 只负责平台相机资源；UI 销毁时必须解绑，不持有 ViewModel。 */
 class VlmCameraController(private val context: Context) {
+    private var bindingEpoch = 0
     private var provider: ProcessCameraProvider? = null
     private var camera: Camera? = null
     private var preview: Preview? = null
     private var capture: ImageCapture? = null
+    private var analysis: ImageAnalysis? = null
+    private val analysisExecutor = Executors.newSingleThreadExecutor()
+    private val poses = CameraPoseTracker(context)
+    fun foreground(visible: Boolean) { if (visible) poses.start() else poses.stop() }
+    fun close() { unbind(); poses.stop(); analysisExecutor.shutdown() }
     private var zoomOperation: ListenableFuture<Void>? = null
     private val executor = ContextCompat.getMainExecutor(context)
 
@@ -36,7 +50,12 @@ class VlmCameraController(private val context: Context) {
      * @param initialZoom 恢复方案时需要设置的倍率。
      * @return 当前设备允许的变焦范围和常用倍率。
      */
-    suspend fun bind(view: PreviewView, owner: LifecycleOwner, initialZoom: Float): CameraCapabilities {
+    @androidx.annotation.OptIn(ExperimentalCamera2Interop::class)
+    suspend fun bind(view: PreviewView, owner: LifecycleOwner, initialZoom: Float,
+        targetId: String? = null, scanStartedNs: Long? = null,
+        sampling: () -> Boolean = { true },
+        onConfigured: (Int) -> Unit = {}, onSample: (AnalysisSample) -> Unit = {}): CameraCapabilities {
+        val epoch = ++bindingEpoch
         val future = ProcessCameraProvider.getInstance(context)
         val instance = suspendCancellableCoroutine<ProcessCameraProvider> { continuation ->
             future.addListener({
@@ -45,22 +64,68 @@ class VlmCameraController(private val context: Context) {
                 }
             }, executor)
         }
-        unbind()
+        if (epoch != bindingEpoch) throw kotlinx.coroutines.CancellationException("旧相机绑定已结束")
+        unbind(invalidatePending = false)
         check(view.width > 0 && view.height > 0) { "相机预览尚未完成布局" }
         val rotation = view.display.rotation
         val p = Preview.Builder().setTargetRotation(rotation).build()
         val c = ImageCapture.Builder().setTargetRotation(rotation).setCaptureMode(ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY).build()
         p.setSurfaceProvider(view.surfaceProvider)
-        val group = UseCaseGroup.Builder().setViewPort(ViewPort.Builder(Rational(view.width, view.height), rotation).setScaleType(ViewPort.FILL_CENTER).build()).addUseCase(p).addUseCase(c).build()
-        provider = instance
-        preview = p
-        capture = c
-        camera = instance.bindToLifecycle(owner, CameraSelector.DEFAULT_BACK_CAMERA, group)
+        val version = versions.incrementAndGet()
+        fun bindGroup(resolution: android.util.Size) {
+            val a = if (targetId != null) ImageAnalysis.Builder().setTargetRotation(rotation)
+                .setResolutionSelector(androidx.camera.core.resolutionselector.ResolutionSelector.Builder().setResolutionStrategy(androidx.camera.core.resolutionselector.ResolutionStrategy(resolution, androidx.camera.core.resolutionselector.ResolutionStrategy.FALLBACK_RULE_CLOSEST_LOWER_THEN_HIGHER)).build()).setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST).build() else null
+            val group = UseCaseGroup.Builder().setViewPort(ViewPort.Builder(Rational(view.width, view.height), rotation)
+                .setScaleType(ViewPort.FILL_CENTER).build()).addUseCase(p).addUseCase(c)
+            a?.let { group.addUseCase(it) }
+            provider = instance; preview = p; capture = c; analysis = a
+            camera = instance.bindToLifecycle(owner, CameraSelector.DEFAULT_BACK_CAMERA, group.build())
+        }
+        try { bindGroup(android.util.Size(1280, 960)) }
+        catch (failure: IllegalArgumentException) {
+            if (targetId == null) throw failure
+            unbind(invalidatePending = false); bindGroup(android.util.Size(640, 480))
+        }
         val state = camera!!.cameraInfo.zoomState.value
         val minimum = state?.minZoomRatio ?: 1f
         val maximum = state?.maxZoomRatio ?: 1f
         zoomOperation = camera!!.cameraControl.setZoomRatio(initialZoom.coerceIn(minimum, maximum))
         awaitZoom()
+        if (epoch != bindingEpoch) throw kotlinx.coroutines.CancellationException("旧相机绑定已结束")
+        onConfigured(version)
+        if (targetId != null) {
+            val realtime = Camera2CameraInfo.from(camera!!.cameraInfo).getCameraCharacteristic(CameraCharacteristics.SENSOR_INFO_TIMESTAMP_SOURCE) ==
+                CameraCharacteristics.SENSOR_INFO_TIMESTAMP_SOURCE_REALTIME
+            var lastSampleNs = 0L
+            // 新建的分析用例只接收开始后建立的流；未知时钟禁止跨传感器比较。
+            analysis?.setAnalyzer(analysisExecutor) { image ->
+                var sample: AnalysisSample? = null
+                try {
+                    val received = SystemClock.elapsedRealtimeNanos()
+                    if (!sampling() || received - lastSampleNs < if (scanStartedNs != null) ScanLimits.SAMPLE_INTERVAL_NS else BackgroundMatchPolicy.ANALYSIS_INTERVAL_NS) return@setAnalyzer
+                    val captured = image.imageInfo.timestamp
+                    if (scanStartedNs != null && realtime && captured < scanStartedNs) return@setAnalyzer
+                    lastSampleNs = received
+                    val w = image.width; val h = image.height
+                    val bytes = ByteArray(w * h * 3 / 2)
+                    fun copyPlane(index: Int, offset: Int, step: Int) {
+                        val plane = image.planes[index]; val data = plane.buffer.duplicate()
+                        val columns = if (index == 0) w else w / 2; val rows = if (index == 0) h else h / 2
+                        val base = data.position()
+                        for (y in 0 until rows) for (x in 0 until columns)
+                            bytes[offset + (y * columns + x) * step] = data.get(base + y * plane.rowStride + x * plane.pixelStride)
+                    }
+                    copyPlane(0, 0, 1); copyPlane(2, w * h, 2); copyPlane(1, w * h + 1, 2)
+                    val r = image.cropRect
+                    val config = ScanCameraConfig(version, image.imageInfo.rotationDegrees, camera?.cameraInfo?.zoomState?.value?.zoomRatio ?: initialZoom,
+                        CropRect(r.left.toFloat() / w, r.top.toFloat() / h, r.right.toFloat() / w, r.bottom.toFloat() / h), realtime)
+                    sample = AnalysisSample(targetId, captured, received, config, if (realtime) poses.at(captured) else null, w, h, bytes)
+                } catch (failure: Exception) {
+                    android.util.Log.w("VlmCamera", "分析帧复制失败", failure)
+                } finally { image.close() }
+                sample?.let(onSample)
+            }
+        }
         return CameraCapabilities(minimum, maximum, (listOf(minimum, 1f, 2f, 3f, maximum)).filter { it in minimum..maximum }.distinct().sorted())
     }
 
@@ -156,12 +221,16 @@ class VlmCameraController(private val context: Context) {
     }
 
     /** 解绑本实例使用的相机用例；无参数，不解绑其他模块的相机资源。 */
-    fun unbind() {
-        val useCases = listOfNotNull(preview, capture).toTypedArray()
+    fun unbind(invalidatePending: Boolean = true) {
+        if (invalidatePending) bindingEpoch++
+        analysis?.clearAnalyzer()
+        val useCases = listOfNotNull(preview, capture, analysis).toTypedArray()
         if (useCases.isNotEmpty()) provider?.unbind(*useCases)
         zoomOperation = null
         camera = null
         preview = null
         capture = null
+        analysis = null
     }
+    private companion object { val versions = AtomicInteger() }
 }

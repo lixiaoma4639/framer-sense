@@ -61,9 +61,10 @@ data class ResolvedPhotoSpec(
     val avatar: AvatarPlacement,
     val needsRetake: Boolean,
     val action: ResolvedPhotoAction,
-    val guidance: CompositionGuidance
+    val guidance: CompositionGuidance,
+    val viewBinding: PhotoViewBinding? = null
 ) {
-    fun matches(plan: CompositionPlan): Boolean = planId == plan.id && revision == plan.revision &&
+    fun matches(plan: CompositionPlan): Boolean = planId == plan.id && revision == plan.revision && viewBinding == plan.viewBinding &&
         shot == plan.shot && crop == plan.crop && zoom == plan.zoom && avatar == plan.avatar && needsRetake == plan.needsRetake &&
         (action.source !is PhotoPoseSource.Controlled ||
             (action.source.pose == avatar.pose && action.source.directive == avatar.poseDirective)) &&
@@ -78,7 +79,7 @@ data class ResolvedPhotoSpec(
     fun rebase(plan: CompositionPlan): ResolvedPhotoSpec {
         return copy(planId = plan.id, revision = plan.revision, shot = plan.shot, crop = plan.crop,
             zoom = plan.zoom, avatar = plan.avatar, needsRetake = plan.needsRetake,
-            guidance = expectedGuidance(plan))
+            guidance = expectedGuidance(plan), viewBinding = plan.viewBinding)
     }
 }
 

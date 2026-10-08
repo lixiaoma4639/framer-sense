@@ -42,6 +42,8 @@ class GatewayProvider(
      */
     override suspend fun step(call: ModelCall): StepReply = withContext(Dispatchers.IO) {
         val bytes = File(call.input.scene.modelImagePath).readBytes()
+        try { call.input.sessionBudget?.consume(bytes.size.toLong()) }
+        catch (_: IllegalStateException) { throw ModelFailure("SESSION_BUDGET_EXHAUSTED", "", false) }
         val body = GatewayRequest(provider, call.requestId, Base64.encodeToString(bytes, Base64.NO_WRAP), call.prompt, call.input.scene.id)
         val text = execute("/v1/director/step", VlmJson.encodeToString(body))
         try { VlmJson.decodeFromString<StepReply>(text) }
@@ -58,7 +60,7 @@ class GatewayProvider(
      * @param body JSON 请求体；null 表示 GET。
      * @return 脱离网络资源生命周期的响应文本。
      */
-    private suspend fun execute(path: String, body: String?): String {
+    internal suspend fun execute(path: String, body: String?): String {
         val base = settings.gateway.trimEnd('/')
         if (settings.gatewayToken.isBlank()) throw ModelFailure("UNAVAILABLE", "请先配置网关访问令牌", true)
         if (!base.startsWith("https://") && !(BuildConfig.DEBUG && base.startsWith("http://"))) throw ModelFailure("BAD_REQUEST", "正式版本必须使用 HTTPS 网关", false)

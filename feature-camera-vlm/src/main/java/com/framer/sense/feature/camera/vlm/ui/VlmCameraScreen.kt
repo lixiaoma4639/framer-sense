@@ -57,6 +57,10 @@ import kotlinx.serialization.encodeToString
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 import java.io.File
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import android.graphics.BitmapFactory
+import android.graphics.Bitmap
 
 /** VLM 拍照模块公开入口。
  * @param onCaptureActionChanged 向主导航报告拍摄是否可用和拍摄回调，离开时清空。
@@ -92,11 +96,17 @@ fun VlmCameraScreen(
         requestedDownload = null
     }
     val lifecycle = LocalLifecycleOwner.current.lifecycle
+    val needPose by rememberUpdatedState(state.scanSession != null)
+    LaunchedEffect(state.scanSession?.id) { controller.foreground(needPose && lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) }
     DisposableEffect(lifecycle, viewModel) {
-        val observer = LifecycleEventObserver { _, _ -> viewModel.onIntent(VlmIntent.CameraForeground(lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED))) }
+        val observer = LifecycleEventObserver { _, _ ->
+            val visible = lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)
+            controller.foreground(visible && needPose)
+            viewModel.onIntent(VlmIntent.CameraForeground(visible))
+        }
         lifecycle.addObserver(observer)
         viewModel.onIntent(VlmIntent.CameraForeground(lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)))
-        onDispose { lifecycle.removeObserver(observer); viewModel.onIntent(VlmIntent.CameraForeground(false)) }
+        onDispose { lifecycle.removeObserver(observer); controller.foreground(false); viewModel.onIntent(VlmIntent.CameraForeground(false)) }
     }
     val imageLauncher = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri -> uri?.let { viewModel.onIntent(VlmIntent.ImportImage(it)) } }
     val onEvent = remember(viewModel) { { event: VlmIntent -> viewModel.onIntent(event) } }
@@ -110,7 +120,7 @@ fun VlmCameraScreen(
         latestAction(VlmCaptureAction(permission && state.cameraReady && state.stage == VlmStage.LIVE && !state.saving && !state.modelBusy && !state.settingsVisible) { latestCapture() })
     }
     DisposableEffect(viewModel, controller) {
-        onDispose { controller.unbind(); viewModel.onLeave(); latestAction(null) }
+        onDispose { controller.close(); viewModel.onLeave(); latestAction(null) }
     }
     LaunchedEffect(controller, viewModel) {
         viewModel.effects.collect { effect ->
@@ -135,12 +145,12 @@ fun VlmCameraScreen(
         }
     }
     BackHandler(state.stage != VlmStage.LIVE && !state.settingsVisible) {
-        onEvent(if (state.stage in listOf(VlmStage.GENERATING, VlmStage.MODIFYING, VlmStage.FREEZING)) VlmIntent.Cancel else VlmIntent.ResumeCamera)
+        onEvent(if (state.stage in listOf(VlmStage.GENERATING, VlmStage.MODIFYING, VlmStage.FREEZING, VlmStage.SCANNING, VlmStage.SCAN_PROCESSING, VlmStage.VIEW_SELECTING)) VlmIntent.Cancel else VlmIntent.ResumeCamera)
     }
     Column(modifier.fillMaxSize().statusBarsPadding().padding(12.dp)) {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             Text("AI 构图导演", style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))
-            TextButton(onClick = { onEvent(VlmIntent.SettingsVisible(true)) }) { Text("模型设置") }
+            TextButton(onClick = { onEvent(VlmIntent.SettingsVisible(true)) }, enabled = state.stage !in listOf(VlmStage.SCANNING, VlmStage.SCAN_PROCESSING, VlmStage.VIEW_SELECTING)) { Text("模型设置") }
         }
         Text("${state.settings.mode} · ${state.settings.region}", style = MaterialTheme.typography.labelSmall)
         BoxWithConstraints(Modifier.weight(1f).fillMaxWidth()) {
@@ -171,8 +181,8 @@ fun VlmCameraScreen(
  */
 @Composable
 private fun CameraPane(state: VlmUiState, controller: VlmCameraController, permission: Boolean, requestPermission: () -> Unit, onEvent: (VlmIntent) -> Unit, modifier: Modifier) {
-    val live = state.stage == VlmStage.LIVE || state.stage == VlmStage.FREEZING
-    val scene = state.scene
+    val live = state.stage == VlmStage.LIVE || state.stage == VlmStage.FREEZING || state.stage == VlmStage.SCANNING
+    val scene = state.displayScene
     val selected = state.result?.plans?.find { it.id == state.selectedId }
     val defaultRatio = if (LocalConfiguration.current.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE) 4f / 3f else 3f / 4f
     val ratio = if (!live && scene != null) scene.width.toFloat() / scene.height else if (state.reference != null) state.reference.avatar.width.toFloat() / state.reference.avatar.height else defaultRatio
@@ -181,26 +191,40 @@ private fun CameraPane(state: VlmUiState, controller: VlmCameraController, permi
             val fitted = if (maxWidth / maxHeight > ratio) Modifier.fillMaxHeight().aspectRatio(ratio) else Modifier.fillMaxWidth().aspectRatio(ratio)
             Box(fitted) {
                 if (live) {
-                    if (permission) CameraSurface(controller, state.zoom, onEvent, Modifier.fillMaxSize())
+                    if (permission) CameraSurface(controller, state, onEvent, Modifier.fillMaxSize())
                     else Button(onClick = requestPermission, modifier = Modifier.align(Alignment.Center)) { Text("允许使用相机") }
-                    state.reference?.let { Image(it.avatar.asImageBitmap(), "构图参考人偶", Modifier.fillMaxSize(), contentScale = ContentScale.FillBounds, alpha = .65f) }
+                    if (state.referencePlan?.viewBinding != null && state.background.status == BackgroundStatus.SEARCHING) {
+                        BackgroundReference(state, Modifier.fillMaxSize())
+                    }
+                    state.reference?.takeIf { state.referencePlan?.viewBinding == null || state.background.status != BackgroundStatus.SEARCHING }?.let { Image(it.avatar.asImageBitmap(), "构图参考人偶", Modifier.fillMaxSize(), contentScale = ContentScale.FillBounds, alpha = .65f) }
                 } else if (scene != null) {
                     val preview = selected?.let { state.previews[it.id] }
                     if (preview != null) {
                         Image(preview.composite.asImageBitmap(), "选中构图方案", Modifier.fillMaxSize().testTag("vlm_selected_preview")
-                            .pointerInput(selected?.id, state.stage) {
+                            .pointerInput(selected.id, state.stage) {
                                 if (state.stage == VlmStage.READY) detectDragGestures { change, amount ->
                                     change.consume()
                                     onEvent(VlmIntent.Move(amount.x / size.width, amount.y / size.height))
                                 }
                             }, contentScale = ContentScale.FillBounds)
-                    } else AsyncImage(File(scene.imagePath), "冻结场景", Modifier.fillMaxSize(), contentScale = ContentScale.FillBounds)
+                    } else FrozenSceneImage(scene, state.scene == null, Modifier.fillMaxSize())
                 }
                 if (state.stage in listOf(VlmStage.FREEZING, VlmStage.GENERATING, VlmStage.MODIFYING)) {
                     VlmLoadingOverlay(state.stage, state.directorProgress, { onEvent(VlmIntent.Cancel) }, Modifier.align(Alignment.Center))
                 }
             }
         }
+    }
+}
+
+/** 尚未选景时也显示已保存的扫描画面，并明确其预览身份。 */
+@Composable
+internal fun FrozenSceneImage(scene: SceneSnapshot, provisional: Boolean, modifier: Modifier = Modifier) {
+    Box(modifier) {
+        AsyncImage(File(scene.imagePath), stringResource(R.string.vlm_scan_frame),
+            Modifier.fillMaxSize().testTag("vlm_frozen_scene"), contentScale = ContentScale.FillBounds)
+        if (provisional) Text(stringResource(R.string.vlm_scan_preview_unselected), color = Color.White,
+            modifier = Modifier.align(Alignment.BottomCenter).background(Color.Black.copy(alpha = .65f)).padding(8.dp).testTag("vlm_scan_preview_unselected"))
     }
 }
 
@@ -249,12 +273,14 @@ private fun directorProgressLabel(progress: DirectorProgress?): String = when (p
  * @param modifier 精确预览尺寸。
  */
 @Composable
-private fun CameraSurface(controller: VlmCameraController, zoom: Float, onEvent: (VlmIntent) -> Unit, modifier: Modifier) {
-    key(LocalConfiguration.current.orientation, LocalView.current.display?.rotation) {
+private fun CameraSurface(controller: VlmCameraController, state: VlmUiState, onEvent: (VlmIntent) -> Unit, modifier: Modifier) {
+    val target = if (state.stage == VlmStage.SCANNING) state.scanSession?.id else state.referencePlan?.takeIf { state.stage == VlmStage.LIVE && it.viewBinding != null }?.let { "guide:${it.viewBinding?.frameId}:${it.id}:${it.revision}" }
+    key(LocalConfiguration.current.orientation, LocalView.current.display?.rotation, target, state.zoom) {
         val owner = LocalLifecycleOwner.current
         val scope = rememberCoroutineScope()
         val latestEvent by rememberUpdatedState(onEvent)
-        val latestZoom by rememberUpdatedState(zoom)
+        val latestZoom by rememberUpdatedState(state.zoom)
+        val latestSampling by rememberUpdatedState(state.cameraReady && (state.stage == VlmStage.SCANNING && !state.scanProgress.paused || state.stage == VlmStage.LIVE && state.referencePlan?.viewBinding != null))
         DisposableEffect(controller, owner) {
             onDispose { controller.unbind(); latestEvent(VlmIntent.CameraStopped) }
         }
@@ -268,14 +294,15 @@ private fun CameraSurface(controller: VlmCameraController, zoom: Float, onEvent:
                 }
                 doOnLayout {
                     scope.launch {
-                        try { latestEvent(VlmIntent.CameraReady(controller.bind(this@apply, owner, latestZoom))) }
+                        try { latestEvent(VlmIntent.CameraReady(controller.bind(this@apply, owner, latestZoom, target, state.scanSession?.startedNs?.takeIf { state.stage == VlmStage.SCANNING },
+                            { latestSampling }, { latestEvent(VlmIntent.CameraConfigured(it)) }, { latestEvent(VlmIntent.AnalysisReceived(it)) }))) }
                         catch (cancel: CancellationException) { throw cancel }
                         catch (e: Exception) { latestEvent(VlmIntent.PlatformFailed(null, e.message ?: "相机启动失败")) }
                     }
                 }
             }
         })
-        LaunchedEffect(zoom) { controller.zoom(zoom) }
+        LaunchedEffect(state.zoom) { controller.zoom(state.zoom) }
     }
 }
 
@@ -286,15 +313,76 @@ private fun CameraSurface(controller: VlmCameraController, zoom: Float, onEvent:
  * @param modifier 控件区域及滚动设置。
  */
 @Composable
-private fun Controls(state: VlmUiState, onEvent: (VlmIntent) -> Unit, importImage: () -> Unit, modifier: Modifier) {
-    val busy = state.modelBusy || state.saving || state.stage in listOf(VlmStage.FREEZING, VlmStage.GENERATING, VlmStage.MODIFYING)
+internal fun Controls(state: VlmUiState, onEvent: (VlmIntent) -> Unit, importImage: () -> Unit, modifier: Modifier) {
+    val busy = state.modelBusy || state.saving || state.stage in listOf(VlmStage.FREEZING, VlmStage.GENERATING, VlmStage.MODIFYING, VlmStage.SCANNING, VlmStage.SCAN_PROCESSING, VlmStage.VIEW_SELECTING)
     Column(modifier, verticalArrangement = Arrangement.spacedBy(6.dp)) {
         state.error?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall, modifier = Modifier.testTag("vlm_error")) }
         state.notice?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
+        if (state.comparedFrames > 0) Text(stringResource(R.string.vlm_scan_compared, state.comparedFrames), style = MaterialTheme.typography.labelSmall)
+        if (state.stage == VlmStage.SCANNING) {
+            Text(stringResource(R.string.vlm_scan_instructions))
+            Text(stringResource(R.string.vlm_scan_progress, state.scanProgress.frames, state.scanProgress.elapsedSeconds))
+            if (state.scanProgress.totalTurn > 0) Text(stringResource(R.string.vlm_scan_turn, state.scanProgress.totalTurn))
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                Button(onClick = { onEvent(VlmIntent.StopScan) }, enabled = state.scanSession != null, modifier = Modifier.testTag("vlm_scan_stop")) { Text(stringResource(R.string.vlm_scan_stop)) }
+                TextButton(onClick = { onEvent(VlmIntent.PreferScanView) }, enabled = !state.scanProgress.paused && state.scanProgress.preferred < ScanLimits.MAX_PREFERRED,
+                    modifier = Modifier.testTag("vlm_scan_prefer")) { Text(stringResource(R.string.vlm_scan_prefer)) }
+                TextButton(onClick = { onEvent(VlmIntent.CancelScan) }, modifier = Modifier.testTag("vlm_scan_cancel")) { Text(stringResource(R.string.vlm_scan_cancel)) }
+            }
+        }
+        if (state.stage in listOf(VlmStage.SCAN_PROCESSING, VlmStage.VIEW_SELECTING)) {
+            CircularProgressIndicator(Modifier.size(24.dp))
+            Text(when {
+                state.stage == VlmStage.SCAN_PROCESSING -> stringResource(R.string.vlm_scan_finishing)
+                state.settings.mode == ModelMode.OFFLINE -> stringResource(R.string.vlm_scan_selecting_offline,
+                    minOf(state.scanSnapshot?.frames?.size ?: 0, com.framer.sense.feature.camera.vlm.agent.OfflineViewSelectionProtocol.MAX_FRAMES))
+                else -> stringResource(R.string.vlm_scan_selecting)
+            })
+            TextButton(onClick = { onEvent(VlmIntent.Cancel) }) { Text(stringResource(R.string.vlm_scan_cancel)) }
+        }
+        if (state.stage == VlmStage.SCAN_REVIEW) {
+            Text(stringResource(R.string.vlm_scan_review))
+            if (state.manualScanSelectionVisible) ScanViews(state, false, onEvent)
+            TextButton(onClick = { onEvent(VlmIntent.ManualScanSelectionVisible(!state.manualScanSelectionVisible)) },
+                modifier = Modifier.testTag("vlm_scan_manual_open")) {
+                Text(stringResource(if (state.manualScanSelectionVisible) R.string.vlm_scan_manual_hide else R.string.vlm_scan_manual_open))
+            }
+            TextButton(onClick = { onEvent(VlmIntent.SettingsVisible(true)) }) { Text(stringResource(R.string.vlm_scan_model_settings)) }
+            Row {
+                Button(onClick = { onEvent(VlmIntent.AnalyzeScan) }, enabled = state.scanSnapshot?.frames?.isNotEmpty() == true) { Text(stringResource(R.string.vlm_scan_analyze)) }
+                TextButton(onClick = { onEvent(VlmIntent.CancelScan) }) { Text(stringResource(R.string.vlm_scan_restart)) }
+            }
+        }
+        if (state.stage == VlmStage.READY && state.scanSnapshot != null) {
+            state.viewCandidates.firstOrNull { it.frameId == state.selectedFrameId }?.let { candidate ->
+                val subject = candidate.subject.ifBlank { stringResource(R.string.vlm_scan_view_number,
+                    state.scanSnapshot.frames.indexOfFirst { it.id == candidate.frameId } + 1) }
+                Text(stringResource(R.string.vlm_scan_agent_background, subject), modifier = Modifier.testTag("vlm_scan_agent_background"))
+                Text(candidate.reason.ifBlank { stringResource(R.string.vlm_scan_reason_not_provided) }, style = MaterialTheme.typography.bodySmall)
+            }
+            if (state.manualScanSelectionVisible) ScanViews(state, busy, onEvent)
+            TextButton(onClick = { onEvent(VlmIntent.ManualScanSelectionVisible(!state.manualScanSelectionVisible)) }, enabled = !busy,
+                modifier = Modifier.testTag("vlm_scan_change_background")) {
+                Text(stringResource(if (state.manualScanSelectionVisible) R.string.vlm_scan_manual_hide else R.string.vlm_scan_change_background))
+            }
+        }
+        if (state.stage == VlmStage.LIVE && state.referencePlan?.viewBinding != null) {
+            Text(stringResource(when (state.background.status) {
+                BackgroundStatus.ALIGNED_AUTO -> R.string.vlm_background_auto
+                BackgroundStatus.ALIGNED_MANUAL -> R.string.vlm_background_manual
+                BackgroundStatus.SEARCHING -> R.string.vlm_background_searching
+            }), modifier = Modifier.testTag("vlm_background_status"))
+            if (state.background.status == BackgroundStatus.SEARCHING) {
+                state.background.headingError?.takeIf { kotlin.math.abs(it) > 5f }?.let { delta -> Text(stringResource(if (delta > 0) R.string.vlm_background_right else R.string.vlm_background_left)) }
+                state.background.pitchError?.takeIf { kotlin.math.abs(it) > 5f }?.let { delta -> Text(stringResource(if (delta > 0) R.string.vlm_background_up else R.string.vlm_background_down)) }
+                TextButton(onClick = { onEvent(VlmIntent.ConfirmBackground) }, modifier = Modifier.testTag("vlm_background_confirm")) { Text(stringResource(R.string.vlm_background_confirm)) }
+            } else state.referencePlan.let { Text(compositionGuidanceText(it)) }
+        }
         if (state.stage == VlmStage.LIVE) {
             AvatarSelector(state, onEvent, busy)
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                Button(onClick = { onEvent(VlmIntent.StartComposition) }, enabled = state.cameraReady && !busy, modifier = Modifier.testTag("vlm_start")) { Text("开始构图") }
+                Button(onClick = { onEvent(VlmIntent.StartScan) }, enabled = state.cameraReady && !busy, modifier = Modifier.testTag("vlm_scan_start")) { Text(stringResource(R.string.vlm_scan_start)) }
+                TextButton(onClick = { onEvent(VlmIntent.StartComposition) }, enabled = state.cameraReady && !busy, modifier = Modifier.testTag("vlm_start")) { Text(stringResource(R.string.vlm_scan_single)) }
                 if (BuildConfig.DEBUG) TextButton(onClick = importImage, enabled = !busy) { Text("测试图片") }
             }
             Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -302,8 +390,8 @@ private fun Controls(state: VlmUiState, onEvent: (VlmIntent) -> Unit, importImag
                     TextButton(onClick = { onEvent(VlmIntent.ZoomChanged(ratio)) }, enabled = !busy && state.cameraReady) { Text("${"%.1f".format(ratio)}×") }
                 }
             }
-            state.referencePlan?.let { Text(compositionGuidanceText(it), style = MaterialTheme.typography.bodyMedium, modifier = Modifier.testTag("vlm_reference_guidance")) }
-        } else {
+            state.referencePlan?.takeIf { it.viewBinding == null }?.let { Text(compositionGuidanceText(it), style = MaterialTheme.typography.bodyMedium, modifier = Modifier.testTag("vlm_reference_guidance")) }
+        } else if (state.stage in listOf(VlmStage.FROZEN, VlmStage.READY, VlmStage.GENERATING, VlmStage.MODIFYING, VlmStage.FREEZING)) {
             if (state.stage == VlmStage.FROZEN && state.result == null) {
                 AvatarSelector(state, onEvent, busy)
             }
@@ -392,6 +480,54 @@ internal fun compositionGuidanceText(plan: CompositionPlan): String {
     val pose = stringResource(R.string.vlm_guidance_pose, facingLabel(plan.avatar.yaw), bodyLabel(guide.directive.body), resolvedArmLabel(guide), headLabel(guide.directive.head), stanceLabel(guide.directive.stance), expressionLabel(guide.expression))
     val steps = plan.resolvedSpec?.action?.stepResources.orEmpty().map { stringResource(it) }
     return (listOf(camera, placement, pose) + steps).joinToString("\n")
+}
+
+@Composable
+private fun BackgroundReference(state: VlmUiState, modifier: Modifier) {
+    val scene = state.scene ?: return
+    val plan = state.referencePlan ?: return
+    val bitmap by produceState<Bitmap?>(null, scene.id, plan.crop) {
+        value = withContext(Dispatchers.IO) {
+            val options = BitmapFactory.Options().apply { inSampleSize = 2 }
+            BitmapFactory.decodeFile(scene.imagePath, options)?.let { original ->
+                val r = plan.crop
+                val x = (r.left * original.width).toInt(); val y = (r.top * original.height).toInt()
+                val clipped = Bitmap.createBitmap(original, x, y,
+                    ((r.right - r.left) * original.width).toInt().coerceIn(1, original.width - x),
+                    ((r.bottom - r.top) * original.height).toInt().coerceIn(1, original.height - y))
+                if (clipped !== original) original.recycle()
+                clipped
+            }
+        }
+    }
+    bitmap?.let { Image(it.asImageBitmap(), stringResource(R.string.vlm_background_reference), modifier,
+        contentScale = ContentScale.FillBounds, alpha = .30f) }
+}
+
+@Composable
+private fun ScanViews(state: VlmUiState, busy: Boolean, onEvent: (VlmIntent) -> Unit) {
+    val frames = state.scanSnapshot?.frames.orEmpty()
+    val visible = frames
+    LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        items(visible, key = { it.id }) { frame ->
+            val bitmap by produceState<Bitmap?>(null, frame.id) {
+                value = withContext(Dispatchers.IO) { BitmapFactory.decodeFile(frame.scene.modelImagePath, BitmapFactory.Options().apply { inSampleSize = 4 }) }
+            }
+            Column(Modifier.width(112.dp)) {
+                bitmap?.let { Image(it.asImageBitmap(), stringResource(R.string.vlm_scan_frame), Modifier.size(112.dp, 84.dp), contentScale = ContentScale.Crop) }
+                val label = state.viewCandidates.firstOrNull { it.frameId == frame.id }?.subject?.takeIf { it.isNotBlank() }
+                    ?: stringResource(R.string.vlm_scan_view_number, frames.indexOf(frame) + 1)
+                FilterChip(selected = state.selectedFrameId == frame.id, enabled = !busy,
+                    onClick = { onEvent(VlmIntent.ScanViewSelected(frame.id)) },
+                    label = { Text(label, maxLines = 2) }, modifier = Modifier.testTag("vlm_scan_view_${frame.id}"))
+                if (frame.preferred) Text(stringResource(R.string.vlm_scan_preferred), style = MaterialTheme.typography.labelSmall)
+            }
+        }
+    }
+    state.viewCandidates.firstOrNull { it.frameId == state.selectedFrameId }?.let { candidate ->
+        Text(candidate.reason.ifBlank { stringResource(R.string.vlm_scan_reason_not_provided) }, style = MaterialTheme.typography.bodySmall)
+        candidate.uncertainties.forEach { Text(it, style = MaterialTheme.typography.bodySmall) }
+    }
 }
 
 /** 手动选择仅发 MVI 事件；目录能力由状态机提供，技术版本不进入用户文案。 */

@@ -32,6 +32,7 @@ android {
     defaultConfig {
         applicationId = "com.framer.sense"
         minSdk = 24
+        ndk { abiFilters += "arm64-v8a" }
         targetSdk = 36
         versionCode = 1
         versionName = "1.0"

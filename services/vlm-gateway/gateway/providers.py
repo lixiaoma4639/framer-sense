@@ -4,7 +4,7 @@ import os
 from dataclasses import dataclass
 from urllib.parse import quote
 import httpx
-from .models import Decision, Provider, StepRequest
+from .models import Decision, Provider, StepRequest, ViewRequest, ViewSelection
 
 
 @dataclass(frozen=True)
@@ -35,26 +35,36 @@ def config_for(provider: Provider) -> ProviderConfig:
     return ProviderConfig(os.getenv(f"{prefix}_API_KEY", ""), os.getenv(f"{prefix}_MODEL", ""), os.getenv(f"{prefix}_BASE_URL", defaults[provider]).rstrip("/"))
 
 
-def request_payload(provider: Provider, model: str, request: StepRequest) -> tuple[str, dict]:
+def request_payload(provider: Provider, model: str, request: StepRequest | ViewRequest) -> tuple[str, dict]:
     """构造真实图像请求。参数 provider/model 指定供应商与模型，request 为统一图文输入；返回相对路径和请求体。"""
-    schema = Decision.model_json_schema()
-    image_uri = "data:image/jpeg;base64," + request.imageBase64
+    multi = isinstance(request, ViewRequest)
+    schema = (ViewSelection if multi else Decision).model_json_schema()
+    images = [(image.frameId, image.imageBase64) for image in request.images] if multi else [(request.imageId, request.imageBase64)]
+    content = [{"type": "input_text" if provider == Provider.GPT else "text", "text": request.prompt}]
+    parts = [{"text": request.prompt}]
+    for frame_id, encoded in images:
+        uri = "data:image/jpeg;base64," + encoded
+        if multi:
+            content.append({"type": "input_text" if provider == Provider.GPT else "text", "text": "frameId=" + frame_id})
+            parts.append({"text": "frameId=" + frame_id})
+        content.append({"type": "input_image", "image_url": uri} if provider == Provider.GPT else {"type": "image_url", "image_url": {"url": uri}})
+        parts.append({"inlineData": {"mimeType": "image/jpeg", "data": encoded}})
     if provider == Provider.GPT:
         return "/responses", {
             "model": model, "store": False,
-            "input": [{"role": "user", "content": [{"type": "input_text", "text": request.prompt}, {"type": "input_image", "image_url": image_uri}]}],
+            "input": [{"role": "user", "content": content}],
             "text": {"format": {"type": "json_schema", "name": "director", "strict": True, "schema": schema}},
             "max_output_tokens": 4096,
         }
     if provider == Provider.GEMINI:
         return f"/models/{quote(model, safe='')}:generateContent", {
-            "contents": [{"role": "user", "parts": [{"text": request.prompt}, {"inlineData": {"mimeType": "image/jpeg", "data": request.imageBase64}}]}],
+            "contents": [{"role": "user", "parts": parts}],
             "generationConfig": {"responseMimeType": "application/json", "responseJsonSchema": schema, "maxOutputTokens": 4096},
         }
     # 千问、Seed 的 Chat Completions 图像通道；模型特定严格 Schema 不作统一假设。
     return "/chat/completions", {
         "model": model,
-        "messages": [{"role": "user", "content": [{"type": "text", "text": request.prompt}, {"type": "image_url", "image_url": {"url": image_uri}}]}],
+        "messages": [{"role": "user", "content": content}],
         "max_tokens": 4096,
         **({"enable_thinking": False, "response_format": {"type": "json_object"}} if provider == Provider.QWEN else {"thinking": {"type": "disabled"}}),
     }
@@ -90,7 +100,7 @@ def extract_text(provider: Provider, body: dict) -> str:
     return text
 
 
-async def invoke(request: StepRequest, client: httpx.AsyncClient) -> tuple[str, str]:
+async def invoke(request: StepRequest | ViewRequest, client: httpx.AsyncClient) -> tuple[str, str]:
     """执行一次上游请求，不自动重试。参数 request 为单步输入，client 为可注入 HTTP 客户端；返回模型编号和文本。"""
     config = config_for(request.provider)
     if not config.key or not config.model:
@@ -118,3 +128,13 @@ async def invoke(request: StepRequest, client: httpx.AsyncClient) -> tuple[str, 
         return config.model, extract_text(request.provider, response.json())
     except (ValueError, KeyError, TypeError) as exc:
         raise ProviderFailure(502, "INVALID_OUTPUT", "上游响应格式不正确") from exc
+
+
+def multi_image_limit(provider: Provider) -> int:
+    """显式声明当前配置模型的实测多图能力；默认关闭，不从密钥存在推断。"""
+    if os.getenv(f"{provider.value}_MULTI_IMAGE_MODEL", "") != config_for(provider).model or not config_for(provider).model:
+        return 0
+    try:
+        return max(0, min(8, int(os.getenv(f"{provider.value}_MULTI_IMAGE_MAX_IMAGES", "0"))))
+    except ValueError:
+        return 0

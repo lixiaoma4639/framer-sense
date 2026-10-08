@@ -2,6 +2,9 @@ package com.framer.sense.feature.camera.vlm
 
 import android.content.Context
 import android.content.ContextWrapper
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import com.framer.sense.feature.camera.vlm.scan.PhotoSessionBudget
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModelStore
 import com.framer.sense.feature.camera.vlm.agent.CompositionRepository
@@ -12,6 +15,7 @@ import com.framer.sense.feature.camera.vlm.model.CameraCapabilities
 import com.framer.sense.feature.camera.vlm.model.DirectorInput
 import com.framer.sense.feature.camera.vlm.model.ModelCall
 import com.framer.sense.feature.camera.vlm.model.SceneSnapshot
+import com.framer.sense.feature.camera.vlm.model.ScanLimits
 import com.framer.sense.feature.camera.vlm.ui.*
 import androidx.test.platform.app.InstrumentationRegistry
 import com.framer.sense.feature.camera.vlm.data.*
@@ -131,6 +135,133 @@ class ModelDownloadRepositoryTest {
         override fun infer(handle: Long, image: String, prompt: ByteArray, cancel: AtomicBoolean, onToken: () -> Unit): ByteArray = error("No inference in this test")
     }
 
+    private fun viewImages(root: File, count: Int): List<String> = (1..count).map { index ->
+        val bitmap = Bitmap.createBitmap(896, 672, Bitmap.Config.ARGB_8888)
+        try {
+            File(root, "view-$index.jpg").apply {
+                outputStream().use { assertTrue(bitmap.compress(Bitmap.CompressFormat.JPEG, 85, it)) }
+            }.path
+        } finally { bitmap.recycle() }
+    }
+
+    /** 四张图片独立传入运行时，缩小副本与原图隔离，不读取云端预算。 */
+    @Test fun offlineSelectionPassesFourPrivateImagesAndCleansCopies() = runBlocking<Unit> {
+        val root = File(InstrumentationRegistry.getInstrumentation().targetContext.cacheDir, UUID.randomUUID().toString()).apply { mkdirs() }
+        val store = LocalModelStore(context(root))
+        val inputs = viewImages(root, 4)
+        var copies = emptyList<String>()
+        val native = object : MnnRuntime by runtime(AtomicBoolean(false)) {
+            override fun inferImages(handle: Long, images: List<String>, prompt: ByteArray, cancel: AtomicBoolean, onToken: () -> Unit): ByteArray {
+                copies = images
+                assertEquals(4, images.size)
+                assertEquals(4, images.distinct().size)
+                assertTrue(images.none { it in inputs })
+                images.forEach { path ->
+                    val bitmap = BitmapFactory.decodeFile(path)
+                    try { assertEquals(448, bitmap.width); assertEquals(336, bitmap.height) }
+                    finally { bitmap.recycle() }
+                }
+                onToken()
+                return "4".toByteArray()
+            }
+        }
+        val provider = MnnProvider(store, { arrayOf("arm64-v8a") }, native)
+        try {
+            store.activate(fixture(store, "active"))
+            val reply = withTimeout(5_000) { provider.compareViews(inputs, "compare") }
+            assertEquals("4", reply.raw)
+            assertTrue(copies.none { File(it).exists() })
+            assertTrue(inputs.all { File(it).isFile })
+        } finally { provider.unload(); store.delete(); root.deleteRecursively() }
+    }
+
+    /** 取消只丢弃回传；图片副本必须保留到原生推理安全退出。 */
+    @Test fun cancelledOfflineSelectionKeepsCopiesUntilNativeExit() = runBlocking<Unit> {
+        val root = File(InstrumentationRegistry.getInstrumentation().targetContext.cacheDir, UUID.randomUUID().toString()).apply { mkdirs() }
+        val store = LocalModelStore(context(root))
+        val inputs = viewImages(root, 2)
+        val entered = CompletableDeferred<Pair<List<String>, AtomicBoolean>>()
+        val releaseNative = CountDownLatch(1)
+        var copies = emptyList<String>()
+        val native = object : MnnRuntime by runtime(AtomicBoolean(false)) {
+            override fun inferImages(handle: Long, images: List<String>, prompt: ByteArray, cancel: AtomicBoolean, onToken: () -> Unit): ByteArray {
+                copies = images
+                onToken(); entered.complete(images to cancel)
+                check(releaseNative.await(5, TimeUnit.SECONDS))
+                assertTrue(images.all { File(it).isFile })
+                return "SELECT=1\nSUBJECT=山体\nREASON=适合人像".toByteArray()
+            }
+        }
+        val provider = MnnProvider(store, { arrayOf("arm64-v8a") }, native)
+        try {
+            store.activate(fixture(store, "active"))
+            val job = launch { provider.compareViews(inputs, "compare"); fail("迟到结果不能提交") }
+            val (_, cancel) = withTimeout(5_000) { entered.await() }
+            job.cancelAndJoin()
+            inputs.forEach { File(it).delete() }
+            assertTrue(cancel.get()); assertTrue(copies.all { File(it).isFile })
+            val busy = runCatching { provider.compareViews(inputs, "compare") }.exceptionOrNull() as ModelFailure
+            assertEquals("LOCAL_BUSY", busy.code)
+        } finally {
+            releaseNative.countDown(); provider.unload()
+            assertTrue(copies.none { File(it).exists() })
+            store.delete(); root.deleteRecursively()
+        }
+    }
+
+    /** 多图异常与输入缺失提示保留原因。 */
+    @Test fun offlineSelectionFailuresPreserveCauseAndDoNotFakeSelection() = runBlocking<Unit> {
+        val root = File(InstrumentationRegistry.getInstrumentation().targetContext.cacheDir, UUID.randomUUID().toString()).apply { mkdirs() }
+        val store = LocalModelStore(context(root))
+        val inputs = viewImages(root, 2)
+        val provider = MnnProvider(store, { arrayOf("arm64-v8a") }, runtime(AtomicBoolean(false)))
+        try {
+            store.activate(fixture(store, "active"))
+            val unsupported = runCatching { provider.compareViews(inputs, "compare") }.exceptionOrNull() as ModelFailure
+            assertEquals(store.message(R.string.vlm_scan_local_unsupported), unsupported.message)
+            val missing = runCatching { provider.compareViews(listOf(File(root, "missing.jpg").path), "compare") }.exceptionOrNull() as ModelFailure
+            assertEquals(store.message(R.string.vlm_scan_local_input_failed), missing.message)
+            assertTrue(File(root, "vlm-view-inputs").listFiles().orEmpty().isEmpty())
+        } finally { provider.unload(); store.delete(); root.deleteRecursively() }
+    }
+
+    /** 云端预算已耗尽也不能阻止反复离线选景、构图或修改。 */
+    @Test fun exhaustedCloudBudgetDoesNotBlockRepeatedOfflineInference() = runBlocking<Unit> {
+        val root = File(InstrumentationRegistry.getInstrumentation().targetContext.cacheDir, UUID.randomUUID().toString()).apply { mkdirs() }
+        val store = LocalModelStore(context(root))
+        val inputs = viewImages(root, 2)
+        val selections = AtomicInteger()
+        val compositions = AtomicInteger()
+        val native = object : MnnRuntime by runtime(AtomicBoolean(false)) {
+            override fun inferImages(handle: Long, images: List<String>, prompt: ByteArray, cancel: AtomicBoolean, onToken: () -> Unit): ByteArray {
+                selections.incrementAndGet(); onToken()
+                return "SELECT=1\nSUBJECT=山体\nREASON=适合人像".toByteArray()
+            }
+            override fun infer(handle: Long, image: String, prompt: ByteArray, cancel: AtomicBoolean, onToken: () -> Unit): ByteArray {
+                compositions.incrementAndGet(); onToken()
+                return "山体层次清晰".toByteArray()
+            }
+        }
+        val provider = MnnProvider(store, { arrayOf("arm64-v8a") }, native)
+        try {
+            store.activate(fixture(store, "active"))
+            val budget = PhotoSessionBudget()
+            repeat(ScanLimits.MAX_MODEL_CALLS) { budget.consume(1, selection = it < ScanLimits.MAX_SELECTION_CALLS) }
+            val input = DirectorInput(SceneSnapshot("frame", 896, 672, 1f, inputs.first(), inputs.first()), CameraCapabilities(), "", sessionBudget = budget)
+            withTimeout(20_000) {
+                repeat(ScanLimits.MAX_MODEL_CALLS + 2) {
+                    assertTrue(provider.compareViews(inputs, "compare").raw.startsWith("SELECT=1"))
+                    assertEquals("山体层次清晰", provider.step(ModelCall(input, "compose", "request-$it")).raw)
+                }
+            }
+            assertEquals(ScanLimits.MAX_MODEL_CALLS + 2, selections.get())
+            assertEquals(ScanLimits.MAX_MODEL_CALLS + 2, compositions.get())
+            assertEquals(ScanLimits.MAX_MODEL_CALLS, budget.calls)
+            assertEquals(ScanLimits.MAX_SELECTION_CALLS, budget.selectionCalls)
+            assertEquals(ScanLimits.MAX_MODEL_CALLS.toLong(), budget.uploadedBytes)
+        } finally { provider.unload(); store.delete(); root.deleteRecursively() }
+    }
+
     /** 已加载后的推理异常、原生超时与真正的加载失败必须区分。 */
     @Test fun inferenceErrorsAreNotReportedAsLoadFailures() = runBlocking<Unit> {
         val root = File(InstrumentationRegistry.getInstrumentation().targetContext.cacheDir, UUID.randomUUID().toString()).apply { mkdirs() }
@@ -239,7 +370,7 @@ class ModelDownloadRepositoryTest {
                 override suspend fun render(plan: CompositionPlan, width: Int, height: Int, warmth: Float, brightness: Float): AvatarPreview = error("No GPU in this test")
             }
             withContext(Dispatchers.Main) {
-                val vm = VlmCameraViewModel(CompositionRepository(provider), SnapshotStore(context), PreviewStore(renderer), SettingsStore(context), store, provider, downloads, SavedStateHandle())
+                val vm = VlmCameraViewModel(CompositionRepository(provider), SnapshotStore(context), PreviewStore(renderer), SettingsStore(context), store, provider, downloads, SavedStateHandle(), com.framer.sense.feature.camera.vlm.scan.PhotoSessionController(context))
                 owner.put("camera", vm)
                 yield()
                 assertEquals(0, calls.get())

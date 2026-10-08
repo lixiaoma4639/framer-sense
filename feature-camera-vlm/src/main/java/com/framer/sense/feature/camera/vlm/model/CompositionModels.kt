@@ -109,7 +109,8 @@ val VlmJson = Json { encodeDefaults = true; explicitNulls = true }
     @Required val needsRetake: Boolean = false,
     @Required val uncertainties: List<String> = emptyList(),
     @Required val revision: Int = 0,
-    @kotlinx.serialization.Transient val resolvedSpec: ResolvedPhotoSpec? = null
+    @kotlinx.serialization.Transient val resolvedSpec: ResolvedPhotoSpec? = null,
+    @kotlinx.serialization.Transient val viewBinding: PhotoViewBinding? = null
 )
 /** 模型仅表达摄影意图；坐标、裁剪和倍率由客户端映射并校验。 */
 @Serializable data class CompositionIntent(
@@ -198,7 +199,10 @@ data class DirectorInput(
     val existing: List<CompositionPlan> = emptyList(),
     val selectedId: String? = null,
     /** 当前会话中用户明确选择的指导角色。 */
-    val avatarId: AvatarId = AvatarId.ADULT_FEMALE
+    val avatarId: AvatarId = AvatarId.ADULT_FEMALE,
+    val viewBinding: PhotoViewBinding? = null,
+    val backgroundRegions: List<CropRect> = emptyList(),
+    val sessionBudget: com.framer.sense.feature.camera.vlm.scan.PhotoSessionBudget? = null
 )
 data class ModelCall(val input: DirectorInput, val prompt: String, val requestId: String)
 data class CallTrace(val provider: ProviderId, val model: String, val elapsedMs: Long, val detail: String)

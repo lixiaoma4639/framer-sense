@@ -249,7 +249,8 @@ object CompositionIntentMapper {
             guidance = intent.guidance,
             reason = intent.reason,
             needsRetake = needsRetake,
-            uncertainties = intent.uncertainties
+            uncertainties = intent.uncertainties,
+            viewBinding = input.viewBinding
         )
     }
 

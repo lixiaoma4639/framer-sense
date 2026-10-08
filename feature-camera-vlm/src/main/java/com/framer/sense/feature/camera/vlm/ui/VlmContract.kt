@@ -8,10 +8,19 @@ import com.framer.sense.feature.camera.vlm.avatar.PlanPreview
 import com.framer.sense.feature.camera.vlm.avatar.PhotoActionDefinition
 import com.framer.sense.feature.camera.vlm.model.*
 
-enum class VlmStage { LIVE, FREEZING, FROZEN, GENERATING, READY, MODIFYING }
+enum class VlmStage { LIVE, SCANNING, SCAN_PROCESSING, SCAN_REVIEW, VIEW_SELECTING, FREEZING, FROZEN, GENERATING, READY, MODIFYING }
 
 data class VlmUiState(
     val stage: VlmStage = VlmStage.LIVE,
+    val scanSession: ScanSession? = null,
+    val scanProgress: ScanProgress = ScanProgress(),
+    val scanSnapshot: ScanSnapshot? = null,
+    val viewCandidates: List<ViewCandidate> = emptyList(),
+    val selectedFrameId: String? = null,
+    val comparedFrames: Int = 0,
+    val manualScanSelectionVisible: Boolean = false,
+    val cameraConfigVersion: Int = 0,
+    val background: BackgroundGuidance = BackgroundGuidance(),
     val scene: SceneSnapshot? = null,
     val settings: ModelSettings = ModelSettings(),
     val camera: CameraCapabilities = CameraCapabilities(),
@@ -39,10 +48,25 @@ data class VlmUiState(
     val settingsVisible: Boolean = false,
     val fromImportedImage: Boolean = false,
     val directorProgress: DirectorProgress? = null
-)
+) {
+    /** 仅显示扫描预览，不能作为已选背景、构图输入或应用参考。 */
+    val displayScene: SceneSnapshot?
+        get() = scene ?: if (stage in listOf(VlmStage.SCAN_PROCESSING, VlmStage.SCAN_REVIEW, VlmStage.VIEW_SELECTING))
+            scanSnapshot?.frames?.firstOrNull()?.scene else null
+}
 
 sealed interface VlmIntent {
     data class UserMessage(val message: String) : VlmIntent
+    data object StartScan : VlmIntent
+    data object StopScan : VlmIntent
+    data object CancelScan : VlmIntent
+    data object PreferScanView : VlmIntent
+    data object AnalyzeScan : VlmIntent
+    data class ScanViewSelected(val frameId: String) : VlmIntent
+    data class ManualScanSelectionVisible(val visible: Boolean) : VlmIntent
+    data class CameraConfigured(val version: Int) : VlmIntent
+    data class AnalysisReceived(val sample: com.framer.sense.feature.camera.vlm.scan.AnalysisSample) : VlmIntent
+    data object ConfirmBackground : VlmIntent
     data object StartComposition : VlmIntent
     data class FrameReady(val token: String, val bitmap: Bitmap, val zoom: Float) : VlmIntent
     data class PlatformFailed(val token: String?, val message: String) : VlmIntent

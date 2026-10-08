@@ -1,6 +1,6 @@
 # 本地 VLM 云端网关
 
-Python 3.10+。本服务只执行一轮供应商请求，会话、工具循环和自动切换由 Android 客户端管理。本次已编写实现及模拟测试，未启动服务、未运行测试、未请求真实供应商。
+Python 3.10+。本服务只执行一轮供应商请求，会话、工具循环和自动切换由 Android 客户端管理。P3＋P4 已执行 35 项模拟上游测试；未请求真实供应商。
 
 ## 启动
 
@@ -68,3 +68,24 @@ python -m pytest tests
 ```
 
 测试使用 `httpx.MockTransport` 和 FastAPI TestClient，覆盖四家图像请求格式、鉴权、协议错误、内容拒绝、限流和不重试。没有调用真实计费模型。完整 Android/模型包/设备验收步骤见 [`docs/FEATURE_CAMERA_VLM.md`](../../docs/FEATURE_CAMERA_VLM.md)。
+
+## P4 多图部署
+
+升级网关后重启服务；原 `/v1/capabilities` 与 `/v1/director/step` 保持兼容。新增鉴权接口：
+
+- `GET /v2/capabilities`：返回 `version=2`，逐供应商的实际 `model/configured/multiImage/maxImages`。
+- `POST /v2/views/select`：输入 `version=2/provider/requestId/scanId/prompt/images`。每张图含 `frameId/imageBase64/preferred/width/height`；图片长边最多 768，1–8 张 JPEG，解码字节合计最多 3 MiB。
+- 输出 `model/raw/selection/elapsedMs`。`selection` 含 `scanId/primary/alternatives`（最多两个备选），每个候选包含 `frameId/subject/reason/backgroundRegions/subjectRegions/uncertainties`。区域是该帧的归一化矩形。引用未提交帧、重复帧或非法区域时返回 `selection=null`，客户端最多纠正一次，服务端不重试。
+
+多图能力默认关闭，不能只凭存在密钥而启用。验证**当前配置的实际模型**后，例如配置 `QWEN_MULTI_IMAGE_MODEL` 为与 `QWEN_MODEL` 相同的 ID，配置 `QWEN_MULTI_IMAGE_MAX_IMAGES=8`；其他供应商同理。模型 ID 改变但声明未同步时，多图自动停用。真实供应商图像数量、质量和响应正确率仍需人工验收。
+
+四家适配器均在每张图前发送 `frameId=...` 文字，并使用供应商真实图像通道。网关不保存扫描图片。旧部署没有 v2 声明时，App 保留关键帧让用户选背景，继续走 v1 单图构图。
+
+验证命令（Python 3.10+，仅模拟上游）：
+
+```bash
+cd services/vlm-gateway
+python -m pytest tests -q
+```
+
+部署前保留 HTTPS、令牌与原有上游配置；无需为实时背景匹配增加接口。取消、内容拒绝和参数错误不由服务端自动重试。

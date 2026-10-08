@@ -23,6 +23,7 @@ object VlmModule {
     @Provides @Singleton fun downloads(@ApplicationContext context: Context, store: LocalModelStore): ModelDownloadRepository = ModelDownloadRepository(context, store)
     /** 提供安全设置仓库。@param context 应用上下文。 */
     @Provides @Singleton fun settings(@ApplicationContext context: Context): SettingsStore = SettingsStore(context)
+    @Provides fun photoSession(@ApplicationContext context: Context) = com.framer.sense.feature.camera.vlm.scan.PhotoSessionController(context)
     /** 提供冻结图片存储。@param context 应用上下文。 */
     @Provides @Singleton fun snapshots(@ApplicationContext context: Context): SnapshotStore = SnapshotStore(context)
     /** 提供串行离线模型。@param store 已验证的私有模型包管理器。 */

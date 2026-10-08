@@ -73,6 +73,8 @@ class OfflineDirectorProtocolTest {
         assertEquals("自然侧身", revised[1].guidance)
         val prompt = OfflineDirectorProtocol.prompt(editing)
         assertTrue(prompt.contains("一句简体中文、50字以内"))
+        assertTrue(prompt.contains("人物可能尚未入镜"))
+        assertTrue(prompt.contains("没有人也要建议人物站位和姿势"))
         assertFalse(prompt.contains("保留建筑"))
     }
 

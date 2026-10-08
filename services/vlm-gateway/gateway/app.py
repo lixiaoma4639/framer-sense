@@ -9,8 +9,8 @@ import httpx
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
-from .models import Decision, Provider, StepReply, StepRequest
-from .providers import ProviderFailure, config_for, invoke
+from .models import Decision, Provider, StepReply, StepRequest, ViewRequest, ViewReply, ViewSelection
+from .providers import ProviderFailure, config_for, invoke, multi_image_limit
 
 
 @asynccontextmanager
@@ -70,3 +70,49 @@ async def step(body: StepRequest, request: Request) -> StepReply:
     except ValueError:
         decision = None
     return StepReply(model=model, raw=raw, decision=decision, elapsedMs=int((time.monotonic() - started) * 1000))
+
+
+@app.get("/v2/capabilities", dependencies=[Depends(authorize)])
+async def multi_capabilities() -> dict:
+    return {"version": 2, "providers": [{"provider": p.value, "model": config_for(p).model,
+        "configured": bool(config_for(p).key and config_for(p).model),
+        "multiImage": bool(config_for(p).key and config_for(p).model and multi_image_limit(p)),
+        "maxImages": multi_image_limit(p)} for p in Provider]}
+
+
+@app.post("/v2/views/select", response_model=ViewReply, dependencies=[Depends(authorize)])
+async def select_views(body: ViewRequest, request: Request) -> ViewReply:
+    limit = multi_image_limit(body.provider)
+    if not limit or len(body.images) > limit:
+        raise HTTPException(400, detail={"code": "UNSUPPORTED_MULTI_IMAGE", "message": "当前模型未声明所需多图能力"})
+    ids = [image.frameId for image in body.images]
+    if len(set(ids)) != len(ids):
+        raise HTTPException(400, detail={"code": "BAD_REQUEST", "message": "扫描帧编号重复"})
+    total = 0
+    try:
+        for image in body.images:
+            decoded = base64.b64decode(image.imageBase64, validate=True)
+            if not decoded.startswith(b"\xff\xd8\xff"):
+                raise ValueError()
+            total += len(decoded)
+        if total > 3 * 1024 * 1024:
+            raise ValueError()
+    except (ValueError, binascii.Error):
+        raise HTTPException(400, detail={"code": "BAD_REQUEST", "message": "扫描图片格式或总字节数不符合要求"}) from None
+    started = time.monotonic()
+    try:
+        model, raw = await invoke(body, request.app.state.client)
+    except ProviderFailure as exc:
+        raise HTTPException(exc.status, detail={"code": exc.code, "message": exc.message}) from None
+    try:
+        selection = ViewSelection.model_validate_json(raw)
+        candidates = [selection.primary, *selection.alternatives]
+        selected_ids = [c.frameId for c in candidates]
+        if selection.scanId != body.scanId or len(set(selected_ids)) != len(selected_ids) or any(i not in ids for i in selected_ids):
+            raise ValueError()
+        for candidate in candidates:
+            if any(r.right <= r.left or r.bottom <= r.top for r in [*candidate.backgroundRegions, *candidate.subjectRegions]):
+                raise ValueError()
+    except ValueError:
+        selection = None
+    return ViewReply(model=model, raw=raw, selection=selection, elapsedMs=int((time.monotonic() - started) * 1000))

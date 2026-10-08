@@ -80,3 +80,50 @@ class StepReply(StrictModel):
     raw: str
     decision: Decision | None
     elapsedMs: int
+
+
+class ViewRegion(StrictModel):
+    left: float = Field(ge=0, le=1)
+    top: float = Field(ge=0, le=1)
+    right: float = Field(ge=0, le=1)
+    bottom: float = Field(ge=0, le=1)
+
+
+class ViewCandidate(StrictModel):
+    frameId: str = Field(min_length=1, max_length=128)
+    subject: str = Field(min_length=1, max_length=2000)
+    reason: str = Field(min_length=1, max_length=4000)
+    backgroundRegions: list[ViewRegion] = Field(max_length=8)
+    subjectRegions: list[ViewRegion] = Field(max_length=8)
+    uncertainties: list[str] = Field(max_length=16)
+
+
+class ViewSelection(StrictModel):
+    version: Literal[2]
+    scanId: str
+    primary: ViewCandidate
+    alternatives: list[ViewCandidate] = Field(max_length=2)
+
+
+class ViewImage(StrictModel):
+    frameId: str = Field(min_length=1, max_length=128)
+    imageBase64: str = Field(min_length=4, max_length=4_194_304)
+    preferred: bool
+    width: int = Field(gt=0, le=768)
+    height: int = Field(gt=0, le=768)
+
+
+class ViewRequest(StrictModel):
+    version: Literal[2]
+    scanId: str = Field(min_length=1, max_length=128)
+    provider: Provider
+    requestId: str = Field(min_length=1, max_length=128)
+    images: list[ViewImage] = Field(min_length=1, max_length=8)
+    prompt: str = Field(min_length=1, max_length=100_000)
+
+
+class ViewReply(StrictModel):
+    model: str
+    raw: str
+    selection: ViewSelection | None
+    elapsedMs: int

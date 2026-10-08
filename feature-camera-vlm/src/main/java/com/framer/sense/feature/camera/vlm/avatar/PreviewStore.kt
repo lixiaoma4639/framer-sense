@@ -100,7 +100,7 @@ class PreviewStore(private val renderer: AvatarRenderer) : PreviewInspector {
 
     private fun key(sceneId: String, plan: CompositionPlan, purpose: AvatarRenderPurpose = AvatarRenderPurpose.COMPOSITION): String =
         sceneId + VlmJson.encodeToString(plan) + ":" + plan.avatar.projectionCalibrated + ":" + purpose + ":" +
-            plan.resolvedSpec?.action?.cacheIdentity()
+            plan.resolvedSpec?.action?.cacheIdentity() + ":" + plan.viewBinding
 
     /** 从稀疏像素估计色温倾向与亮度。
      * @param bitmap 原始相机背景，不包含虚拟人偶。

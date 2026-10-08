@@ -45,7 +45,7 @@ class VlmSessionTest {
             override fun getSharedPreferences(name: String, mode: Int) = super.getSharedPreferences("${this.name}-$name", mode)
         }
         val store = LocalModelStore(context)
-        return VlmCameraViewModel(CompositionRepository(provider), SnapshotStore(context), PreviewStore(renderer), SettingsStore(context), store, MnnProvider(store), ModelDownloadRepository(context, store), saved)
+        return VlmCameraViewModel(CompositionRepository(provider), SnapshotStore(context), PreviewStore(renderer), SettingsStore(context), store, MnnProvider(store), ModelDownloadRepository(context, store), saved, com.framer.sense.feature.camera.vlm.scan.PhotoSessionController(context))
     }
 
     /** 返回可通过基础和投影校验的三份方案。 */
@@ -212,7 +212,7 @@ class VlmSessionTest {
             val vm = viewModel(SavedStateHandle(mapOf("vlm_started" to true)))
             assertEquals(VlmStage.LIVE, vm.state.value.stage)
             assertNull(vm.state.value.scene)
-            assertTrue(vm.state.value.notice.orEmpty().contains("重新构图"))
+            assertTrue(vm.state.value.notice.orEmpty().contains("重新扫描"))
             vm.onLeave()
         }
     }
@@ -347,4 +347,51 @@ class VlmSessionTest {
             } finally { release.complete(Unit); listener.cancel(); vm.onLeave() }
         }
     }
+    /** 扫描期间禁止构图、拍照和倍率变化；重复开始、结束和取消均幂等。 */
+    @Test fun scanControlsGateOtherOperationsAndIgnoreLateFrames() = runBlocking {
+        withContext(Dispatchers.Main) {
+            val vm = viewModel()
+            val events = mutableListOf<VlmEffect>()
+            val listener = launch(start = CoroutineStart.UNDISPATCHED) { vm.effects.collect { events += it } }
+            try {
+                vm.onIntent(VlmIntent.CameraReady(CameraCapabilities(1f, 3f)))
+                vm.onIntent(VlmIntent.CameraConfigured(1))
+                vm.onIntent(VlmIntent.StartScan)
+                val session = withTimeout(5000) { vm.state.first { it.scanSession != null }.scanSession!! }
+                vm.onIntent(VlmIntent.StartScan); vm.onIntent(VlmIntent.StartComposition)
+                vm.onIntent(VlmIntent.Capture); vm.onIntent(VlmIntent.ZoomChanged(3f))
+                assertEquals(session.id, vm.state.value.scanSession!!.id)
+                assertEquals(1f, vm.state.value.zoom); assertTrue(events.isEmpty())
+                vm.onIntent(VlmIntent.CancelScan); vm.onIntent(VlmIntent.CancelScan)
+                val config = ScanCameraConfig(1, 0, 1f, CropRect(), false)
+                vm.onIntent(VlmIntent.AnalysisReceived(com.framer.sense.feature.camera.vlm.scan.AnalysisSample(
+                    session.id, 1, android.os.SystemClock.elapsedRealtimeNanos(), config, null, 64, 48, ByteArray(64 * 48 * 3 / 2))))
+                yield(); assertEquals(VlmStage.LIVE, vm.state.value.stage)
+                assertNull(vm.state.value.scanSnapshot); assertTrue(events.isEmpty())
+            } finally { listener.cancel(); vm.onLeave() }
+        }
+    }
+
+    /** 退后台先停止新增输入，保留有效帧；恢复前台后不自动分析。 */
+    @Test fun backgroundInterruptionPreservesFramesUntilExplicitAnalysis() = runBlocking {
+        withContext(Dispatchers.Main) {
+            val vm = viewModel()
+            try {
+                vm.onIntent(VlmIntent.CameraReady(CameraCapabilities(1f, 3f)))
+                vm.onIntent(VlmIntent.CameraConfigured(1)); vm.onIntent(VlmIntent.StartScan)
+                val session = withTimeout(5000) { vm.state.first { it.scanSession != null }.scanSession!! }
+                val buffer = ByteArray(64 * 48 * 3 / 2) { if (it < 64 * 48) 100 else 128.toByte() }
+                val sample = com.framer.sense.feature.camera.vlm.scan.AnalysisSample(session.id, 1,
+                    android.os.SystemClock.elapsedRealtimeNanos(), ScanCameraConfig(1, 0, 1f, CropRect(), false), null, 64, 48, buffer)
+                vm.onIntent(VlmIntent.AnalysisReceived(sample))
+                withTimeout(10000) { vm.state.first { it.scanProgress.frames == 1 } }
+                vm.onIntent(VlmIntent.CameraForeground(false)); vm.onIntent(VlmIntent.StopScan)
+                val done = withTimeout(10000) { vm.state.first { it.stage == VlmStage.SCAN_REVIEW } }
+                assertEquals(1, done.scanSnapshot!!.frames.size)
+                vm.onIntent(VlmIntent.CameraForeground(true)); yield()
+                assertEquals(VlmStage.SCAN_REVIEW, vm.state.value.stage)
+            } finally { vm.onIntent(VlmIntent.CancelScan); vm.onLeave() }
+        }
+    }
+
 }

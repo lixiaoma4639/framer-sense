@@ -15,7 +15,14 @@ class PlanValidator {
         if (plans.map { it.id }.distinct().size != plans.size) add("方案编号重复")
         if (plans.map { listOf(it.shot, it.avatar.pose, it.crop, it.avatar.foot, it.avatar.height) }.distinct().size < 3) add("三个方案缺少差异")
         plans.forEach { p ->
+            if (p.viewBinding != input.viewBinding || input.viewBinding?.frameId?.let { it != input.scene.id } == true) add("${p.id}: VIEW_BINDING_MISMATCH")
             val c = p.crop
+            input.backgroundRegions.forEach { region ->
+                val area = (region.right - region.left) * (region.bottom - region.top)
+                val visible = (minOf(c.right, region.right) - maxOf(c.left, region.left)).coerceAtLeast(0f) *
+                    (minOf(c.bottom, region.bottom) - maxOf(c.top, region.top)).coerceAtLeast(0f)
+                if (area > 0f && visible / area < .5f) add("${p.id}: BACKGROUND_CROPPED")
+            }
             val a = p.avatar
             if (p.resolvedSpec?.matches(p) == false) add("${p.id}: RESOLVED_SPEC_MISMATCH")
             val numbers = listOf(c.left, c.top, c.right, c.bottom, p.zoom, a.foot.x, a.foot.y, a.height, a.yaw, a.expressionIntensity)

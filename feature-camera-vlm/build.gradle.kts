@@ -27,6 +27,7 @@ plugins {
 android {
     namespace = "com.framer.sense.feature.camera.vlm"
     compileSdk = 36
+    ndkVersion = "28.2.13676358"
 
     defaultConfig {
         minSdk = 24
@@ -77,6 +78,7 @@ dependencies {
     implementation(libs.androidx.camera.core)
     implementation(libs.androidx.camera.lifecycle)
     implementation(libs.androidx.camera.view)
+    implementation("org.opencv:opencv:4.12.0")
 
     implementation(libs.androidx.exifinterface)
     implementation(libs.kotlinx.serialization.json)
