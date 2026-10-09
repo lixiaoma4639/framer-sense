@@ -30,6 +30,35 @@ import org.junit.Test
 class VlmCameraScreenTest {
     @get:Rule val composeRule = createComposeRule()
 
+    @Test fun exitButtonWorksDuringGenerationAndIsDisabledWhileSaving() {
+        val state = mutableStateOf(VlmUiState(stage = VlmStage.GENERATING))
+        var exits = 0
+        composeRule.setContent { MaterialTheme { CameraTopBar(state.value, {}, onExit = { exits++ }) } }
+        composeRule.onNodeWithTag("vlm_camera_exit").assertIsEnabled().performClick()
+        composeRule.runOnIdle { assertEquals(1, exits); state.value = state.value.copy(saving = true) }
+        composeRule.onNodeWithTag("vlm_camera_exit").assertIsNotEnabled()
+    }
+
+    @Test fun systemBackCancelsBeforeExitingAndCannotInterruptSaving() {
+        val state = mutableStateOf(VlmUiState(stage = VlmStage.GENERATING))
+        val events = mutableListOf<VlmIntent>()
+        var exits = 0
+        var dispatcher: androidx.activity.OnBackPressedDispatcher? = null
+        composeRule.setContent {
+            dispatcher = androidx.activity.compose.LocalOnBackPressedDispatcherOwner.current?.onBackPressedDispatcher
+            CameraBackHandler(state.value, { events += it }, { exits++ })
+        }
+        composeRule.runOnIdle { requireNotNull(dispatcher).onBackPressed() }
+        assertEquals(listOf(VlmIntent.Cancel), events)
+        assertEquals(0, exits)
+        composeRule.runOnIdle { state.value = VlmUiState(saving = true) }
+        composeRule.runOnIdle { requireNotNull(dispatcher).onBackPressed() }
+        assertEquals(0, exits)
+        composeRule.runOnIdle { state.value = VlmUiState() }
+        composeRule.runOnIdle { requireNotNull(dispatcher).onBackPressed() }
+        assertEquals(1, exits)
+    }
+
     @Test fun independentShutterAndTwoSettingsUseDedicatedEvents() {
         val state = mutableStateOf(VlmUiState(cameraReady = true))
         val events = mutableListOf<VlmIntent>()

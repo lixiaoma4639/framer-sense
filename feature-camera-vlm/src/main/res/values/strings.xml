@@ -299,4 +299,5 @@
     <string name="vlm_director_revision_request">修改要求</string>
     <string name="vlm_director_revise">让导演修改</string>
     <string name="vlm_close_dialog">关闭设置</string>
+    <string name="vlm_exit_camera">退出拍摄，返回上一页面</string>
 </resources>

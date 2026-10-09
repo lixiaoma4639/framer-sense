@@ -22,7 +22,7 @@ Framer_Sense 是一个基于 Android 官方多模块架构模板演进而来的 
 
 当前源码基准包名和 app `applicationId` 为 `com.framer.sense`。各 module 的 Gradle `namespace` 默认以 `com.framer.sense` 为前缀，并按模块边界追加 `core.*`、`feature.*`、`test.*` 等后缀。
 
-当前应用主体验是一个三栏底部导航 App；横竖屏均保留底部导航：
+当前应用主体验是三栏导航 App；首页／我的保留底部导航，拍摄页横竖屏均使用沉浸式全屏：
 
 - 首页：推荐流和系统相册。
 - 拍照：CameraX 冻结构图、离线/云端 VLM 导演、Rocketbox GLB 人像参考和系统相册保存。
@@ -37,7 +37,7 @@ Framer_Sense 是一个基于 Android 官方多模块架构模板演进而来的 
 主应用模块，负责应用入口、主题装配和主导航组装。
 
 - `MainActivity`：Activity 入口，启用 edge-to-edge，注入 `MyApplicationTheme`，渲染 `MainNavigation`。
-- `Navigation.kt`：当前主 UI 入口，收集 `MainNavigationViewModel` 状态并组装主导航；横竖屏统一保留底部导航。
+- `Navigation.kt`：当前主 UI 入口，收集 `MainNavigationViewModel` 状态并组装主导航；首页／我的保留底部导航，拍摄使用沉浸式全屏。
 - `MainNavigationViewModel`：管理底部 Tab、“我的”模块内部路由和底部栏显隐状态。
 - `MyApplication`：Hilt Application 入口。
 
@@ -106,7 +106,7 @@ MyApplication
 | 拍照 | `VlmCameraScreen()` |
 | 我的 | `MyModelMainScreen()` |
 
-拍照、首页和“我的”在横竖屏均使用底部导航。拍摄 Tab 只负责导航，独立快门由拍照页管理。底部导航状态不会因“我的”模块内部页面而移除。当用户进入“我的 -> 扫一扫”“我的 -> 设置”或“我的 -> 消息”页面时，app 层使用 Navigation3 `NavDisplay` 和 `MyModelNavKey` 维护内部返回栈，内部页面作为全屏覆盖层盖住上一页全部内容，物理返回键会从 Navigation3 back stack 返回我的主页。主导航 ViewModel 只管理底部 Tab 状态，Compose 侧使用 `rememberSaveableStateHolder` 保存各 Tab 页面状态。
+首页和“我的”在横竖屏均使用底部导航；进入拍照后隐藏底部导航和系统栏，左上返回退出到进入前的 Tab（直接进入默认首页）。返回目标由 Compose 保存状态管理。拍摄 Tab 只负责导航，独立快门由拍照页管理。底部导航状态不会因“我的”模块内部页面而移除。当用户进入“我的 -> 扫一扫”“我的 -> 设置”或“我的 -> 消息”页面时，app 层使用 Navigation3 `NavDisplay` 和 `MyModelNavKey` 维护内部返回栈，内部页面作为全屏覆盖层盖住上一页全部内容，物理返回键会从 Navigation3 back stack 返回我的主页。主导航 ViewModel 只管理底部 Tab 状态，Compose 侧使用 `rememberSaveableStateHolder` 保存各 Tab 页面状态。
 
 ### 首页模块
 
@@ -147,6 +147,11 @@ MyApplication
 注意：相册读取依赖运行时权限，真机或模拟器环境会影响展示结果。
 
 ### 拍照页面
+
+
+
+2026-10-09 沉浸式全屏：拍摄横竖屏隐藏 Tab 与系统栏，支持边缘滑动临时显示。App `NavigationSystemBars` 统一管理窗口状态，并在前台恢复／弹窗关闭重新应用；普通页面 `FramerAppTheme` 固定白底黑字并保留强调色。`VlmCameraScreen.onExit` 连接 App 保存的返回目标，左上退出在保存照片时禁用；系统返回先关闭弹窗、取消流程／返回实时页，再退出拍摄。预览保留比例与变焦，安全边距只用于刘海与手势区域，不预留隐藏的导航／状态栏高度。本次只写测试并检查源码，不运行 Gradle／Android 测试或 APK；自测见 `CAMERA_UI_FRAMING_ACCEPTANCE.md`。此条替代下方历史记录中的“横竖屏统一保留底部导航”。
+
 
 2026-10-09 UI 与取景：CameraX 普通模式默认，AR 由拍照设置开关主动启用，模式切换等待旧相机 CLOSED 并用配置 epoch 拦截旧回调。新增本地 PhotoPreferences（比例、角色、外观、要求、脸部示范）与 CameraMode；3:4／9:16 的固定视口共用于普通采集，AR 原始 JPEG 转正后按视口裁切。倍率读 ZoomState、快捷档位在实际范围内、双指连续变焦按显示帧合并，不因变焦重绑。主页面为黑底白控件，顶部两个设置入口、底部扫描／倍率／圆形快门与常显三构图；动作和修改进入详情弹窗。扫描与快速取消保持；本轮未构建、测试或生成 APK，自测见 `CAMERA_UI_FRAMING_ACCEPTANCE.md`。
 

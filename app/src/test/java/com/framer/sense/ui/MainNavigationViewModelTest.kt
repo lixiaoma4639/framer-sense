@@ -17,6 +17,7 @@
 package com.framer.sense.ui
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -40,12 +41,16 @@ class MainNavigationViewModelTest {
     }
 
     @Test
-    fun onTabSelected_keepsBottomBarState() {
+    fun cameraHidesBottomBarAndNormalTabsRestoreIt() {
         val viewModel = MainNavigationViewModel()
 
         viewModel.onTabSelected(BottomNavTab.CAMERA)
 
         assertEquals(BottomNavTab.CAMERA, viewModel.uiState.value.selectedTab)
+        assertFalse(viewModel.uiState.value.showBottomBar)
+        viewModel.onTabSelected(BottomNavTab.MY_MODEL)
+        assertTrue(viewModel.uiState.value.showBottomBar)
+        viewModel.onTabSelected(BottomNavTab.HOME)
         assertTrue(viewModel.uiState.value.showBottomBar)
     }
 }

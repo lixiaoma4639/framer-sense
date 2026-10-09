@@ -1,5 +1,6 @@
 package com.framer.sense.ui
 
+import androidx.compose.ui.test.assertDoesNotExist
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithTag
@@ -19,7 +20,11 @@ class VlmNavigationEntryTest {
     /** 主导航默认拍照入口应展示 VLM 页面，不需要执行模型推理；无参数。 */
     @Test fun cameraTabUsesVlmScreen() {
         compose.onNodeWithTag("bottom_tab_CAMERA").performClick()
-        compose.onNodeWithText("AI 构图导演").assertIsDisplayed()
-        compose.onNodeWithText("模型设置").assertIsDisplayed()
+        compose.onNodeWithText("AI 构图导演").assertDoesNotExist()
+        compose.onNodeWithTag("vlm_model_settings").assertIsDisplayed()
+        compose.onNodeWithTag("vlm_camera_exit").assertIsDisplayed()
+        compose.onNodeWithTag("bottom_navigation").assertDoesNotExist()
+        compose.onNodeWithTag("vlm_camera_exit").performClick()
+        compose.onNodeWithTag("bottom_navigation").assertIsDisplayed()
     }
 }

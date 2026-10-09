@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Psychology
@@ -38,10 +39,14 @@ import com.framer.sense.feature.camera.vlm.ar.ArSource
 import com.framer.sense.feature.camera.vlm.ar.ArTrackingState
 
 @Composable
-internal fun CameraTopBar(state: VlmUiState, onEvent: (VlmIntent) -> Unit, modifier: Modifier = Modifier) {
+internal fun CameraTopBar(state: VlmUiState, onEvent: (VlmIntent) -> Unit, modifier: Modifier = Modifier, onExit: (() -> Unit)? = null) {
     var aspectMenu by remember { mutableStateOf(false) }
     Row(modifier.fillMaxWidth().height(48.dp).background(Color.Black.copy(alpha = .6f)).padding(horizontal = 8.dp),
         verticalAlignment = Alignment.CenterVertically) {
+        if (onExit != null) IconButton(onClick = onExit, enabled = !state.saving,
+            modifier = Modifier.testTag("vlm_camera_exit")) {
+            Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.vlm_exit_camera), tint = Color.White)
+        }
         Box {
             TextButton(onClick = { aspectMenu = true }, enabled = state.framingUnlocked,
                 modifier = Modifier.testTag("vlm_aspect_ratio")) {

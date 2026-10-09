@@ -27,7 +27,7 @@ import kotlinx.coroutines.flow.update
 data class MainNavigationUiState(
     val selectedTab: BottomNavTab = BottomNavTab.HOME
 ) {
-    val showBottomBar: Boolean = true
+    val showBottomBar: Boolean get() = selectedTab != BottomNavTab.CAMERA
 }
 
 /**

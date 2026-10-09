@@ -7,7 +7,6 @@ import android.Manifest
 import android.content.pm.PackageManager
 import android.os.Build
 import android.view.MotionEvent
-import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.camera.view.PreviewView
@@ -73,12 +72,14 @@ import android.graphics.Bitmap
  * @param onCaptureActionChanged 向主导航报告拍摄是否可用和拍摄回调，离开时清空。
  * @param modifier 页面布局修饰符。
  * @param viewModel MVI 状态机，由 Hilt 提供。
+ * @param onExit App 提供的退出导航回调；保存照片期间不可退出。
  */
 @Composable
 fun VlmCameraScreen(
     onCaptureActionChanged: (VlmCaptureAction?) -> Unit = {},
     modifier: Modifier = Modifier,
-    viewModel: VlmCameraViewModel = hiltViewModel()
+    viewModel: VlmCameraViewModel = hiltViewModel(),
+    onExit: (() -> Unit)? = null
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     LaunchedEffect(state.stage,state.ar.source,state.cameraReady,state.ar.tracking,state.modelBusy) {
@@ -86,16 +87,6 @@ fun VlmCameraScreen(
     }
     val context = LocalContext.current
     val controller = remember { VlmCameraController(context.applicationContext) }
-    val hostView = LocalView.current
-    DisposableEffect(hostView) {
-        var host: android.content.Context? = context
-        while (host is android.content.ContextWrapper && host !is android.app.Activity) host = host.baseContext
-        val window = (host as? android.app.Activity)?.window
-        val bars = window?.let { androidx.core.view.WindowInsetsControllerCompat(it, hostView) }
-        val previous = bars?.isAppearanceLightStatusBars
-        bars?.isAppearanceLightStatusBars = false
-        onDispose { if (previous != null) bars?.isAppearanceLightStatusBars = previous }
-    }
     var permission by remember { mutableStateOf(ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) }
     val permissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { permission = it }
     val storageLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
@@ -171,15 +162,20 @@ fun VlmCameraScreen(
             }
         }
     }
-    BackHandler(state.stage != VlmStage.LIVE && !state.settingsVisible && !state.photoSettingsVisible && !state.compositionDetailsVisible) {
-        onEvent(if (state.stage in listOf(VlmStage.GENERATING, VlmStage.MODIFYING, VlmStage.FREEZING, VlmStage.SCANNING, VlmStage.SCAN_PROCESSING, VlmStage.VIEW_SELECTING)) VlmIntent.Cancel else VlmIntent.ResumeCamera)
-    }
-    Box(modifier.fillMaxSize().background(Color.Black).statusBarsPadding()) {
+    val latestExit by rememberUpdatedState(onExit)
+    val exitCamera: (() -> Unit)? = onExit?.let { {
+        // 即便点击发生在 Compose 尚未重绘之前，也不能中断已经开始的照片保存。
+        if (!viewModel.state.value.saving) latestExit?.invoke()
+    } }
+    CameraBackHandler(state, onEvent, exitCamera)
+    val safeInsets = WindowInsets.displayCutout
+        .union(WindowInsets.mandatorySystemGestures).asPaddingValues()
+    Box(modifier.fillMaxSize().background(Color.Black).testTag("vlm_camera_screen")) {
         CameraPane(state, controller, permission, { permissionLauncher.launch(Manifest.permission.CAMERA) },
-            onEvent, Modifier.fillMaxSize().padding(top = 48.dp, bottom = 84.dp))
-        CameraTopBar(state, onEvent, Modifier.align(Alignment.TopCenter))
+            onEvent, Modifier.fillMaxSize().padding(safeInsets).padding(top = 48.dp, bottom = 84.dp))
+        CameraTopBar(state, onEvent, Modifier.align(Alignment.TopCenter).padding(safeInsets), onExit = exitCamera)
         CameraBottomBar(state, onEvent, { latestCapture() }, permission,
-            Modifier.align(Alignment.BottomCenter))
+            Modifier.align(Alignment.BottomCenter).padding(safeInsets))
         ArSupportControl(controller, state, permission, onEvent)
     }
     if (state.photoSettingsVisible) PhotoSettingsDialog(state, onEvent, { imageLauncher.launch("image/*") })
