@@ -12,10 +12,18 @@ import java.io.File
 import com.framer.sense.feature.camera.vlm.model.*
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.serialization.encodeToString
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeoutException
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 
@@ -29,7 +37,7 @@ object MnnNative {
      * @param handle 活跃模型句柄。
      * @param imagePaths 按编号排列的私有 JPEG 绝对路径。
      * @param prompt UTF-8 编码的导演提示词。
-     * @param cancelled Kotlin 协程取消标志，在生成边界读取。
+     * @param cancelled Kotlin 协程取消标志，在视觉/语言计算图的算子边界读取。
      * @param progress 兼容现有运行时接口；编号选择不进行自由文本解码。
      * @return UTF-8 编号字节。
      */
@@ -76,6 +84,10 @@ object NativeMnnRuntime : MnnRuntime {
         MnnNative.inferImages(handle, images.toTypedArray(), prompt, cancel, MnnTokenProgress(onToken))
 }
 
+enum class LocalModelPhase { UNLOADED, LOADING, READY, FAILED }
+data class LocalModelLoadState(val phase: LocalModelPhase = LocalModelPhase.UNLOADED,
+    val path: String? = null, val error: String? = null)
+
 /** 真正的本地 VLM；模型导入、加载失败不会返回规则结果。 */
 class MnnProvider(
     private val store: LocalModelStore,
@@ -86,6 +98,25 @@ class MnnProvider(
     private var handle = 0L
     private var loadedPath: String? = null
     private val nativeInferenceRunning = AtomicBoolean(false)
+    private val processScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val startupRequested = AtomicBoolean(false)
+    private val _loadState = MutableStateFlow(LocalModelLoadState())
+    val loadState: StateFlow<LocalModelLoadState> = _loadState.asStateFlow()
+    val isInferenceRunning: Boolean get() = nativeInferenceRunning.get()
+
+    /** App 启动后预加载既有安装，进程内只请求一次；不下载、不受 Tab 生命周期取消。 */
+    fun preloadOnAppStart() {
+        if (!startupRequested.compareAndSet(false, true)) return
+        processScope.launch {
+            if (store.activeDirectory() == null) return@launch
+            Log.i(LOG_TAG, "首页预加载开始")
+            try { load(); Log.i(LOG_TAG, "首页预加载完成") }
+            catch (error: Exception) { Log.w(LOG_TAG, "首页预加载失败，保留模型供手动重试", error) }
+        }
+    }
+
+    /** 排在旧 JNI 操作之后执行；取消等待不会卸载句柄或启动新的原生计算。 */
+    suspend fun awaitIdle(): Unit = submit { _ -> Unit }
 
     /** 加载当前已导入模型；无参数，串行完成，避免与推理同时释放资源。 */
     suspend fun load(): String = submit { _ ->
@@ -99,6 +130,8 @@ class MnnProvider(
     suspend fun install(dir: File): String = submit { cancelled ->
         checkAbi()
         if (cancelled.get()) throw kotlinx.coroutines.CancellationException()
+        _loadState.value = LocalModelLoadState(LocalModelPhase.LOADING, dir.path)
+        try {
         if (handle != 0L) runtime.release(handle)
         handle = 0L
         loadedPath = null
@@ -110,10 +143,16 @@ class MnnProvider(
             val old = store.activate(dir)
             handle = candidate
             loadedPath = dir.path
+            _loadState.value = LocalModelLoadState(LocalModelPhase.READY, dir.path)
             // 旧安装清理失败不反转已成功提交的加载事务。
             runCatching { old?.deleteRecursively() }
             store.message(R.string.vlm_model_loaded)
         } catch (error: Throwable) { runtime.release(candidate); throw error }
+        } catch (error: Throwable) {
+            _loadState.value = LocalModelLoadState(if (error is CancellationException) LocalModelPhase.UNLOADED else LocalModelPhase.FAILED,
+                dir.path, if (error is CancellationException) null else store.message(R.string.vlm_model_load_failed))
+            throw error
+        }
     }
 
     /** 检查原生 ABI；无参数，禁止在不支持的设备上进入 JNI。 */
@@ -123,9 +162,11 @@ class MnnProvider(
 
     /** 安全卸载模型；无参数，排在正在完成的原生推理之后执行。 */
     suspend fun unload(): Unit = submit { _ ->
+        val previousPath = loadedPath ?: store.activeDirectory()?.path
         if (handle != 0L) runtime.release(handle)
         handle = 0L
         loadedPath = null
+        _loadState.value = LocalModelLoadState(LocalModelPhase.UNLOADED, previousPath)
     }
 
     /** 对输入图片执行离线推理。
@@ -266,30 +307,46 @@ class MnnProvider(
 
     /** 确保当前模型已加载；无参数，只能在专用线程调用。 */
     private fun ensureLoaded() {
-        checkAbi()
         val dir = store.activeDirectory() ?: throw ModelFailure("MODEL_MISSING", store.message(R.string.vlm_model_absent), true)
         if (handle != 0L && loadedPath == dir.path) {
+            _loadState.value = LocalModelLoadState(LocalModelPhase.READY, dir.path)
             Log.d(LOG_TAG, "复用已加载离线模型 dir=${dir.name} handle=$handle")
             return
         }
+        _loadState.value = LocalModelLoadState(LocalModelPhase.LOADING, dir.path)
+        try {
+        checkAbi()
         if (handle != 0L) runtime.release(handle)
         handle = 0L
+        loadedPath = null
         val config = File(dir, "config.json")
         Log.i(LOG_TAG, "加载离线模型 dir=${dir.name} configExists=${config.isFile} configBytes=${config.length()}")
         runtime.initialize()
         handle = runtime.load(config.path)
         if (handle == 0L) throw ModelStorageException(R.string.vlm_model_load_failed)
         loadedPath = dir.path
+        _loadState.value = LocalModelLoadState(LocalModelPhase.READY, dir.path)
         Log.i(LOG_TAG, "离线模型加载成功 dir=${dir.name} handle=$handle")
+        } catch (error: Throwable) {
+            _loadState.value = LocalModelLoadState(LocalModelPhase.FAILED, dir.path,
+                (error as? ModelFailure)?.message ?: store.message(R.string.vlm_model_load_failed))
+            throw error
+        }
     }
 
     /** 将原生操作排入串行线程，并桥接协程取消。
      * @param block 接收取消标记的原生任务；不得在其他线程访问句柄。
-     * @return 任务结果；取消只丢弃回传，不并发销毁句柄。
+     * @return 任务结果；取消通知原生计算图退出，待其清理后交接，不并发销毁句柄。
      */
     private suspend fun <T> submit(block: (AtomicBoolean) -> T): T = suspendCancellableCoroutine { continuation ->
         val cancelled = AtomicBoolean(false)
-        continuation.invokeOnCancellation { cancelled.set(true) }
+        val task = nextNativeTask.incrementAndGet()
+        val cancelAt = AtomicLong(0)
+        continuation.invokeOnCancellation {
+            cancelAt.compareAndSet(0, System.nanoTime())
+            cancelled.set(true)
+            Log.i(LOG_TAG, "原生任务取消请求 task=$task nativeBusy=${nativeInferenceRunning.get()}")
+        }
         executor.execute {
             if (!continuation.isActive) return@execute
             try {
@@ -302,11 +359,15 @@ class MnnProvider(
                 if (continuation.isActive) continuation.resumeWithException(
                     if (error is ModelFailure) error else ModelFailure("LOCAL_FAILED", if (error is ModelStorageException) store.errorMessage(error) else store.message(R.string.vlm_model_load_failed), true)
                 )
+            } finally {
+                val requestedAt = cancelAt.get()
+                if (requestedAt != 0L) Log.i(LOG_TAG, "原生任务取消交接完成 task=$task cancelToExitMs=${(System.nanoTime() - requestedAt) / 1_000_000} nativeBusy=${nativeInferenceRunning.get()}")
             }
         }
     }
 
     private companion object {
         const val LOG_TAG = "VlmOffline"
+        val nextNativeTask = AtomicLong(0)
     }
 }

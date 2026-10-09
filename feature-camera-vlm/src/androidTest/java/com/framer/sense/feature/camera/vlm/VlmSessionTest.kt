@@ -126,7 +126,7 @@ class VlmSessionTest {
         return (events.single() as VlmEffect.Freeze).token
     }
 
-    /** 冻结期间连续开始、拍摄以及取消后的迟到帧均不能触发额外动作；无参数。 */
+    /** 冻结期间重复开始切换令牌，拍摄不排队，旧帧和取消后的帧均丢弃。 */
     @Test fun freezingDoesNotQueueCaptureAndLateFrameIsDiscarded() = runBlocking {
         withContext(Dispatchers.Main) {
             val vm = viewModel()
@@ -138,8 +138,14 @@ class VlmSessionTest {
                 vm.onIntent(VlmIntent.StartComposition)
                 vm.onIntent(VlmIntent.Capture)
                 yield()
-                assertEquals(1, events.size)
-                val token = (events.single() as VlmEffect.Freeze).token
+                assertEquals(2, events.size)
+                val first = (events.first() as VlmEffect.Freeze).token
+                val token = (events.last() as VlmEffect.Freeze).token
+                assertNotEquals(first, token)
+                val outdated = Bitmap.createBitmap(4, 4, Bitmap.Config.ARGB_8888)
+                vm.onIntent(VlmIntent.FrameReady(first, outdated, 1f))
+                assertTrue(outdated.isRecycled)
+                assertNull(vm.state.value.scene)
                 vm.onIntent(VlmIntent.Cancel)
                 val late = Bitmap.createBitmap(4, 4, Bitmap.Config.ARGB_8888)
                 vm.onIntent(VlmIntent.FrameReady(token, late, 1f))
@@ -148,8 +154,36 @@ class VlmSessionTest {
                 assertTrue(late.isRecycled)
                 assertNull(vm.state.value.scene)
                 assertEquals(VlmStage.LIVE, vm.state.value.stage)
-                assertEquals(1, events.size)
+                assertEquals(2, events.size)
             } finally { listener.cancel(); vm.onLeave() }
+        }
+    }
+
+    @Test fun regenerationCancelsOldFlowAndOnlyNewestResultCanComplete() = runBlocking {
+        withContext(Dispatchers.Main) {
+            val entered = CompletableDeferred<Unit>(); val release = CompletableDeferred<Unit>()
+            var calls = 0
+            val provider = object : VisionModelProvider {
+                override suspend fun step(call: ModelCall): StepReply {
+                    if (++calls == 1) { entered.complete(Unit); withContext(NonCancellable) { release.await() } }
+                    return reply(call.input.scene.id)
+                }
+            }
+            val vm = viewModel(provider = provider)
+            val events = mutableListOf<VlmEffect>()
+            val listener = launch(start = CoroutineStart.UNDISPATCHED) { vm.effects.collect { events += it } }
+            try {
+                val token = startGenerating(vm,events)
+                vm.onIntent(VlmIntent.FrameReady(token,Bitmap.createBitmap(60,80,Bitmap.Config.ARGB_8888),1f))
+                withTimeout(5_000) { entered.await() }
+                vm.onIntent(VlmIntent.Generate)
+                assertEquals(VlmStage.GENERATING,vm.state.value.stage)
+                assertNull(vm.state.value.result)
+                release.complete(Unit)
+                withTimeout(5_000) { vm.state.first { it.stage == VlmStage.READY } }
+                assertEquals(2,calls)
+                assertEquals(3,vm.state.value.result!!.plans.size)
+            } finally { release.complete(Unit); listener.cancel(); vm.onLeave() }
         }
     }
 
@@ -401,7 +435,7 @@ class VlmSessionTest {
             } finally { release.complete(Unit); listener.cancel(); vm.onLeave() }
         }
     }
-    /** 扫描期间禁止构图、拍照和倍率变化；重复开始、结束和取消均幂等。 */
+    /** 重复开始建立新扫描，普通拍照／倍率保持禁用；旧扫描帧不能进入新窗口。 */
     @Test fun scanControlsGateOtherOperationsAndIgnoreLateFrames() = runBlocking {
         withContext(Dispatchers.Main) {
             val vm = viewModel()
@@ -412,10 +446,20 @@ class VlmSessionTest {
                 vm.onIntent(VlmIntent.CameraConfigured(1))
                 vm.onIntent(VlmIntent.StartScan)
                 val session = withTimeout(5000) { vm.state.first { it.scanSession != null }.scanSession!! }
-                vm.onIntent(VlmIntent.StartScan); vm.onIntent(VlmIntent.StartComposition)
+                vm.onIntent(VlmIntent.StartScan)
+                val restarted = withTimeout(5000) { vm.state.first { it.scanSession != null && it.scanSession!!.id != session.id }.scanSession!! }
+                vm.onIntent(VlmIntent.StartComposition)
                 vm.onIntent(VlmIntent.Capture); vm.onIntent(VlmIntent.ZoomChanged(3f))
-                assertEquals(session.id, vm.state.value.scanSession!!.id)
+                assertEquals(restarted.id, vm.state.value.scanSession!!.id)
                 assertEquals(1f, vm.state.value.zoom); assertTrue(events.isEmpty())
+                vm.onIntent(VlmIntent.PlatformFailed("retired-freeze-token","迟到的旧冻结错误"))
+                assertEquals(VlmStage.SCANNING,vm.state.value.stage)
+                assertEquals(restarted.id,vm.state.value.scanSession!!.id)
+                assertNull(vm.state.value.error)
+                vm.onIntent(VlmIntent.AnalysisReceived(com.framer.sense.feature.camera.vlm.scan.AnalysisSample(
+                    session.id, 1, android.os.SystemClock.elapsedRealtimeNanos(), ScanCameraConfig(1,0,1f,CropRect(),false), null,
+                    64,48,ByteArray(64 * 48 * 3 / 2))))
+                yield(); assertEquals(0, vm.state.value.scanProgress.frames)
                 vm.onIntent(VlmIntent.CancelScan); vm.onIntent(VlmIntent.CancelScan)
                 val config = ScanCameraConfig(1, 0, 1f, CropRect(), false)
                 vm.onIntent(VlmIntent.AnalysisReceived(com.framer.sense.feature.camera.vlm.scan.AnalysisSample(

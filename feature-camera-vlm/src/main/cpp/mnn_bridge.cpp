@@ -1,6 +1,7 @@
 #include <jni.h>
 #include <android/log.h>
 #include <chrono>
+#include <atomic>
 #include <map>
 #include <llm/llm.hpp>
 #include <memory>
@@ -20,6 +21,57 @@ static constexpr int kMaxOutputTokens = 96;
 // 不覆盖模型包的 sampler 配置。Qwen3-VL-2B 的导出配置使用 mixed sampler；
 // 强制 greedy 会在部分 ARM CPU 上重复同一 token，直到触发输出上限。
 static constexpr char kCpuConfig[] = R"({"backend_type":"cpu","thread_num":4,"max_all_tokens":16384,"max_new_tokens":96,"reuse_kv":false,"use_template":true,"timeout_ms":120000})";
+
+/** 每轮推理绑定自己的 AtomicBoolean；回调仅在同步 CPU 推理线程读取，不保留 JNI 局部引用。 */
+class NativeCancelScope {
+public:
+    NativeCancelScope(JNIEnv* env, Llm* llm, jobject flag, const char* task)
+        : env_(env), llm_(llm), flag_(flag), task_(task), id_(++nextId_), started_(std::chrono::steady_clock::now()) {
+        flagClass_ = env_->GetObjectClass(flag_);
+        if (!flagClass_ || env_->ExceptionCheck()) throw std::runtime_error("MNN cancellation flag unavailable");
+        get_ = env_->GetMethodID(flagClass_, "get", "()Z");
+        if (!get_ || env_->ExceptionCheck()) throw std::runtime_error("MNN cancellation flag unavailable");
+        operatorChecksAtStart_ = llm_->cancellationOperatorChecks();
+        llm_->setCancelCallback([this] { return cancelled(); });
+        __android_log_print(ANDROID_LOG_INFO, "VlmOffline", "MNN 可取消任务开始 nativeRequest=%llu task=%s cancellation=operator_boundary", id_, task_);
+    }
+    ~NativeCancelScope() {
+        // 先解除捕获，再释放本次 JNI 引用；不能让下一轮回调读到旧 flag/env。
+        llm_->setCancelCallback({});
+        env_->DeleteLocalRef(flagClass_);
+    }
+    bool cancelled() {
+        if (observed_) return true;
+        if (env_->ExceptionCheck()) return false;
+        if (env_->CallBooleanMethod(flag_, get_) != JNI_TRUE) return false;
+        observed_ = true;
+        observedAt_ = std::chrono::steady_clock::now();
+        __android_log_print(ANDROID_LOG_INFO, "VlmOffline", "MNN 取消已检测 nativeRequest=%llu task=%s elapsedMs=%lld inGraph=%d operatorChecks=%zu", id_, task_, elapsed(started_), static_cast<int>(llm_->cancellationGraphActive()), llm_->cancellationOperatorChecks() - operatorChecksAtStart_);
+        return true;
+    }
+    jbyteArray cancelledResult() {
+        // 后端已通过 CALL_BACK_STOP/onExecuteEnd 退出，此时才能清理部分视觉输出与 KV 状态。
+        llm_->setCancelCallback({});
+        llm_->resetCancelledRequest();
+        __android_log_print(ANDROID_LOG_INFO, "VlmOffline", "MNN 取消清理完成 nativeRequest=%llu task=%s cleanupMs=%lld totalMs=%lld modelRetained=true", id_, task_, elapsed(observedAt_), elapsed(started_));
+        return env_->NewByteArray(0);
+    }
+private:
+    static long long elapsed(std::chrono::steady_clock::time_point from) {
+        return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - from).count();
+    }
+    inline static std::atomic<unsigned long long> nextId_{0};
+    JNIEnv* env_;
+    Llm* llm_;
+    jobject flag_;
+    jclass flagClass_ = nullptr;
+    jmethodID get_ = nullptr;
+    const char* task_;
+    unsigned long long id_;
+    size_t operatorChecksAtStart_ = 0;
+    bool observed_ = false;
+    std::chrono::steady_clock::time_point started_, observedAt_;
+};
 
 /** 直接监听 MNN 的 token 输出，首 token 后由协程监控停滞，不把耗时长当成异常。 */
 class TokenOutputBuffer : public std::streambuf {
@@ -115,13 +167,15 @@ Java_com_framer_sense_feature_camera_vlm_data_MnnNative_load(JNIEnv* env, jobjec
         // 当前导入的 Qwen3-VL-2B 包在 Galaxy S9 的 OpenCL 视觉预填充会无限停滞；
         // 默认 CPU 后端可稳定完成，且单次短协议避免旧实现的第二轮超时。
         llm->set_config(kCpuConfig);
+        // 必须先启用回调和 Session_Debug，再创建视觉/语言计算图。
+        llm->setCancelCallback({});
         if (!llm->load()) throw std::runtime_error("MNN 模型加载失败，请检查权重和视觉组件");
-        __android_log_print(ANDROID_LOG_INFO, "VlmOffline", "MNN 模型加载成功 backend=cpu");
+        __android_log_print(ANDROID_LOG_INFO, "VlmOffline", "MNN 模型加载成功 backend=cpu cancellation=operator_boundary");
         return reinterpret_cast<jlong>(llm.release());
     } catch (const std::exception& e) { fail(env, e.what()); return 0; }
 }
 
-/** 将图片作为 MNN Omni 的 img 标签视觉输入，分 token 检查取消。
+/** 将图片作为 MNN Omni 的 img 标签视觉输入，在算子及 token 边界检查取消。
  * @param env JNI 环境。
  * @param handle 串行线程独占模型句柄。
  * @param paths 按编号排列的私有 JPEG 路径，由 Omni 逐张读取并编码为视觉特征。
@@ -131,14 +185,15 @@ Java_com_framer_sense_feature_camera_vlm_data_MnnNative_load(JNIEnv* env, jobjec
  * @return UTF-8 输出；取消返回空输出并由 Kotlin 丢弃。
  */
 static jbyteArray inferImages(JNIEnv* env, jlong handle, const std::vector<std::string>& paths, jbyteArray promptBytes, jobject cancelled, jobject progress) {
+    std::unique_ptr<NativeCancelScope> cancellation;
     try {
         auto* llm = reinterpret_cast<Llm*>(handle);
         if (!llm) throw std::runtime_error("模型尚未加载");
+        cancellation = std::make_unique<NativeCancelScope>(env, llm, cancelled, "scene");
+        if (cancellation->cancelled()) return cancellation->cancelledResult();
         jsize length = env->GetArrayLength(promptBytes);
         std::string prompt(length, '\0');
         env->GetByteArrayRegion(promptBytes, 0, length, reinterpret_cast<jbyte*>(prompt.data()));
-        const auto cancelClass = env->GetObjectClass(cancelled);
-        const auto get = env->GetMethodID(cancelClass, "get", "()Z");
         const auto progressClass = env->GetObjectClass(progress);
         const auto onToken = env->GetMethodID(progressClass, "onToken", "()V");
         if (!onToken) return nullptr;
@@ -151,17 +206,18 @@ static jbyteArray inferImages(JNIEnv* env, jlong handle, const std::vector<std::
         const auto prefillStarted = std::chrono::steady_clock::now();
         // response(..., 1) 同时完成预填充、采样并输出第一个真实 token。不能用 0：
         // 普通 Llm 的预填充不会设置 current_token，手动解码 -1 会使后续解码退化为重复符号。
-        if (!env->CallBooleanMethod(cancelled, get)) llm->response(visualPrompt, &output, "", 1);
+        if (!cancellation->cancelled()) llm->response(visualPrompt, &output, "", 1);
+        if (cancellation->cancelled()) return cancellation->cancelledResult();
         __android_log_print(ANDROID_LOG_INFO, "VlmOffline", "MNN 视觉预填充结束 elapsedMs=%lld", static_cast<long long>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - prefillStarted).count()));
         for (int i = 1; i < kMaxOutputTokens && !llm->stoped() && !buffer.completeJson(); ++i) {
-            if (env->CallBooleanMethod(cancelled, get)) break;
+            if (cancellation->cancelled()) break;
             llm->generate(1);
         }
-        env->DeleteLocalRef(cancelClass);
         env->DeleteLocalRef(progressClass);
         if (env->ExceptionCheck()) return nullptr;
+        if (cancellation->cancelled()) return cancellation->cancelledResult();
         const auto* context = llm->getContext();
-        const bool cancelledNow = env->CallBooleanMethod(cancelled, get);
+        const bool cancelledNow = false;
         const bool complete = buffer.completeJson();
         __android_log_print(ANDROID_LOG_INFO, "VlmOffline",
             "MNN 生成结束 status=%d cancelled=%d completeJson=%d promptTokens=%d outputTokens=%zu lastToken=%d visionMs=%lld prefillMs=%lld decodeMs=%lld outputBytes=%zu",
@@ -189,20 +245,21 @@ static jbyteArray inferImages(JNIEnv* env, jlong handle, const std::vector<std::
             __android_log_print(ANDROID_LOG_WARN, "VlmOffline", "MNN 输出达到预算，交由离线协议解析已生成文本");
         }
         return result;
-    } catch (const std::exception& e) { fail(env, e.what()); return nullptr; }
+    } catch (const std::exception& e) {
+        if (cancellation && cancellation->cancelled()) return cancellation->cancelledResult();
+        fail(env, e.what()); return nullptr;
+    }
 }
 
 /** 一次真实视觉预填充后，按模型分数在合法编号中作选择，不自由生成格式文本。 */
 static jbyteArray chooseView(JNIEnv* env, jlong handle, const std::vector<std::string>& paths,
                             jbyteArray promptBytes, jobject cancelled, size_t options = 0) {
+    std::unique_ptr<NativeCancelScope> cancellation;
     try {
         auto* llm = reinterpret_cast<Llm*>(handle);
         if (!llm) throw std::runtime_error("模型尚未加载");
-        const auto cancelClass = env->GetObjectClass(cancelled);
-        const auto get = env->GetMethodID(cancelClass, "get", "()Z");
-        if (!get || env->ExceptionCheck()) return nullptr;
-        const auto isCancelled = [&]() { return env->CallBooleanMethod(cancelled, get) == JNI_TRUE; };
-        if (isCancelled()) return env->NewByteArray(0);
+        cancellation = std::make_unique<NativeCancelScope>(env, llm, cancelled, options ? "photo" : "views");
+        if (cancellation->cancelled()) return cancellation->cancelledResult();
         std::string prompt(env->GetArrayLength(promptBytes), '\0');
         env->GetByteArrayRegion(promptBytes, 0, static_cast<jsize>(prompt.size()), reinterpret_cast<jbyte*>(prompt.data()));
         if (env->ExceptionCheck()) return nullptr;
@@ -223,7 +280,7 @@ static jbyteArray chooseView(JNIEnv* env, jlong handle, const std::vector<std::s
         // 0 只作预填充。此分支读取 logits 作一次编号选择，不继续 generate(current_token=-1)。
         llm->response(visualPrompt, &ignoredText, "", 0);
         if (env->ExceptionCheck()) return nullptr;
-        if (isCancelled()) return env->NewByteArray(0);
+        if (cancellation->cancelled()) return cancellation->cancelledResult();
         const auto* context = llm->getContext();
         if (context->status == MNN::Transformer::LlmStatus::TIMEOUT) {
             env->ThrowNew(env->FindClass("java/util/concurrent/TimeoutException"), "MNN inference timeout");
@@ -248,13 +305,16 @@ static jbyteArray chooseView(JNIEnv* env, jlong handle, const std::vector<std::s
             if (i) scores << ',';
             scores << i + 1 << ':' << choice.scores[i];
         }
+        if (cancellation->cancelled()) return cancellation->cancelledResult();
         __android_log_print(ANDROID_LOG_INFO, "VlmOffline", "MNN 编号选择结束 method=constrained_logits images=%zu selected=%d scores=%s visionMs=%lld prefillMs=%lld generatedTokens=%zu", paths.size(), choice.ordinal, scores.str().c_str(), static_cast<long long>(context->vision_us / 1000), static_cast<long long>(context->prefill_us / 1000), context->output_tokens.size());
-        if (isCancelled()) return env->NewByteArray(0);
         const auto digit = std::to_string(choice.ordinal);
         auto result = env->NewByteArray(static_cast<jsize>(digit.size()));
         if (result) env->SetByteArrayRegion(result, 0, static_cast<jsize>(digit.size()), reinterpret_cast<const jbyte*>(digit.data()));
         return result;
-    } catch (const std::exception& error) { fail(env, error.what()); return nullptr; }
+    } catch (const std::exception& error) {
+        if (cancellation && cancellation->cancelled()) return cancellation->cancelledResult();
+        fail(env, error.what()); return nullptr;
+    }
 }
 
 /** 单图兼容入口，保持原有视觉提示前缀。 */

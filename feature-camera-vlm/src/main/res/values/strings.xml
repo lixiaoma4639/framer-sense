@@ -161,6 +161,11 @@
     <string name="vlm_guidance_pose">入镜者：整体%1$s，身体%2$s；手臂%3$s；%4$s；%5$s；表情%6$s。</string>
     <string name="vlm_guidance_size">人物可见参考高度 %1$d%% · 横向位置 %2$d%%</string>
     <string name="vlm_scan_start">开始扫描</string>
+    <string name="vlm_scan_restart_active">重新扫描</string>
+    <string name="vlm_flow_waiting_native">正在停止上一轮本地推理，完成清理后自动开始新任务；模型会保留。</string>
+    <string name="vlm_flow_generate">生成方案</string>
+    <string name="vlm_flow_regenerate">重新生成</string>
+    <string name="vlm_flow_restart_single">重新取景生成</string>
     <string name="vlm_scan_stop">结束扫描</string>
     <string name="vlm_scan_single">单张构图</string>
     <string name="vlm_scan_cancel">取消</string>
@@ -254,8 +259,10 @@
     <string name="vlm_ar_screen_mode">屏幕参考模式：未启用空间定位</string>
     <string name="vlm_ar_tracking">AR 空间参考 · 原始倍率；缓慢移动手机识别地面</string>
     <string name="vlm_ar_choose_ground">请轻点画面中可站立的地面，确认人像落点</string>
+    <string name="vlm_reference_avatar">构图参考人像</string>
+    <string name="vlm_ar_pending_ground_reference">人物参考（屏幕模式）；识别地面后切换为空间参考</string>
     <string name="vlm_ar_placed">AR 人像已放置；仅为姿势示范，尚未检测真人</string>
-    <string name="vlm_ar_tracking_lost">空间跟踪暂停，人像已隐藏；请重新找回背景和地面</string>
+    <string name="vlm_ar_tracking_lost">空间跟踪暂停，空间人像已隐藏；请重新找回背景和地面</string>
     <string name="vlm_ar_depth_on">已启用软件深度遮挡</string>
     <string name="vlm_ar_depth_off">当前未启用深度遮挡，人像可能显示在前景物体前</string>
     <string name="vlm_ar_enable">安装或启用 AR 空间参考</string>

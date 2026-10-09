@@ -20,6 +20,9 @@ if(NOT EXISTS "${MNN_SOURCE}/CMakeLists.txt")
 # 结束上面的 MNN 源码存在性判断。
 endif()
 
+# 与官方 FILE(GLOB_RECURSE) 产生的绝对源路径保持一致。
+get_filename_component(MNN_SOURCE "${MNN_SOURCE}" REALPATH)
+
 # 将 MNN 编译为共享库；CACHE BOOL 让该值进入 CMake 缓存，FORCE 确保不被旧缓存覆盖。
 set(MNN_BUILD_SHARED_LIBS ON CACHE BOOL "" FORCE)
 
@@ -65,6 +68,9 @@ set(LLM_SUPPORT_HTTP_RESOURCE OFF CACHE BOOL "" FORCE)
 # 将 MNN 源码作为子工程纳入当前构建；第二个参数指定其生成文件单独放在当前构建目录的 mnn 子目录。
 add_subdirectory("${MNN_SOURCE}" "${CMAKE_CURRENT_BINARY_DIR}/mnn")
 
+# 官方算子取消回调及视觉层安全返回补丁；只生成构建目录副本，不改 third_party。
+include("${CMAKE_CURRENT_LIST_DIR}/cmake/MnnCancellation.cmake")
+
 # 不让 MNN 的 apply_template 辅助目标默认参与 ALL 构建目标，避免产生当前应用不需要的产物。
 set_target_properties(apply_template PROPERTIES EXCLUDE_FROM_ALL TRUE)
 
@@ -75,10 +81,21 @@ target_link_options(MNN PRIVATE "-Wl,-z,max-page-size=16384")
 add_library(vlm_mnn SHARED mnn_bridge.cpp)
 
 # 为 vlm_mnn 的编译过程添加 MNN 公共头文件和 LLM 引擎头文件搜索目录；PRIVATE 表示不向依赖方传递。
-target_include_directories(vlm_mnn PRIVATE "${MNN_SOURCE}/include" "${MNN_SOURCE}/transformers/llm/engine/include")
+target_include_directories(vlm_mnn PRIVATE "${VLM_MNN_CANCEL_SOURCE}/transformers/llm/engine/include" "${MNN_SOURCE}/include" "${MNN_SOURCE}/transformers/llm/engine/include")
 
 # 将 vlm_mnn 链接到 MNN 推理库与 Android log 库，以使用 MNN API 和 __android_log_print 等日志能力。
 target_link_libraries(vlm_mnn MNN log)
 
 # 为最终 JNI 共享库设置同样的 16 KB 最大页大小链接参数，确保 vlm_mnn 也具备相同兼容性。
 target_link_options(vlm_mnn PRIVATE "-Wl,-z,max-page-size=16384")
+
+# 可选原生回归探针：默认不编译、不进入 App；使用微型 CPU 图，不加载用户权重。
+option(VLM_BUILD_CANCELLATION_PROBE "Build the opt-in MNN cancellation regression probe" OFF)
+if(VLM_BUILD_CANCELLATION_PROBE)
+    add_executable(vlm_mnn_cancellation_probe "${CMAKE_CURRENT_LIST_DIR}/../../../src/test/cpp/mnn_cancellation_test.cpp")
+    target_include_directories(vlm_mnn_cancellation_probe PRIVATE
+        "${VLM_MNN_CANCEL_SOURCE}/transformers/llm/engine/include"
+        "${MNN_SOURCE}/include"
+        "${MNN_SOURCE}/transformers/llm/engine/src")
+    target_link_libraries(vlm_mnn_cancellation_probe MNN log)
+endif()

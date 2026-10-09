@@ -53,6 +53,7 @@ internal class ArFilamentScene(private val context: Context, egl: ArEglContext, 
     private val indirect: IndirectLight
     private val grading: ColorGrading
     private var shown = false
+    var avatarPresented = false; private set
     private var width = 1
     private var height = 1
     internal data class RenderTiming(val totalNs: Long = 0, val depthNs: Long = 0,
@@ -211,7 +212,13 @@ internal class ArFilamentScene(private val context: Context, egl: ArEglContext, 
         }
         planKey = revision
     }
-    fun hide() { if (shown) { asset?.let { scene.removeEntities(it.entities) }; scene.removeEntity(shadowEntity); shown = false } }
+    fun hide() {
+        avatarPresented = false
+        if (shown) {
+            asset?.let { scene.removeEntities(it.entities) }; scene.removeEntity(shadowEntity); shown = false
+            Log.i("VlmArRender", "空间人像已隐藏 plan=$planKey")
+        }
+    }
     fun render(frame: Frame, model: FloatArray?, depthEnabled: Boolean): Boolean {
         val started = SystemClock.elapsedRealtimeNanos()
         // UV 只随显示几何变化，不逐帧重复上传同一份顶点数据。
@@ -252,6 +259,10 @@ internal class ArFilamentScene(private val context: Context, egl: ArEglContext, 
         val submitStart = SystemClock.elapsedRealtimeNanos()
         var submitted = false
         chain?.let { if (renderer.beginFrame(it, System.nanoTime())) { renderer.render(view); renderer.endFrame(); submitted = true } }
+        if (submitted && shown && !avatarPresented) {
+            avatarPresented = true
+            Log.i("VlmArRender", "空间人像已提交 plan=$planKey modelVisible=true")
+        }
         val submitTime = SystemClock.elapsedRealtimeNanos()-submitStart
         val waitStart = SystemClock.elapsedRealtimeNanos()
         engine.flushAndWait()

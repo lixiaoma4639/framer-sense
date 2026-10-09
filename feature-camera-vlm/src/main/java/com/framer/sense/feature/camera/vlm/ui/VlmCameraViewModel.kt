@@ -34,8 +34,8 @@ class VlmCameraViewModel @Inject constructor(
     savedStateHandle: SavedStateHandle,
     private val sessions: PhotoSessionController
 ) : ViewModel() {
-    private val _state = MutableStateFlow(VlmUiState(settings = settingsStore.read(), modelStatus = models.description(),
-        selectedEthnicity = settingsStore.readAvatarEthnicity(),
+    private val _state = MutableStateFlow(VlmUiState(settings = settingsStore.read(), modelStatus = modelDescription(),
+        selectedEthnicity = settingsStore.readAvatarEthnicity(), modelBusy = local.loadState.value.phase == LocalModelPhase.LOADING,
         notice = if (savedStateHandle.get<Boolean>("vlm_started") == true) models.message(R.string.vlm_scan_restore) else null))
     val state: StateFlow<VlmUiState> = _state.asStateFlow()
     private val _effects = MutableSharedFlow<VlmEffect>(extraBufferCapacity = 4)
@@ -64,7 +64,8 @@ class VlmCameraViewModel @Inject constructor(
     private var foregroundSinceNs = 0L
     private var guidanceEpoch = 0
     private var lastGuidanceLogNs = 0L
-    private var modelLoaded = false
+    private var modelLoaded = local.loadState.value.phase == LocalModelPhase.READY
+    private var maintenanceBusy = false
     private var attemptedPath: String? = null
     init {
         guideWork = viewModelScope.launch {
@@ -96,12 +97,27 @@ class VlmCameraViewModel @Inject constructor(
         }
         savedStateHandle["vlm_started"] = true
         viewModelScope.launch { downloads.state.collect { value -> _state.update { it.copy(download = value) } } }
+        viewModelScope.launch { local.loadState.collect { value ->
+            modelLoaded = value.phase == LocalModelPhase.READY
+            value.path?.let { attemptedPath = it }
+            if (modelLoaded && downloads.state.value.phase == DownloadPhase.DOWNLOADED && models.pendingDirectory() == null)
+                downloads.loadingState(DownloadPhase.READY)
+            _state.update { it.copy(modelBusy = maintenanceBusy || value.phase == LocalModelPhase.LOADING,
+                modelStatus = if (maintenanceBusy && value.phase != LocalModelPhase.LOADING) it.modelStatus else modelDescription(value)) }
+        } }
         viewModelScope.launch { state.collect { maybeAutoLoad() } }
+    }
+
+    private fun modelDescription(value: LocalModelLoadState = local.loadState.value): String = when (value.phase) {
+        LocalModelPhase.READY -> models.message(R.string.vlm_model_loaded)
+        LocalModelPhase.LOADING -> models.message(R.string.vlm_model_loading)
+        LocalModelPhase.FAILED -> value.error ?: models.message(R.string.vlm_model_load_failed)
+        LocalModelPhase.UNLOADED -> models.description()
     }
 
     /** 前台空闲时自动加载已下载或已安装目录；无参数，失败或卸载后不循环重试。 */
     private fun maybeAutoLoad() {
-        if (!foreground || busy() || modelLoaded) return
+        if (!foreground || busy()) return
         val phase = downloads.state.value.phase
         // 下载完成时优先尝试候选目录；导入/既有安装没有下载会话，直接加载当前安装。
         val dir = if (phase == DownloadPhase.DOWNLOADED) {
@@ -109,6 +125,7 @@ class VlmCameraViewModel @Inject constructor(
         } else {
             models.activeDirectory()
         } ?: return
+        if (modelLoaded && local.loadState.value.path == dir.path) return
         if (attemptedPath == dir.path) return
         attemptedPath = dir.path
         maintain(models.message(R.string.vlm_model_loading)) { loadDirectory(dir) }
@@ -206,13 +223,18 @@ class VlmCameraViewModel @Inject constructor(
             VlmIntent.ConfirmBackground -> if (_state.value.stage == VlmStage.LIVE && _state.value.referencePlan?.viewBinding != null)
                 _state.update { it.copy(background = it.background.copy(status = BackgroundStatus.ALIGNED_MANUAL)) }
             is VlmIntent.UserMessage -> _state.update { it.copy(error = intent.message) }
-            VlmIntent.StartComposition -> if (_state.value.stage == VlmStage.LIVE && _state.value.cameraReady && !busy()) {
+            VlmIntent.StartComposition -> if (_state.value.stage in listOf(VlmStage.LIVE, VlmStage.FREEZING) && _state.value.cameraReady &&
+                !_state.value.modelBusy && !_state.value.saving && !_state.value.settingsVisible && _state.value.photoSample == null) {
                 cancelWork()
-                _state.update { it.copy(stage = VlmStage.FREEZING, error = null, directorProgress = null, scanSession = null, scanSnapshot = null, viewCandidates = emptyList(), selectedFrameId = null) }
+                _state.update { it.copy(stage = VlmStage.FREEZING, error = null, notice = null, directorProgress = null,
+                    scanSession = null, scanSnapshot = null, viewCandidates = emptyList(), selectedFrameId = null,
+                    scene = null, result = null, diagnostics = null, previews = emptyMap(), reference = null, referencePlan = null,
+                    facePreview = null, availableActions = emptyMap(), availableExpressions = emptyMap()) }
                 _effects.tryEmit(VlmEffect.Freeze(requestToken))
             }
             is VlmIntent.FrameReady -> receiveFrame(intent)
             is VlmIntent.PlatformFailed -> {
+                if (intent.token != null && intent.token != requestToken) return
                 if (_state.value.stage == VlmStage.SCANNING) stopScan(false)
                 if (intent.token == null || intent.token == requestToken) _state.update { it.copy(stage = if (it.stage == VlmStage.SCAN_PROCESSING) it.stage else if (it.scene == null) VlmStage.LIVE else VlmStage.FROZEN, error = intent.message, cameraReady = if (intent.token != null && it.ar.source == com.framer.sense.feature.camera.vlm.ar.ArSource.SHARED_CAMERA) it.cameraReady else false) }
             }
@@ -360,27 +382,34 @@ class VlmCameraViewModel @Inject constructor(
 
     private fun startScan() {
         val old = _state.value
-        if (old.stage != VlmStage.LIVE || !old.cameraReady || busy() || old.settingsVisible) return
+        if (!old.canRestartScan) return
         val previousWork = work
         val previousRender = renderWork
         val previousFace = faceWork
+        val previousScan = scanWork
+        sessions.stop(SystemClock.elapsedRealtimeNanos())
+        scanQueue?.close(); scanTimer?.cancel(); previousScan?.cancel()
         cancelWork()
         val token = requestToken
-        val started = SystemClock.elapsedRealtimeNanos()
+        Log.i(LOG_TAG, "重新开始扫描 oldStage=${old.stage} oldScan=${old.scanSession?.id?.take(8)} token=${token.take(8)} nativeDraining=${local.isInferenceRunning}")
         _state.update { it.copy(stage = VlmStage.SCANNING, scanSession = null, scanSnapshot = null,
             scanProgress = ScanProgress(), viewCandidates = emptyList(), selectedFrameId = null, comparedFrames = 0, manualScanSelectionVisible = false,
             scene = null, result = null, diagnostics = null, previews = emptyMap(), reference = null, referencePlan = null,
             availableActions = emptyMap(), availableExpressions = emptyMap(), facePreview = null,
-            background = BackgroundGuidance(), error = null, notice = null, directorProgress = null) }
+            background = BackgroundGuidance(), error = null,
+            notice = if (local.isInferenceRunning) models.message(R.string.vlm_flow_waiting_native) else null, directorProgress = null) }
         work = viewModelScope.launch {
             try {
-                previousWork?.join(); previousRender?.join(); previousFace?.join(); cleanupWork?.join(); scanWork?.cancelAndJoin()
+                previousWork?.join(); previousRender?.join(); previousFace?.join(); previousScan?.join(); cleanupWork?.join()
+                awaitPreviousNative(token)
+                val started = SystemClock.elapsedRealtimeNanos()
                 val session = sessions.start(started)
                 if (token != requestToken) return@launch
+                Log.i(LOG_TAG, "新扫描窗口已开始 scan=${session.id.take(8)} token=${token.take(8)} nativeBusy=${local.isInferenceRunning}")
                 sessions.configure(_state.value.cameraConfigVersion)
                 val queue = Channel<AnalysisSample>(1, BufferOverflow.DROP_OLDEST)
                 scanQueue = queue
-                _state.update { it.copy(scanSession = session) }
+                _state.update { it.copy(scanSession = session, notice = null) }
                 scanTimer = viewModelScope.launch {
                     while (isActive) {
                         delay(250)
@@ -437,7 +466,7 @@ class VlmCameraViewModel @Inject constructor(
         val previous = scanWork
         previous?.cancel()
         val precedingCleanup = cleanupWork
-        cleanupWork = viewModelScope.launch { previous?.join(); previousWork?.join(); previousRender?.join(); previousFace?.join(); precedingCleanup?.join(); sessions.clear() }
+        cleanupWork = viewModelScope.launch { previous?.join(); previousWork?.join(); previousRender?.join(); previousFace?.join(); precedingCleanup?.join(); local.awaitIdle(); sessions.clear() }
         _state.update { it.copy(stage = VlmStage.LIVE, scanSession = null, scanSnapshot = null, scene = null,
             scanProgress = ScanProgress(), viewCandidates = emptyList(), selectedFrameId = null, comparedFrames = 0, manualScanSelectionVisible = false,
             result = null, diagnostics = null, previews = emptyMap(), reference = null, referencePlan = null,
@@ -457,6 +486,7 @@ class VlmCameraViewModel @Inject constructor(
         Log.i("VlmScan", "选景状态开始 scan=${scan.session.id.take(8)} token=${token.take(8)} mode=${s.settings.mode} stage=${_state.value.stage} cachedFrames=${scan.frames.size} scenePresent=${s.scene != null}")
         work = viewModelScope.launch {
             try {
+                if (s.settings.mode == ModelMode.OFFLINE) awaitPreviousNative(token)
                 val selected = if (s.settings.mode == ModelMode.OFFLINE)
                     OfflineScanViewAgent(scanLogger).select(scan, s.instruction, OfflineViewInference(local::compareViews))
                 else ScanViewAgent().select(scan, s.settings, s.instruction, sessions.budget)
@@ -554,15 +584,20 @@ class VlmCameraViewModel @Inject constructor(
     private fun compose(revise: Boolean) {
         val previous = _state.value
         val scene = previous.scene ?: return
-        if (previous.modelBusy || previous.saving || previous.stage in listOf(VlmStage.GENERATING, VlmStage.MODIFYING, VlmStage.FREEZING, VlmStage.SCANNING, VlmStage.SCAN_PROCESSING, VlmStage.VIEW_SELECTING)) return
+        if (!previous.canGenerate || revise && previous.stage != VlmStage.READY) return
         if (revise && (previous.result == null || previous.selectedId == null)) return
+        val previousWork = work; val previousRender = renderWork; val previousFace = faceWork
         cancelWork()
         val token = requestToken
         val input = inputFor(previous, if (revise) previous.result!!.plans else emptyList(), if (revise) previous.selectedId else null)
         Log.i(LOG_TAG, "启动${if (revise) "修改方案" else "生成方案"}任务 token=${token.take(8)} image=${scene.id.take(8)} mode=${previous.settings.mode} modelStatus=${previous.modelStatus}")
-        _state.update { it.copy(stage = if (revise) VlmStage.MODIFYING else VlmStage.GENERATING, error = null, notice = null, directorProgress = DirectorProgress.PreparingRequest, facePreview = null) }
+        _state.update { it.copy(stage = if (revise) VlmStage.MODIFYING else VlmStage.GENERATING, error = null,
+            notice = if (local.isInferenceRunning) models.message(R.string.vlm_flow_waiting_native) else null,
+            directorProgress = if (local.isInferenceRunning) DirectorProgress.WaitingPreviousTask else DirectorProgress.PreparingRequest, facePreview = null) }
         work = viewModelScope.launch {
             try {
+                previousWork?.join(); previousRender?.join(); previousFace?.join()
+                awaitPreviousNative(token)
                 val result = repository.compose(input, previous.settings, previews) { progress ->
                     if (token == requestToken) {
                         Log.i(LOG_TAG, "构图步骤 token=${token.take(8)} image=${scene.id.take(8)} progress=$progress")
@@ -591,6 +626,19 @@ class VlmCameraViewModel @Inject constructor(
                 if (token == requestToken) _state.update { it.copy(stage = if (it.result == null) VlmStage.FROZEN else VlmStage.READY, error = message, diagnostics = (e as? ModelFailure)?.diagnostics, directorProgress = null) }
             }
         }
+    }
+
+    private suspend fun awaitPreviousNative(token: String) {
+        val waiting = local.isInferenceRunning
+        val handoffAt = SystemClock.elapsedRealtime()
+        if (waiting && token == requestToken) _state.update { it.copy(notice = models.message(R.string.vlm_flow_waiting_native),
+            directorProgress = if (it.stage in listOf(VlmStage.GENERATING, VlmStage.MODIFYING)) DirectorProgress.WaitingPreviousTask else it.directorProgress) }
+        local.awaitIdle()
+        currentCoroutineContext().ensureActive()
+        if (waiting) Log.i(LOG_TAG, "旧推理交接结束 token=${token.take(8)} waitingMs=${SystemClock.elapsedRealtime() - handoffAt} stale=${token != requestToken}")
+        if (token == requestToken) _state.update { it.copy(
+            notice = it.notice.takeUnless { message -> message == models.message(R.string.vlm_flow_waiting_native) },
+            directorProgress = if (it.directorProgress == DirectorProgress.WaitingPreviousTask) DirectorProgress.PreparingRequest else it.directorProgress) }
     }
 
     /** 修改当前方案布局并节流刷新预览。
@@ -750,12 +798,13 @@ class VlmCameraViewModel @Inject constructor(
      */
     private fun maintain(label: String, operation: suspend () -> Unit) {
         if (busy()) { _state.update { it.copy(error = "请先结束当前构图或拍摄，再管理模型") }; return }
+        maintenanceBusy = true
         _state.update { it.copy(modelBusy = true, modelStatus = label, error = null) }
         maintenance = viewModelScope.launch {
             try { operation() }
             catch (cancel: CancellationException) { throw cancel }
             catch (e: Exception) { _state.update { it.copy(error = if (e is ModelFailure) e.message else models.errorMessage(e)) } }
-            finally { _state.update { it.copy(modelBusy = false, modelStatus = if (modelLoaded) models.message(R.string.vlm_model_loaded) else models.description()) } }
+            finally { maintenanceBusy = false; _state.update { it.copy(modelBusy = local.loadState.value.phase == LocalModelPhase.LOADING, modelStatus = modelDescription()) } }
         }
     }
 
@@ -786,6 +835,7 @@ class VlmCameraViewModel @Inject constructor(
         // ViewModel 的作用域已销毁；等文件读取和串行分析退出后删除本地扫描资源。
         CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
             retiring.forEach { it.join() }
+            local.awaitIdle()
             sessions.dispose()
         }
         super.onCleared()

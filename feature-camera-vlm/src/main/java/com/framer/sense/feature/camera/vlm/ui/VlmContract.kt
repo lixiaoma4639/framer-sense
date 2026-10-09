@@ -64,6 +64,13 @@ data class VlmUiState(
     val directorProgress: DirectorProgress? = null,
     val photoSample: PhotoSampleState? = null
 ) {
+    /** 重启业务允许取消生成／扫描，但不能打断模型管理、保存或样片资源操作。 */
+    val canRestartScan: Boolean
+        get() = !modelBusy && !saving && !settingsVisible && photoSample == null && (cameraReady || stage != VlmStage.LIVE)
+    val canGenerate: Boolean
+        get() = !modelBusy && !saving && !settingsVisible && photoSample == null && scene != null &&
+            stage in listOf(VlmStage.FROZEN, VlmStage.READY, VlmStage.GENERATING, VlmStage.MODIFYING)
+
     /** 实时画面不因离线模型加载而降帧；冻结分析时才降低后台绘制频率。 */
     val requiresLivePreview: Boolean
         get() = photoSample == null && stage in listOf(VlmStage.LIVE, VlmStage.SCANNING, VlmStage.FREEZING)

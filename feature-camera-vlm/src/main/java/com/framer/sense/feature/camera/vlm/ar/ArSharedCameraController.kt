@@ -72,7 +72,7 @@ class ArSharedCameraController(private val context: Context,
     private var heading = 0f
     private var manualAnchor = false
     private var planKey: String? = null
-    private var automaticPlacementTried = false
+    private val placementRetry = ArPlacementRetry()
     private var lastSampleNs = 0L
     private var sampleTarget: String? = null
     private var sampleBoundary = Long.MIN_VALUE
@@ -128,12 +128,15 @@ class ArSharedCameraController(private val context: Context,
     } }
     fun tap(x: Float, y: Float) { handler.post {
         val current = frame ?: return@post
-        if (request.backgroundConfirmed && request.plan != null && current.camera.trackingState == TrackingState.TRACKING)
-            place(current, x, y, true)
+        val wanted = request
+        val plan = wanted.plan ?: return@post
+        if (wanted.backgroundConfirmed && current.camera.trackingState == TrackingState.TRACKING)
+            place(current, x, y, true, plan)
     } }
     private fun configured() { configVersion = com.framer.sense.feature.camera.vlm.camera.CameraConfigVersions.next(); val v = configVersion; main.post { if (!disposed) onConfigured(v) } }
     private fun state(status: ArTrackingState, depth: Boolean = false) {
-        val value = ArUiState(ArSource.SHARED_CAMERA, status, sessionId.ifBlank { null }, depth, manualAnchor)
+        val value = ArUiState(ArSource.SHARED_CAMERA, status, sessionId.ifBlank { null }, depth, manualAnchor,
+            planKey.takeIf { status == ArTrackingState.PLACED })
         if (value != lastState) { lastState = value; Log.i("VlmAr", "空间状态 session=${sessionId.take(8)} tracking=$status depth=$depth manual=$manualAnchor"); main.post { if (!disposed) onState(value) } }
     }
     @SuppressLint("MissingPermission")
@@ -328,17 +331,25 @@ class ArSharedCameraController(private val context: Context,
                 if (surface?.isValid != true) performance.count("invalidSurface")
                 if (current.timestamp != 0L && surface?.isValid == true) {
                     val wanted = request
-                    val key = wanted.plan?.let { "${it.id}:${it.revision}:${it.resolvedSpec?.action?.cacheIdentity()}" }
-                    if (key != planKey) { invalidateAnchor(); planKey = key; gate.plan(key); automaticPlacementTried = false }
+                    val key = wanted.plan?.arReferenceKey()
+                    if (key != planKey) { invalidateAnchor(); planKey = key; gate.plan(key) }
                     val tracking = current.camera.trackingState == TrackingState.TRACKING
-                    if (!tracking) { invalidateAnchor(); automaticPlacementTried = false; scene!!.hide(); state(ArTrackingState.LOST) }
+                    if (!tracking) { invalidateAnchor(); scene!!.hide(); state(ArTrackingState.LOST) }
                     else {
                         val loadStart = SystemClock.elapsedRealtimeNanos()
                         wanted.plan?.let { scene!!.load(it) }
                         performance.time("poseLoad",SystemClock.elapsedRealtimeNanos()-loadStart)
-                        if (wanted.backgroundConfirmed && wanted.plan != null && anchor == null && !automaticPlacementTried) {
-                            automaticPlacementTried = true
-                            ArGeometry.suggestedGround(wanted.plan)?.let { foot -> place(current, foot.x * width, foot.y * height, false) }
+                        if (!wanted.backgroundConfirmed) {
+                            if (anchor != null) invalidateAnchor()
+                            placementRetry.reset()
+                        } else if (wanted.plan != null) {
+                            if (anchor?.trackingState == TrackingState.STOPPED) invalidateAnchor()
+                            if (anchor == null && placementRetry.shouldAttempt(SystemClock.elapsedRealtimeNanos())) {
+                                val foot = ArGeometry.suggestedGround(wanted.plan)
+                                val placed = foot?.let { place(current, it.x * width, it.y * height, false, wanted.plan) } == true
+                                if (!placed && (placementRetry.attempts == 1 || placementRetry.attempts % 5 == 0))
+                                    Log.i("VlmAr", "等待地面落点 plan=$planKey attempt=${placementRetry.attempts} reason=${if (foot == null) "FOOT_OUTSIDE_VIEW" else "NO_VALID_GROUND"} screenReference=true")
+                            }
                         }
                     }
                     val model = if (tracking && wanted.backgroundConfirmed && anchor?.trackingState == TrackingState.TRACKING)
@@ -350,7 +361,7 @@ class ArSharedCameraController(private val context: Context,
                     performance.time("submit",renderTiming.submitNs); performance.time("gpuWait",renderTiming.waitNs)
                     performance.count(if (renderTiming.submitted) "submitted" else "skippedDraw")
                     if (renderTiming.submitted) queueOutputProbe()
-                    if (tracking) state(if (model != null) ArTrackingState.PLACED else if (wanted.backgroundConfirmed && wanted.plan != null) ArTrackingState.NEEDS_GROUND else ArTrackingState.TRACKING, depth)
+                    if (tracking) state(if (model != null && scene!!.avatarPresented) ArTrackingState.PLACED else if (wanted.backgroundConfirmed && wanted.plan != null) ArTrackingState.NEEDS_GROUND else ArTrackingState.TRACKING, depth)
                     val now = SystemClock.elapsedRealtimeNanos()
                     val analysisStart = SystemClock.elapsedRealtimeNanos()
                     if (wanted.sampling && wanted.targetId != null && now - lastSampleNs >= if (wanted.startedNs != null) ScanLimits.SAMPLE_INTERVAL_NS else BackgroundMatchPolicy.ANALYSIS_INTERVAL_NS) {
@@ -383,19 +394,22 @@ class ArSharedCameraController(private val context: Context,
             handler.postDelayed(this,delay)
         }
     }
-    private fun invalidateAnchor() { gate.invalidate(); anchor?.detach(); anchor = null; scene?.hide(); manualAnchor = false }
-    private fun place(current: Frame, x: Float, y: Float, manual: Boolean) {
+    private fun invalidateAnchor() { gate.invalidate(); anchor?.detach(); anchor = null; scene?.hide(); manualAnchor = false; placementRetry.reset() }
+    private fun place(current: Frame, x: Float, y: Float, manual: Boolean, plan: CompositionPlan): Boolean {
+        val key = planKey ?: return false
+        if (key != plan.arReferenceKey()) return false
         val hit = current.hitTest(x, y).firstOrNull { value ->
             val plane = value.trackable as? Plane
             plane != null && plane.trackingState == TrackingState.TRACKING && plane.type == Plane.Type.HORIZONTAL_UPWARD_FACING &&
                 plane.isPoseInPolygon(value.hitPose) && value.distance in .4f..15f
-        } ?: return
-        val key = planKey ?: return
-        if (!gate.place(sessionId, key)) return
-        invalidateAnchor(); anchor = hit.createAnchor(); gate.place(sessionId, key); manualAnchor = manual
+        } ?: return false
+        if (!gate.place(sessionId, key)) return false
+        val next = hit.createAnchor()
+        invalidateAnchor(); anchor = next; gate.place(sessionId, key); manualAnchor = manual
         val camera = current.camera.pose.translation; val target = hit.hitPose.translation
-        heading = Math.toDegrees(atan2((camera[0] - target[0]).toDouble(), (camera[2] - target[2]).toDouble())).toFloat() + (request.plan?.avatar?.yaw ?: 0f)
+        heading = Math.toDegrees(atan2((camera[0] - target[0]).toDouble(), (camera[2] - target[2]).toDouble())).toFloat() + plan.avatar.yaw
         Log.i("VlmAr", "地面落点 session=${sessionId.take(8)} plan=$planKey manual=$manual")
+        return true
     }
     private fun config(current: Frame, image: Image): ScanCameraConfig {
         val corners = FloatArray(8)

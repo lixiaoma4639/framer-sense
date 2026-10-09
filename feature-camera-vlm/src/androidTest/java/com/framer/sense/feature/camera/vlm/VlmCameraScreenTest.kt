@@ -11,6 +11,7 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.assertIsNotEnabled
+import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.performScrollToNode
@@ -28,6 +29,19 @@ import org.junit.Test
 /** 验证导演加载遮罩展示当前真实步骤，而不是旧的通用固定文案。 */
 class VlmCameraScreenTest {
     @get:Rule val composeRule = createComposeRule()
+
+    @Test fun restartActionsRemainAvailableDuringGenerationButNotModelManagement() {
+        val state = mutableStateOf(VlmUiState(stage = VlmStage.GENERATING,
+            scene = SceneSnapshot("scene",640,480,1f,"/scene","/input")))
+        val events = mutableListOf<VlmIntent>()
+        composeRule.setContent { MaterialTheme { Controls(state.value,{ events += it },{},Modifier.fillMaxWidth()) } }
+        composeRule.onNodeWithTag("vlm_generate").assertIsEnabled().performClick()
+        composeRule.onNodeWithTag("vlm_scan_restart_active").assertIsEnabled().performClick()
+        assertEquals(listOf(VlmIntent.Generate,VlmIntent.StartScan), events)
+        composeRule.runOnIdle { state.value = state.value.copy(modelBusy = true) }
+        composeRule.onNodeWithTag("vlm_generate").assertIsNotEnabled()
+        composeRule.onNodeWithTag("vlm_scan_restart_active").assertIsNotEnabled()
+    }
 
     @Test fun allThreeCompositionChoicesAreVisibleWithoutExpanding() {
         val plans = (1..3).map { CompositionPlan("p$it", "方案$it", ShotType.FULL, CropRect(), 1f,

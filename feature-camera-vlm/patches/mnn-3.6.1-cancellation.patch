@@ -1,0 +1,286 @@
+--- a/transformers/llm/engine/include/llm/llm.hpp
++++ b/transformers/llm/engine/include/llm/llm.hpp
+@@ -150,6 +150,11 @@
+     std::vector<Express::VARP> getOutputs() const;
+     int getOutputIndex(const std::string& name) const;
+     void reset();
++    // Framer Sense: cooperative CPU cancellation; callback is bound only on the inference thread.
++    void setCancelCallback(std::function<bool()> callback);
++    virtual void resetCancelledRequest();
++    size_t cancellationOperatorChecks() const { return mCancelOperatorChecks; }
++    bool cancellationGraphActive() const { return mCancelGraphActive; }
+     void tuning(TuneType type, std::vector<int> candidates);
+     virtual std::vector<Express::VARP> forwardRaw(Express::VARP hiddenState, Express::VARP mask, Express::VARP inputPos, Express::VARPS extraArgs = {});
+     Express::VARP forward(const std::vector<int>& input_ids, bool is_prefill = true);
+@@ -198,6 +203,12 @@
+     virtual void setWavformCallback(std::function<bool(const float*, size_t, bool)> callback) {}
+     virtual void generateWavform() {}
+ protected:
++    bool checkCancelled();
++    std::vector<Express::VARP> forwardCancelable(Express::Module* module, const std::vector<Express::VARP>& inputs);
++    std::function<bool()> mCancelCallback;
++    size_t mCancelOperatorChecks = 0;
++    bool mCancelGraphActive = false;
++    bool mCancelCallbacksInstalled = false;
+     void setChatTemplate();
+     void initRuntime();
+     void setRuntimeHint(std::shared_ptr<Express::Executor::RuntimeManager> &rtg, bool mllm = false);
+--- a/transformers/llm/engine/src/llm.cpp
++++ b/transformers/llm/engine/src/llm.cpp
+@@ -153,11 +153,91 @@
+     return true;
+ }
+ 
++// Framer Sense: use the upstream callback stop path, never throw inside a backend execution.
++bool Llm::checkCancelled() {
++    if (mContext->status == LlmStatus::USER_CANCEL) return true;
++    if (mCancelCallback && mCancelCallback()) {
++        mContext->status = LlmStatus::USER_CANCEL;
++        return true;
++    }
++    return false;
++}
++
++void Llm::setCancelCallback(std::function<bool()> callback) {
++    mCancelCallback = std::move(callback);
++    if (!mCancelCallbacksInstalled) {
++        // Install before load: StaticModule snapshots Session_Debug when the graph is created.
++        setDebugCallback(
++            [this](const std::vector<Tensor*>&, const OperatorInfo*) {
++                if (!mCancelGraphActive) return true;
++                ++mCancelOperatorChecks;
++                return !checkCancelled();
++            },
++            [this](const std::vector<Tensor*>&, const OperatorInfo*) {
++                if (!mCancelGraphActive) return true;
++                ++mCancelOperatorChecks;
++                return !checkCancelled();
++            });
++        mCancelCallbacksInstalled = true;
++    }
++}
++
++std::vector<Express::VARP> Llm::forwardCancelable(Express::Module* module, const std::vector<Express::VARP>& inputs) {
++    if (checkCancelled()) return {};
++    // Complete input preprocessing outside the abortable graph. CV/Express callers may not
++    // handle null readMap results; they must not be interrupted by the operator callback.
++    for (const auto& input : inputs) {
++        if (checkCancelled()) return {};
++        if (input.get() == nullptr || !input->readMap<void>()) {
++            if (mContext->status != LlmStatus::USER_CANCEL) mContext->status = LlmStatus::INTERNAL_ERROR;
++            return {};
++        }
++    }
++    if (checkCancelled()) return {};
++    struct GraphScope {
++        bool& active;
++        bool previous;
++        GraphScope(bool& flag) : active(flag), previous(flag) { active = true; }
++        ~GraphScope() { active = previous; }
++    } scope(mCancelGraphActive);
++    auto outputs = module->onForward(inputs);
++    if (checkCancelled()) return {};
++    if (outputs.empty()) {
++        if (mContext->status != LlmStatus::USER_CANCEL) mContext->status = LlmStatus::INTERNAL_ERROR;
++        return {};
++    }
++    for (const auto& output : outputs) {
++        if (output.get() == nullptr || !output->getInfo() || !output->readMap<void>()) {
++            if (!checkCancelled()) mContext->status = LlmStatus::INTERNAL_ERROR;
++            return {};
++        }
++        if (checkCancelled()) return {};
++    }
++    return outputs;
++}
++
++void Llm::resetCancelledRequest() {
++    Express::ExecutorScope scope(mExecutor);
++    reset();
++    // previous == remove makes every CPU attention layer reallocate its KV cache on the
++    // next prefill, including layers that wrote partial KV before CALL_BACK_STOP.
++    setKVCacheInfo(0, getCurrentHistory());
++    generate_init(nullptr, "");
++    mGenerateParam->outputs.clear();
++    mGenerateParam->input_embeds = nullptr;
++    mGenerateParam->validLogitSize = 0;
++    mGenerateParam->validLogitStart = 0;
++    inputsEmbeds = nullptr;
++    mPleInput = nullptr;
++    mTextEmbedsForPle = nullptr;
++}
++
+ void Llm::setDebugCallback(MNN::TensorCallBackWithInfo&& before, MNN::TensorCallBackWithInfo&& after) {
+     mExecutor->setCallBack(std::move(before), std::move(after));
+ }
+ 
+ void Llm::setRuntimeHint(std::shared_ptr<Express::Executor::RuntimeManager> &rtg, bool mllm) {
++    if (mCancelCallbacksInstalled) rtg->setMode(MNN::Interpreter::Session_Debug);
+     rtg->setHint(MNN::Interpreter::INIT_THREAD_NUMBER, 4);
+ 
+     rtg->setHint(MNN::Interpreter::MEM_ALLOCATOR_TYPE, 0);
+@@ -568,16 +648,16 @@
+     mGenerateParam->validLogitStart = 0;
+     std::vector<Express::VARP> inputs {hiddenState, mask, inputPos, logitsIndex};
+     inputs.insert(inputs.end(), extraArgs.begin(), extraArgs.end());
+-    std::vector<Express::VARP> outputs = selectModule->onForward(inputs);
++    std::vector<Express::VARP> outputs = forwardCancelable(selectModule.get(), inputs);
+ 
+     if (outputs.empty()) {
+-        mContext->status = LlmStatus::INTERNAL_ERROR;
++        if (mContext->status != LlmStatus::USER_CANCEL) mContext->status = LlmStatus::INTERNAL_ERROR;
+         return outputs;
+     }
+     // Validate output VARP and readMap
+     for (auto o : outputs) {
+         if(nullptr == o || nullptr == o->readMap<float>()) {
+-            mContext->status = LlmStatus::INTERNAL_ERROR;
++            if (mContext->status != LlmStatus::USER_CANCEL) mContext->status = LlmStatus::INTERNAL_ERROR;
+             return outputs;
+         }
+     }
+@@ -978,6 +1058,7 @@
+         multimodal_input_copy.prompt_template = apply_chat_template(multimodal_input_copy.prompt_template);
+     }
+     std::vector<int> input_ids = tokenizer_encode(multimodal_input_copy);
++    if (checkCancelled() || mContext->status == LlmStatus::INTERNAL_ERROR) return;
+     response(input_ids, os, end_with, max_new_tokens);
+ }
+ 
+@@ -998,7 +1079,7 @@
+     Timer _t;
+     auto outputs = forwardVec(input_embeds);
+     if(mGenerateParam->outputs.size() < 1) {
+-        mContext->status = LlmStatus::INTERNAL_ERROR;
++        if (mContext->status != LlmStatus::USER_CANCEL) mContext->status = LlmStatus::INTERNAL_ERROR;
+         return {};
+     }
+     updateContext(seqLen, 0);
+@@ -1098,6 +1179,7 @@
+         }
+     }
+     std::vector<int> input_ids = tokenizer_encode(prompt);
++    if (checkCancelled() || mContext->status == LlmStatus::INTERNAL_ERROR) return;
+     response(input_ids, os, end_with, max_new_tokens);
+ }
+ 
+--- a/transformers/llm/engine/src/omni.hpp
++++ b/transformers/llm/engine/src/omni.hpp
+@@ -151,6 +151,7 @@
+         mAudioModule.reset();
+     }
+     virtual bool load() override;
++    void resetCancelledRequest() override;
+     virtual std::vector<Express::VARP> forwardRaw(Express::VARP hiddenState, Express::VARP mask, Express::VARP inputPos, Express::VARPS extraArgs) override;
+     virtual std::vector<int> tokenizer_encode(const std::string& query) override;
+     virtual std::vector<int> tokenizer_encode(const MultimodalPrompt& multimodal_input) override;
+--- a/transformers/llm/engine/src/omni.cpp
++++ b/transformers/llm/engine/src/omni.cpp
+@@ -98,6 +98,19 @@
+     }
+ }
+ 
++void Omni::resetCancelledRequest() {
++    Express::ExecutorScope scope(mExecutor);
++    Llm::resetCancelledRequest();
++    mVisionEmbeddings.clear();
++    mAudioEmbeddings.clear();
++    mDeepStackEmbeddings.clear();
++    mPositionIds.clear();
++    mVisionNum = 0;
++    if (mConfig->has_deepstack() && mExtraArgs.size() == 1) {
++        mExtraArgs[0] = Express::_Fill(_var<int>({3, 1, 1}, {3}), _Scalar<float>(0.0));
++    }
++}
++
+ bool Omni::load() {
+     MNN::Express::ExecutorScope s(mExecutor);
+     auto res = Llm::load();
+@@ -181,7 +194,9 @@
+                             mVisionMean, mVisionNorm);
+     image = Express::_Unsqueeze(image, {0});
+     image = Express::_Convert(image, NC4HW4);
+-    auto imageEmbedding = mVisionModule->forward(image);
++    auto imageEmbeddingOutputs = forwardCancelable(mVisionModule.get(), {image});
++    if (imageEmbeddingOutputs.empty()) return {};
++    auto imageEmbedding = imageEmbeddingOutputs[0];
+ 
+     mVisionEmbeddings.push_back(imageEmbedding);
+     int visionLen = imageEmbedding->getInfo()->dim[0];
+@@ -283,7 +298,8 @@
+     posIds = Express::_Unsqueeze(posIds, {0});
+ 
+     // Run vision model (outputs fixed max_soft_tokens)
+-    auto outputs = mVisionModule->onForward({image, posIds});
++    auto outputs = forwardCancelable(mVisionModule.get(), {image, posIds});
++    if (outputs.empty()) return {};
+     auto imageEmbedding = outputs[0];
+ 
+     // Squeeze batch dim: [1, max_soft_tokens, hidden] -> [max_soft_tokens, hidden]
+@@ -488,7 +504,8 @@
+     attention_mask->setName("attention_mask");
+     MNN::Express::Variable::save({patches, position_ids, attention_mask}, "input.mnn");
+ #endif
+-    auto outputs = mVisionModule->onForward(moduleInputs);
++    auto outputs = forwardCancelable(mVisionModule.get(), moduleInputs);
++    if (outputs.empty()) return {};
+     auto imageEmbedding = outputs[0];
+     if (outputs.size() == 2) {
+         mDeepStackEmbeddings.push_back(outputs[1]);
+@@ -515,7 +532,9 @@
+     globalImage = Express::_Unsqueeze(globalImage, {0});
+     globalImage = Express::_Convert(globalImage, NCHW);
+     // Forward global image first to determine visionLen dynamically
+-    auto globalEmbedding = mVisionModule->forward(globalImage);
++    auto globalEmbeddingOutputs = forwardCancelable(mVisionModule.get(), {globalImage});
++    if (globalEmbeddingOutputs.empty()) return {};
++    auto globalEmbedding = globalEmbeddingOutputs[0];
+     auto globalDims = globalEmbedding->getInfo()->dim;
+     // globalEmbedding shape: (1, visionLen, 1, hidden) or (visionLen, 1, hidden)
+     int visionLen = (globalDims.size() >= 3) ? globalDims[globalDims.size() - 3] : globalDims[0];
+@@ -557,7 +576,9 @@
+             mVisionSizeUnit,
+             mVisionSizeUnit
+         });
+-        auto imageEmbedding = mVisionModule->forward(patches);
++        auto imageEmbeddingOutputs = forwardCancelable(mVisionModule.get(), {patches});
++        if (imageEmbeddingOutputs.empty()) return {};
++        auto imageEmbedding = imageEmbeddingOutputs[0];
+         auto embeddingDims = imageEmbedding->getInfo()->dim;
+         for (int i = 0; i < embeddingDims[0]; i++) {
+             auto embedding = _Squeeze(_GatherV2(imageEmbedding, _var<int>({i}, {1}), _var<int>({0}, {1})), {0});
+@@ -751,7 +772,9 @@
+     // tgt size
+     auto tgt_sizes = Express::_Input({B, 2}, NCHW, halide_type_of<int>());
+     ::memcpy(tgt_sizes->writeMap<int>(), tgtSize.data(), tgtSize.size() * sizeof(int));
+-    auto imageEmbedding = mVisionModule->onForward({pixel_values, position_ids, attention_mask, tgt_sizes})[0];
++    auto outputs = forwardCancelable(mVisionModule.get(), {pixel_values, position_ids, attention_mask, tgt_sizes});
++    if (outputs.empty()) return {};
++    auto imageEmbedding = outputs[0];
+     for (int i = 0; i < B; i++) {
+         auto embedding = _Permute(_GatherV2(imageEmbedding, _var<int>({i}, {1}), _var<int>({0}, {1})), {1, 0, 2});
+         mVisionEmbeddings.push_back(embedding);
+@@ -1028,6 +1051,7 @@
+ }
+ 
+ std::vector<int> Omni::tokenizer_encode(const MultimodalPrompt& multimodal_input) {
++    if (checkCancelled()) return {};
+     std::string prompt = multimodal_input.prompt_template;
+     // MNN_PRINT("tokenizer_encode(MultimodalPrompt) prompt: %s", prompt.c_str());
+     std::regex multimode_regex("<(img|audio)>(.*?)</\\1>");
+@@ -1037,6 +1061,7 @@
+     mPositionIds.clear();
+ 
+     while (std::regex_search(searchStart, prompt.cend(), match, multimode_regex)) {
++        if (checkCancelled()) return {};
+         auto txt_ids = mTokenizer->encode(match.prefix().str());
+         addPositionIds(txt_ids.size());
+         ids.insert(ids.end(), txt_ids.begin(), txt_ids.end());
+@@ -1051,6 +1076,7 @@
+             // MNN_PRINT("tokenizer_encode(MultimodalPrompt) audio mul_ids size: %lu", mul_ids.size());
+         }
+ 
++        if (checkCancelled() || mContext->status == LlmStatus::INTERNAL_ERROR) return {};
+         ids.insert(ids.end(), mul_ids.begin(), mul_ids.end());
+         searchStart = match.suffix().first;
+     }

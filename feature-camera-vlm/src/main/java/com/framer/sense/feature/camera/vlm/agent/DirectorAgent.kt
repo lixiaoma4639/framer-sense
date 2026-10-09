@@ -19,6 +19,7 @@ data class PreviewInspection(
 sealed interface DirectorProgress {
     /** 正在整理冻结画面、用户要求和已有校验结果。 */
     data object PreparingRequest : DirectorProgress
+    data object WaitingPreviousTask : DirectorProgress
 
     /** 正在等待模型分析或根据上一轮校验修正方案。 */
     data class AnalyzingScene(val turn: Int, val revisingFromFeedback: Boolean) : DirectorProgress

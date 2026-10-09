@@ -27,9 +27,12 @@ import androidx.compose.material3.Surface
 import androidx.compose.ui.Modifier
 import dagger.hilt.android.AndroidEntryPoint
 import com.framer.sense.core.ui.MyApplicationTheme
+import com.framer.sense.feature.camera.vlm.data.MnnProvider
+import javax.inject.Inject
 
 @AndroidEntryPoint
 class MainActivity : ComponentActivity() {
+    @Inject lateinit var localModel: MnnProvider
 
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge(
@@ -39,6 +42,7 @@ class MainActivity : ComponentActivity() {
             )
         )
         super.onCreate(savedInstanceState)
+        localModel.preloadOnAppStart()
         setContent {
             MyApplicationTheme {
                 Surface(

@@ -144,6 +144,62 @@ class ModelDownloadRepositoryTest {
         } finally { bitmap.recycle() }
     }
 
+    @Test fun homepageWarmupAndRepeatedCameraLoadsShareOneNativeInitialization() = runBlocking<Unit> {
+        val root = File(InstrumentationRegistry.getInstrumentation().targetContext.cacheDir, UUID.randomUUID().toString()).apply { mkdirs() }
+        val store = LocalModelStore(context(root))
+        val installed = fixture(store,"active"); store.activate(installed)
+        val calls = java.util.concurrent.atomic.AtomicInteger()
+        val release = java.util.concurrent.CountDownLatch(1)
+        val native = object : MnnRuntime by runtime(AtomicBoolean(false)) {
+            override fun load(path: String): Long {
+                calls.incrementAndGet()
+                check(release.await(5, java.util.concurrent.TimeUnit.SECONDS))
+                return 1L
+            }
+        }
+        val provider = MnnProvider(store, { arrayOf("arm64-v8a") }, native)
+        try {
+            provider.preloadOnAppStart(); provider.preloadOnAppStart()
+            withTimeout(5_000) { provider.loadState.first { it.phase == LocalModelPhase.LOADING } }
+            val camera = async { provider.load() }
+            release.countDown(); camera.await()
+            provider.load(); provider.awaitIdle()
+            assertEquals(LocalModelPhase.READY, provider.loadState.value.phase)
+            assertEquals(installed.path, provider.loadState.value.path)
+            assertEquals(1, calls.get())
+            provider.unload(); provider.preloadOnAppStart(); provider.awaitIdle()
+            assertEquals(LocalModelPhase.UNLOADED, provider.loadState.value.phase)
+            assertEquals(1, calls.get())
+        } finally { release.countDown(); provider.unload(); root.deleteRecursively() }
+    }
+
+    @Test fun cancellationWaitsForOldNativeExitAndPreservesLoadedModel() = runBlocking<Unit> {
+        val root = File(InstrumentationRegistry.getInstrumentation().targetContext.cacheDir, UUID.randomUUID().toString()).apply { mkdirs() }
+        val store = LocalModelStore(context(root)); store.activate(fixture(store,"active"))
+        val images = viewImages(root,1)
+        val entered = CompletableDeferred<AtomicBoolean>()
+        val release = java.util.concurrent.CountDownLatch(1)
+        val native = object : MnnRuntime by runtime(AtomicBoolean(false)) {
+            override fun inferImages(handle: Long, images: List<String>, prompt: ByteArray, cancel: AtomicBoolean, onToken: () -> Unit): ByteArray {
+                entered.complete(cancel)
+                check(release.await(5, java.util.concurrent.TimeUnit.SECONDS))
+                return "1".toByteArray()
+            }
+        }
+        val provider = MnnProvider(store, { arrayOf("arm64-v8a") }, native)
+        try {
+            val old = launch { provider.compareViews(images,"compare") }
+            val cancellation = withTimeout(5_000) { entered.await() }
+            old.cancelAndJoin(); assertTrue(cancellation.get())
+            val barrier = async { provider.awaitIdle() }
+            yield(); assertFalse(barrier.isCompleted)
+            release.countDown(); withTimeout(5_000) { barrier.await() }
+            assertFalse(provider.isInferenceRunning)
+            assertEquals(LocalModelPhase.READY, provider.loadState.value.phase)
+            assertEquals("1", provider.compareViews(images,"compare").raw)
+        } finally { release.countDown(); provider.unload(); root.deleteRecursively() }
+    }
+
     /** 四张图片独立传入运行时，缩小副本与原图隔离，不读取云端预算。 */
     @Test fun offlineSelectionPassesFourPrivateImagesAndCleansCopies() = runBlocking<Unit> {
         val root = File(InstrumentationRegistry.getInstrumentation().targetContext.cacheDir, UUID.randomUUID().toString()).apply { mkdirs() }
@@ -175,7 +231,7 @@ class ModelDownloadRepositoryTest {
         } finally { provider.unload(); store.delete(); root.deleteRecursively() }
     }
 
-    /** 取消只丢弃回传；图片副本必须保留到原生推理安全退出。 */
+    /** 不响应取消的运行时仍需串行交接，图片副本保留到原生安全退出。 */
     @Test fun cancelledOfflineSelectionKeepsCopiesUntilNativeExit() = runBlocking<Unit> {
         val root = File(InstrumentationRegistry.getInstrumentation().targetContext.cacheDir, UUID.randomUUID().toString()).apply { mkdirs() }
         val store = LocalModelStore(context(root))
@@ -324,6 +380,59 @@ class ModelDownloadRepositoryTest {
             assertEquals(1, releases.get())
             store.delete(); root.deleteRecursively()
         }
+    }
+
+    /** 首 token 之前也传递取消；运行时退出后重用模型，下一轮拥有独立取消标记。 */
+    @Test fun visualPrefillCancellationWithoutTokensAllowsFreshRequestOnSameModel() = runBlocking<Unit> {
+        val root = File(InstrumentationRegistry.getInstrumentation().targetContext.cacheDir, UUID.randomUUID().toString()).apply { mkdirs() }
+        val store = LocalModelStore(context(root))
+        val images = viewImages(root, 4)
+        val entered = CompletableDeferred<AtomicBoolean>()
+        val loads = AtomicInteger()
+        val calls = AtomicInteger()
+        val releases = AtomicInteger()
+        val stopped = AtomicBoolean(false)
+        var previousFlag: AtomicBoolean? = null
+        var oldCopies = emptyList<String>()
+        val native = object : MnnRuntime by runtime(AtomicBoolean(false)) {
+            override fun load(path: String): Long { loads.incrementAndGet(); return 42L }
+            override fun release(handle: Long) { releases.incrementAndGet() }
+            override fun inferImages(handle: Long, images: List<String>, prompt: ByteArray, cancel: AtomicBoolean, onToken: () -> Unit): ByteArray {
+                assertEquals(42L, handle)
+                if (calls.incrementAndGet() == 1) {
+                    oldCopies = images
+                    previousFlag = cancel
+                    entered.complete(cancel)
+                    val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
+                    // 不产生 token，模拟只在视觉算子边界检查取消的运行时。
+                    while (!cancel.get() && System.nanoTime() < deadline) Thread.sleep(1)
+                    assertTrue("视觉预填充应收到取消", cancel.get())
+                    assertTrue(images.all { File(it).isFile })
+                    stopped.set(true)
+                    return byteArrayOf()
+                }
+                assertTrue(stopped.get())
+                assertNotSame(previousFlag, cancel)
+                assertFalse(cancel.get())
+                return "2".toByteArray()
+            }
+        }
+        val provider = MnnProvider(store, { arrayOf("arm64-v8a") }, native)
+        try {
+            store.activate(fixture(store, "active"))
+            val job = launch { provider.compareViews(images, "compare"); fail("取消后不得提交空输出") }
+            val flag = withTimeout(5_000) { entered.await() }
+            job.cancelAndJoin()
+            assertTrue(flag.get())
+            withTimeout(5_000) { provider.awaitIdle() }
+            assertTrue(stopped.get())
+            assertFalse(provider.isInferenceRunning)
+            assertTrue(oldCopies.none { File(it).exists() })
+            assertTrue(images.all { File(it).isFile })
+            assertEquals("2", withTimeout(5_000) { provider.compareViews(images, "retry") }.raw)
+            assertEquals(1, loads.get())
+            assertEquals(0, releases.get())
+        } finally { provider.unload(); store.delete(); root.deleteRecursively() }
     }
 
     /** 加载失败不修改安装，成功后才提交并清理旧文件；无参数。 */
