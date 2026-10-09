@@ -4,7 +4,7 @@ import os
 from dataclasses import dataclass
 from urllib.parse import quote
 import httpx
-from .models import Decision, Provider, StepRequest, ViewRequest, ViewSelection
+from .models import Decision, Provider, StepRequest, ViewRequest, ViewSelection, PhotoStepRequest, PhotoReferenceDecision
 
 
 @dataclass(frozen=True)
@@ -38,7 +38,7 @@ def config_for(provider: Provider) -> ProviderConfig:
 def request_payload(provider: Provider, model: str, request: StepRequest | ViewRequest) -> tuple[str, dict]:
     """构造真实图像请求。参数 provider/model 指定供应商与模型，request 为统一图文输入；返回相对路径和请求体。"""
     multi = isinstance(request, ViewRequest)
-    schema = (ViewSelection if multi else Decision).model_json_schema()
+    schema = (ViewSelection if multi else PhotoReferenceDecision if isinstance(request, PhotoStepRequest) else Decision).model_json_schema()
     images = [(image.frameId, image.imageBase64) for image in request.images] if multi else [(request.imageId, request.imageBase64)]
     content = [{"type": "input_text" if provider == Provider.GPT else "text", "text": request.prompt}]
     parts = [{"text": request.prompt}]

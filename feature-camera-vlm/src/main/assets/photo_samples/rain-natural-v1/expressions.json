@@ -1,0 +1,15 @@
+{
+  "id": "rain-photography-expression-v1",
+  "version": 1,
+  "status": "DRAFT",
+  "defaultIntensity": 1.0,
+  "expressions": {
+    "NEUTRAL": {},
+    "SMILE": {
+      "PhotoSmile": 1.0
+    },
+    "HAPPY": {
+      "PhotoHappy": 1.0
+    }
+  }
+}

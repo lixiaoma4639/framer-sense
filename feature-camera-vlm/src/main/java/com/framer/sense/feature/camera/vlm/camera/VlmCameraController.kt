@@ -22,7 +22,6 @@ import android.os.SystemClock
 import androidx.camera.camera2.interop.Camera2CameraInfo
 import androidx.camera.camera2.interop.ExperimentalCamera2Interop
 import java.util.concurrent.Executors
-import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.asExecutor
@@ -31,6 +30,30 @@ import kotlin.coroutines.resumeWithException
 
 /** 只负责平台相机资源；UI 销毁时必须解绑，不持有 ViewModel。 */
 class VlmCameraController(private val context: Context) {
+    // 相机所有权互斥：AR 回退只能在 CameraDevice.onClosed 后清除这个引用。
+    var ar: com.framer.sense.feature.camera.vlm.ar.ArSharedCameraController? = null
+        private set
+    suspend fun releaseForAr() {
+        val info = camera?.cameraInfo ?: return
+        unbind()
+        kotlinx.coroutines.withTimeout(5_000) {
+            suspendCancellableCoroutine<Unit> { continuation ->
+                val observer = object : androidx.lifecycle.Observer<CameraState> {
+                    override fun onChanged(value: CameraState) {
+                        if (value.type == CameraState.Type.CLOSED) {
+                            info.cameraState.removeObserver(this)
+                            if (continuation.isActive) continuation.resume(Unit)
+                        }
+                    }
+                }
+                info.cameraState.observeForever(observer)
+                continuation.invokeOnCancellation { executor.execute { info.cameraState.removeObserver(observer) } }
+            }
+        }
+    }
+    fun installAr(value: com.framer.sense.feature.camera.vlm.ar.ArSharedCameraController) { check(ar == null && camera == null); ar = value }
+    fun removeAr(value: com.framer.sense.feature.camera.vlm.ar.ArSharedCameraController) { if (ar === value) { ar = null; value.close() } }
+    fun cameraForeground(visible: Boolean) { ar?.foreground(visible) }
     private var bindingEpoch = 0
     private var provider: ProcessCameraProvider? = null
     private var camera: Camera? = null
@@ -40,7 +63,7 @@ class VlmCameraController(private val context: Context) {
     private val analysisExecutor = Executors.newSingleThreadExecutor()
     private val poses = CameraPoseTracker(context)
     fun foreground(visible: Boolean) { if (visible) poses.start() else poses.stop() }
-    fun close() { unbind(); poses.stop(); analysisExecutor.shutdown() }
+    fun close() { ar?.close(); ar = null; unbind(); poses.stop(); analysisExecutor.shutdown() }
     private var zoomOperation: ListenableFuture<Void>? = null
     private val executor = ContextCompat.getMainExecutor(context)
 
@@ -55,6 +78,9 @@ class VlmCameraController(private val context: Context) {
         targetId: String? = null, scanStartedNs: Long? = null,
         sampling: () -> Boolean = { true },
         onConfigured: (Int) -> Unit = {}, onSample: (AnalysisSample) -> Unit = {}): CameraCapabilities {
+        check(ar == null) { "AR_CAMERA_OWNS_DEVICE" }
+        val bindStarted = SystemClock.elapsedRealtime()
+        android.util.Log.i("VlmCamera", "CameraX 绑定开始 view=${view.width}x${view.height} rotation=${view.display?.rotation} target=${targetId?.take(16)} zoom=$initialZoom")
         val epoch = ++bindingEpoch
         val future = ProcessCameraProvider.getInstance(context)
         val instance = suspendCancellableCoroutine<ProcessCameraProvider> { continuation ->
@@ -64,14 +90,14 @@ class VlmCameraController(private val context: Context) {
                 }
             }, executor)
         }
-        if (epoch != bindingEpoch) throw kotlinx.coroutines.CancellationException("旧相机绑定已结束")
+        if (epoch != bindingEpoch || ar != null) throw kotlinx.coroutines.CancellationException("旧相机绑定已结束")
         unbind(invalidatePending = false)
         check(view.width > 0 && view.height > 0) { "相机预览尚未完成布局" }
         val rotation = view.display.rotation
         val p = Preview.Builder().setTargetRotation(rotation).build()
         val c = ImageCapture.Builder().setTargetRotation(rotation).setCaptureMode(ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY).build()
         p.setSurfaceProvider(view.surfaceProvider)
-        val version = versions.incrementAndGet()
+        val version = com.framer.sense.feature.camera.vlm.camera.CameraConfigVersions.next()
         fun bindGroup(resolution: android.util.Size) {
             val a = if (targetId != null) ImageAnalysis.Builder().setTargetRotation(rotation)
                 .setResolutionSelector(androidx.camera.core.resolutionselector.ResolutionSelector.Builder().setResolutionStrategy(androidx.camera.core.resolutionselector.ResolutionStrategy(resolution, androidx.camera.core.resolutionselector.ResolutionStrategy.FALLBACK_RULE_CLOSEST_LOWER_THEN_HIGHER)).build()).setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST).build() else null
@@ -91,12 +117,15 @@ class VlmCameraController(private val context: Context) {
         val maximum = state?.maxZoomRatio ?: 1f
         zoomOperation = camera!!.cameraControl.setZoomRatio(initialZoom.coerceIn(minimum, maximum))
         awaitZoom()
-        if (epoch != bindingEpoch) throw kotlinx.coroutines.CancellationException("旧相机绑定已结束")
+        if (epoch != bindingEpoch || ar != null) throw kotlinx.coroutines.CancellationException("旧相机绑定已结束")
+        android.util.Log.i("VlmCamera", "CameraX 绑定完成 config=$version elapsedMs=${SystemClock.elapsedRealtime()-bindStarted} zoomRange=$minimum..$maximum analysis=${analysis != null}")
         onConfigured(version)
         if (targetId != null) {
             val realtime = Camera2CameraInfo.from(camera!!.cameraInfo).getCameraCharacteristic(CameraCharacteristics.SENSOR_INFO_TIMESTAMP_SOURCE) ==
                 CameraCharacteristics.SENSOR_INFO_TIMESTAMP_SOURCE_REALTIME
             var lastSampleNs = 0L
+            var lastLogNs = 0L
+            var samplesCopied = 0
             // 新建的分析用例只接收开始后建立的流；未知时钟禁止跨传感器比较。
             analysis?.setAnalyzer(analysisExecutor) { image ->
                 var sample: AnalysisSample? = null
@@ -107,15 +136,7 @@ class VlmCameraController(private val context: Context) {
                     if (scanStartedNs != null && realtime && captured < scanStartedNs) return@setAnalyzer
                     lastSampleNs = received
                     val w = image.width; val h = image.height
-                    val bytes = ByteArray(w * h * 3 / 2)
-                    fun copyPlane(index: Int, offset: Int, step: Int) {
-                        val plane = image.planes[index]; val data = plane.buffer.duplicate()
-                        val columns = if (index == 0) w else w / 2; val rows = if (index == 0) h else h / 2
-                        val base = data.position()
-                        for (y in 0 until rows) for (x in 0 until columns)
-                            bytes[offset + (y * columns + x) * step] = data.get(base + y * plane.rowStride + x * plane.pixelStride)
-                    }
-                    copyPlane(0, 0, 1); copyPlane(2, w * h, 2); copyPlane(1, w * h + 1, 2)
+                    val bytes = Yuv420Copy.toNv21(w, h, image.planes.map { Yuv420Copy.Plane(it.buffer, it.rowStride, it.pixelStride) })
                     val r = image.cropRect
                     val config = ScanCameraConfig(version, image.imageInfo.rotationDegrees, camera?.cameraInfo?.zoomState?.value?.zoomRatio ?: initialZoom,
                         CropRect(r.left.toFloat() / w, r.top.toFloat() / h, r.right.toFloat() / w, r.bottom.toFloat() / h), realtime)
@@ -123,7 +144,15 @@ class VlmCameraController(private val context: Context) {
                 } catch (failure: Exception) {
                     android.util.Log.w("VlmCamera", "分析帧复制失败", failure)
                 } finally { image.close() }
-                sample?.let(onSample)
+                sample?.let { copied ->
+                    samplesCopied++
+                    val now = SystemClock.elapsedRealtimeNanos()
+                    if (now-lastLogNs >= 2_000_000_000L) {
+                        android.util.Log.i("VlmCamera", "CameraX 分析采样 count=$samplesCopied size=${copied.width}x${copied.height} config=$version clockReliable=$realtime")
+                        lastLogNs = now; samplesCopied = 0
+                    }
+                    onSample(copied)
+                }
             }
         }
         return CameraCapabilities(minimum, maximum, (listOf(minimum, 1f, 2f, 3f, maximum)).filter { it in minimum..maximum }.distinct().sorted())
@@ -165,6 +194,7 @@ class VlmCameraController(private val context: Context) {
      * @return 已按预览裁剪并转正的独立 Bitmap 与拍摄倍率，由调用方回收 Bitmap。
      */
     suspend fun freeze(): Pair<Bitmap, Float> {
+        ar?.let { return it.freeze() }
         val active = capture ?: error("相机尚未准备完成")
         awaitZoom()
         val ratio = camera?.cameraInfo?.zoomState?.value?.zoomRatio ?: 1f
@@ -198,6 +228,7 @@ class VlmCameraController(private val context: Context) {
      * @return 系统相册 URI；Android 9 及以下由 UI 先取得写入权限。
      */
     suspend fun capturePhoto(): Uri? {
+        ar?.let { return it.capturePhoto() }
         val active = capture ?: error("相机尚未准备完成")
         awaitZoom()
         val values = ContentValues().apply {
@@ -232,5 +263,4 @@ class VlmCameraController(private val context: Context) {
         capture = null
         analysis = null
     }
-    private companion object { val versions = AtomicInteger() }
 }

@@ -30,6 +30,9 @@ int main() {
     auto choice = chooseLocalView(logits, 8, {2, 4, 5, 7});
     assert(choice.ordinal == 3 && choice.scores.size() == 4);
     assert(chooseLocalView(logits, 8, {2}).ordinal == 1);
+    const float photoLogits[] = {900.f, 0.f, -6.f, -5.f, -4.f, -3.f, -2.f, -1.f};
+    auto photo = chooseLocalView(photoLogits, 8, {2, 3, 4, 5, 6, 7});
+    assert(photo.ordinal == 6 && photo.scores.size() == 6);
     assert(localViewLogitOffset(8, 8, 827) == 0);
     assert(localViewLogitOffset(24, 8, 3) == 16);
     for (const auto& layout : std::vector<std::vector<int>>{{0, 8, 3}, {8, 0, 3}, {9, 8, 3}, {24, 8, 4}, {8, 8, 0}}) {
@@ -38,7 +41,7 @@ int main() {
         catch (const std::runtime_error&) { rejected = true; }
         assert(rejected);
     }
-    const std::vector<std::vector<int>> badTokens = {{}, {2, 2}, {-1}, {8}, {1, 2, 3, 4, 5}};
+    const std::vector<std::vector<int>> badTokens = {{}, {2, 2}, {-1}, {8}, {1, 2, 3, 4, 5, 6, 7}};
     for (const auto& tokens : badTokens) {
         bool rejected = false;
         try { chooseLocalView(logits, 8, tokens); }

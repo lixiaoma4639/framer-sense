@@ -3,10 +3,32 @@ package com.framer.sense.feature.camera.vlm.model
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 
-enum class ActionOrigin { MODEL, USER }
-enum class ActionReadiness { BASIC, REVIEWED, AWAITING_ASSET }
+enum class ActionOrigin { MODEL, USER, PREVIEW_MODEL }
+@Serializable enum class ActionReadiness { BASIC, DRAFT, REVIEWED, AWAITING_ASSET }
 enum class ActionRequirement { NONE, SEAT, WALL, PROP }
 enum class AvatarRenderPurpose { COMPOSITION, FACE }
+
+/** 单一资源中的脸部执行事实；候选权重不等于摄影质量已经验收。 */
+@Serializable
+data class PhotoExpressionProfile(
+    val id: String,
+    val version: Int,
+    val status: ActionReadiness,
+    val defaultIntensity: Float,
+    val expressions: Map<ExpressionId, Map<String, Float>>
+) {
+    fun validate(morphs: Set<String>) {
+        require(id.isNotBlank() && version > 0 && defaultIntensity.isFinite() && defaultIntensity in 0f..1f)
+        require(expressions[ExpressionId.NEUTRAL]?.isEmpty() == true)
+        require(expressions.values.all { weights -> weights.all { (name, weight) ->
+            name.isNotBlank() && name in morphs && weight.isFinite() && weight in 0f..1f
+        } }) { "PHOTO_EXPRESSION_PROFILE_INVALID" }
+    }
+    fun weights(expression: ExpressionId, intensity: Float): Map<String, Float> {
+        require(intensity.isFinite() && intensity in 0f..1f) { "PHOTO_EXPRESSION_INTENSITY_INVALID" }
+        return requireNotNull(expressions[expression]) { "PHOTO_EXPRESSION_UNAVAILABLE" }.mapValues { it.value * intensity }
+    }
+}
 
 /** 执行数据只由本地审核目录提供，模型不能指定文件、动画或关节矩阵。 */
 @Serializable
@@ -45,10 +67,17 @@ data class ResolvedPhotoAction(
     /** 完整姿态/动画的语义来自审核目录，不从矩阵猜测。 */
     val authoredGuidance: AvatarPoseDirective? = null,
     val labelResource: Int? = null,
-    val stepResources: List<Int> = emptyList()
+    val stepResources: List<Int> = emptyList(),
+    val readiness: ActionReadiness = ActionReadiness.BASIC,
+    val expressionProfilePath: String? = null,
+    val expressionProfile: PhotoExpressionProfile? = null,
+    val faceAnchorNode: String = "Bip01 Head",
+    val softenColors: Boolean = true,
+    val ethnicity: AvatarEthnicity? = null
 ) {
     fun cacheIdentity(): String = listOf(id, version, rigId, avatarAssetPath, avatarAssetVersion, boundsExtentScale, origin,
-        VlmJson.encodeToString(source), authoredGuidance, labelResource, stepResources).joinToString("|")
+        VlmJson.encodeToString(source), authoredGuidance, labelResource, stepResources, readiness,
+        expressionProfilePath, expressionProfile?.let { VlmJson.encodeToString(it) }, faceAnchorNode, softenColors, ethnicity).joinToString("|")
 }
 
 /** App 内的最终拍摄事实，不进入现有 v1 网关请求。 */
@@ -62,10 +91,12 @@ data class ResolvedPhotoSpec(
     val needsRetake: Boolean,
     val action: ResolvedPhotoAction,
     val guidance: CompositionGuidance,
-    val viewBinding: PhotoViewBinding? = null
+    val viewBinding: PhotoViewBinding? = null,
+    val backgroundKeepRegions: List<CropRect> = emptyList()
 ) {
-    fun matches(plan: CompositionPlan): Boolean = planId == plan.id && revision == plan.revision && viewBinding == plan.viewBinding &&
+    fun matches(plan: CompositionPlan): Boolean = planId == plan.id && revision == plan.revision && viewBinding == plan.viewBinding && backgroundKeepRegions == plan.backgroundKeepRegions &&
         shot == plan.shot && crop == plan.crop && zoom == plan.zoom && avatar == plan.avatar && needsRetake == plan.needsRetake &&
+        action.ethnicity == avatar.ethnicity &&
         (action.source !is PhotoPoseSource.Controlled ||
             (action.source.pose == avatar.pose && action.source.directive == avatar.poseDirective)) &&
         guidance == expectedGuidance(plan)
@@ -79,7 +110,7 @@ data class ResolvedPhotoSpec(
     fun rebase(plan: CompositionPlan): ResolvedPhotoSpec {
         return copy(planId = plan.id, revision = plan.revision, shot = plan.shot, crop = plan.crop,
             zoom = plan.zoom, avatar = plan.avatar, needsRetake = plan.needsRetake,
-            guidance = expectedGuidance(plan), viewBinding = plan.viewBinding)
+            guidance = expectedGuidance(plan), viewBinding = plan.viewBinding, backgroundKeepRegions = plan.backgroundKeepRegions)
     }
 }
 

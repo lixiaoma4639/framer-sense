@@ -194,7 +194,7 @@ static jbyteArray inferImages(JNIEnv* env, jlong handle, const std::vector<std::
 
 /** 一次真实视觉预填充后，按模型分数在合法编号中作选择，不自由生成格式文本。 */
 static jbyteArray chooseView(JNIEnv* env, jlong handle, const std::vector<std::string>& paths,
-                            jbyteArray promptBytes, jobject cancelled) {
+                            jbyteArray promptBytes, jobject cancelled, size_t options = 0) {
     try {
         auto* llm = reinterpret_cast<Llm*>(handle);
         if (!llm) throw std::runtime_error("模型尚未加载");
@@ -208,7 +208,9 @@ static jbyteArray chooseView(JNIEnv* env, jlong handle, const std::vector<std::s
         if (env->ExceptionCheck()) return nullptr;
         llm->reset();
         std::vector<int> digitTokens;
-        for (size_t i = 1; i <= paths.size(); ++i) {
+        const auto candidateCount = options ? options : paths.size();
+        if (candidateCount < 1 || candidateCount > kMaxLocalChoices) throw std::runtime_error("LOCAL_VIEW_INPUT");
+        for (size_t i = 1; i <= candidateCount; ++i) {
             const auto digit = std::to_string(i);
             const auto tokens = llm->tokenizer_encode(digit);
             if (tokens.size() != 1 || llm->tokenizer_decode(tokens[0]) != digit || llm->is_stop(tokens[0]))
@@ -216,7 +218,7 @@ static jbyteArray chooseView(JNIEnv* env, jlong handle, const std::vector<std::s
             digitTokens.push_back(tokens[0]);
         }
         const auto visualPrompt = localVisualPrompt(paths, prompt);
-        __android_log_print(ANDROID_LOG_INFO, "VlmOffline", "MNN 开始编号选景 images=%zu method=constrained_logits promptBytes=%zu", paths.size(), visualPrompt.size());
+        __android_log_print(ANDROID_LOG_INFO, "VlmOffline", "MNN 开始编号决策 images=%zu candidates=%zu method=constrained_logits promptBytes=%zu", paths.size(), candidateCount, visualPrompt.size());
         std::ostringstream ignoredText;
         // 0 只作预填充。此分支读取 logits 作一次编号选择，不继续 generate(current_token=-1)。
         llm->response(visualPrompt, &ignoredText, "", 0);
@@ -287,4 +289,11 @@ Java_com_framer_sense_feature_camera_vlm_data_MnnNative_inferImages(JNIEnv* env,
 extern "C" JNIEXPORT void JNICALL
 Java_com_framer_sense_feature_camera_vlm_data_MnnNative_release(JNIEnv* env, jobject self, jlong handle) {
     delete reinterpret_cast<Llm*>(handle);
+}
+
+/** 单图摄影组合六选一，复用真实 logits 编号选择，不复制图片或自由拼中文姿势。 */
+extern "C" JNIEXPORT jbyteArray JNICALL
+Java_com_framer_sense_feature_camera_vlm_data_MnnNative_choosePhoto(JNIEnv* env, jobject, jlong handle, jstring path, jbyteArray prompt, jobject cancelled) {
+    try { return chooseView(env, handle, {pathString(env, path)}, prompt, cancelled, 6); }
+    catch (const std::exception& error) { fail(env, error.what()); return nullptr; }
 }

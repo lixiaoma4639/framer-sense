@@ -4,6 +4,8 @@
 
 ## 生产目录状态
 
+2026-10-08：写实草稿 `draft.female_natural_stand` 被用户否定，保留文件但撤出目录。新 `draft.rain_natural_stand` 使用 Rain 卡通角色、烘焙站姿和两种完整表情形变，支持平静／微笑／开朗，只供手动验证，禁止自动推荐。脸部定位节点与颜色处理按资源配置。五个 `professional.*` 仍为 `AWAITING_ASSET`。详见 [卡通样片](CAMERA_AR_PHOTO_SAMPLE.md)。
+
 | 稳定动作 ID | 专业样片 | 状态 |
 | --- | --- | --- |
 | `professional.natural_stand` | 自然站立 | `AWAITING_ASSET` |
@@ -52,6 +54,8 @@
 `PhotoPoseSource.Animation("唯一动画名称", sampleSeconds)` 引用动作条目绑定的 GLB。GLB v2 需内嵌完整 BIN、网格、蒙皮和所需纹理；动画名称唯一且非空，关键帧时间为有限、非负、严格递增的 FLOAT SCALAR。采样秒数必须在实际动画时长范围内。客户端同时校验二进制范围、骨架及 gltfio 实际片段名称/时长。
 
 动画默认停在目录指定的拍照时刻，不持续播放。要求作者选择稳定、可模仿的拍照瞬间，不能把转场中间帧作为样片。GLB 使用右手坐标、Y 向上，需在 Android 中检查原始朝向、脚底原点、单位、材质和包围盒；模型整体朝向与布局会在执行动作之后应用。
+
+Filament 1.75.1 每个图元最多 8 个顶点缓冲槽，数量不是整个 GLB 的 bufferViews 数量。当前加载路径各属性分槽，NORMAL 占法线生成槽、源 TANGENT 跳过，缺法线及材质缺省 UV／颜色需要预留生成／共享 dummy 槽；morph 使用独立缓冲。能力筛选和 JNI 加载前执行保守上界校验，超限不进入原生加载。Blender 4.5 默认导出全部颜色层；移动端材质已烘焙到贴图后需删除不用的层，并显式设 `export_vertex_color='NONE'`／`export_all_vertex_colors=False`。Rain 样片 v1 曾因此原生崩溃，v2 已去除冗余颜色属性，上界 6 槽，手机复验待用户执行。
 
 ## 表情与渲染顺序
 

@@ -36,12 +36,15 @@ object MnnNative {
     external fun inferImages(handle: Long, imagePaths: Array<String>, prompt: ByteArray, cancelled: AtomicBoolean, progress: MnnTokenProgress): ByteArray
     /** 单图兼容入口。 */
     external fun infer(handle: Long, imagePath: String, prompt: ByteArray, cancelled: AtomicBoolean, progress: MnnTokenProgress): ByteArray
+    external fun choosePhoto(handle: Long, imagePath: String, prompt: ByteArray, cancelled: AtomicBoolean): ByteArray
     /** 释放空闲句柄。@param handle 已结束所有推理的模型句柄。 */
     external fun release(handle: Long)
 }
 
 /** 原生运行时抽象，用于不加载真实权重的事务测试。 */
 interface MnnRuntime {
+    fun choosePhoto(handle: Long, image: String, prompt: ByteArray, cancel: AtomicBoolean): ByteArray =
+        throw UnsupportedOperationException("LOCAL_PHOTO_CHOICE_UNSUPPORTED")
     /** 初始化本地库；无参数，失败抛出链接错误。 */
     fun initialize()
     /** 加载配置。@param path config.json 路径。@return 原生句柄。 */
@@ -58,6 +61,8 @@ interface MnnRuntime {
 
 /** 默认真实 JNI 实现，不提供生产假响应。 */
 object NativeMnnRuntime : MnnRuntime {
+    override fun choosePhoto(handle: Long, image: String, prompt: ByteArray, cancel: AtomicBoolean): ByteArray =
+        MnnNative.choosePhoto(handle, image, prompt, cancel)
     /** 初始化 JNI 库；无参数。 */
     override fun initialize() = MnnNative.initialize()
     /** 加载官方配置。@param path 配置路径。@return 原生句柄。 */
@@ -153,7 +158,9 @@ class MnnProvider(
             val start = System.nanoTime()
             nativeInferenceRunning.set(true)
             val output = try {
-                runtime.infer(handle, image.path, call.prompt.toByteArray(Charsets.UTF_8), cancel, onToken).toString(Charsets.UTF_8)
+                (if (com.framer.sense.feature.camera.vlm.agent.PhotoReferenceDecisionPolicy.enabled(call.input))
+                    runtime.choosePhoto(handle, image.path, call.prompt.toByteArray(Charsets.UTF_8), cancel).also { onToken() }
+                else runtime.infer(handle, image.path, call.prompt.toByteArray(Charsets.UTF_8), cancel, onToken)).toString(Charsets.UTF_8)
             } finally {
                 nativeInferenceRunning.set(false)
             }

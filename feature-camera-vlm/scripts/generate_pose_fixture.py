@@ -54,13 +54,23 @@ def generate():
         "animations": [{"name": "fixture-head-turn", "samplers": [{"input": times, "output": rotations, "interpolation": "LINEAR"}],
                         "channels": [{"sampler": 0, "target": {"node": 2, "path": "rotation"}}]}],
         "bufferViews": views, "accessors": accessors, "buffers": [{"byteLength": len(binary)}]}
-    encoded = json.dumps(document, separators=(",", ":")).encode()
-    encoded += b" " * ((-len(encoded)) % 4)
-    binary.extend(b"\0" * ((-len(binary)) % 4))
-    data = struct.pack("<III", 0x46546C67, 2, 28 + len(encoded) + len(binary))
-    data += struct.pack("<II", len(encoded), 0x4E4F534A) + encoded
-    data += struct.pack("<II", len(binary), 0x004E4942) + binary
-    (root / "pose-test.glb").write_bytes(data)
+    def write_glb(name):
+        document["buffers"][0]["byteLength"] = len(binary)
+        encoded = json.dumps(document, separators=(",", ":")).encode()
+        encoded += b" " * ((-len(encoded)) % 4)
+        padded = binary + b"\0" * ((-len(binary)) % 4)
+        data = struct.pack("<III", 0x46546C67, 2, 28 + len(encoded) + len(padded))
+        data += struct.pack("<II", len(encoded), 0x4E4F534A) + encoded
+        data += struct.pack("<II", len(padded), 0x004E4942) + padded
+        (root / name).write_bytes(data)
+    write_glb("pose-test.glb")
+    # 合法 glTF 的四颜色属性，但在 gltfio + Ubershader 的属性/dummy 分配中超过 8 槽。
+    # 只用于验证 Kotlin 在 JNI 加载之前拒绝，禁止交给原生加载器或作为生产资源。
+    color = accessor([1.] * 32, "f", 4, "VEC4", 5126)
+    primitive = document["meshes"][0]["primitives"][0]
+    primitive["attributes"].update({f"COLOR_{i}": color for i in range(4)})
+    document["meshes"][0]["name"] = "OverBudgetMesh"
+    write_glb("over-budget.glb")
     head = identity.copy()
     head[12], head[13] = .18, .7
     (root / "pose-test.json").write_text(json.dumps({"rigId": "fixture-v1", "bones": {

@@ -9,7 +9,7 @@ import httpx
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
-from .models import Decision, Provider, StepReply, StepRequest, ViewRequest, ViewReply, ViewSelection
+from .models import PhotoStepRequest, PhotoReferenceDecision, Decision, Provider, StepReply, StepRequest, ViewRequest, ViewReply, ViewSelection
 from .providers import ProviderFailure, config_for, invoke, multi_image_limit
 
 
@@ -77,7 +77,7 @@ async def multi_capabilities() -> dict:
     return {"version": 2, "providers": [{"provider": p.value, "model": config_for(p).model,
         "configured": bool(config_for(p).key and config_for(p).model),
         "multiImage": bool(config_for(p).key and config_for(p).model and multi_image_limit(p)),
-        "maxImages": multi_image_limit(p)} for p in Provider]}
+        "maxImages": multi_image_limit(p), "directorV2": bool(config_for(p).key and config_for(p).model)} for p in Provider]}
 
 
 @app.post("/v2/views/select", response_model=ViewReply, dependencies=[Depends(authorize)])
@@ -116,3 +116,32 @@ async def select_views(body: ViewRequest, request: Request) -> ViewReply:
     except ValueError:
         selection = None
     return ViewReply(model=model, raw=raw, selection=selection, elapsedMs=int((time.monotonic() - started) * 1000))
+
+
+@app.post("/v2/director/step", response_model=StepReply, dependencies=[Depends(authorize)])
+async def photo_step(body: PhotoStepRequest, request: Request) -> StepReply:
+    """摄影参考目录协议：保留 v1，拒绝未登记动作、表情与非法保留区域。"""
+    try:
+        image = base64.b64decode(body.imageBase64, validate=True)
+        if not image.startswith(b"\xff\xd8\xff") or len(image) > 3 * 1024 * 1024:
+            raise ValueError()
+    except (ValueError, binascii.Error):
+        raise HTTPException(400, detail={"code": "BAD_REQUEST", "message": "图片必须为有效 JPEG"}) from None
+    started = time.monotonic()
+    try:
+        model, raw = await invoke(body, request.app.state.client)
+    except ProviderFailure as exc:
+        raise HTTPException(exc.status, detail={"code": exc.code, "message": exc.message}) from None
+    # 原始错误输出仍交给有限 Agent 的下一轮；不伪造有效姿态或静默回退。
+    try:
+        decision = PhotoReferenceDecision.model_validate_json(raw)
+        if decision.imageId != body.imageId or len(decision.intents) not in (1, 3):
+            raise ValueError()
+        if len({item.id for item in decision.intents}) != len(decision.intents):
+            raise ValueError()
+        for item in decision.intents:
+            if any(region.right <= region.left or region.bottom <= region.top for region in item.backgroundKeepRegions):
+                raise ValueError()
+    except ValueError:
+        pass
+    return StepReply(model=model, raw=raw, decision=None, elapsedMs=int((time.monotonic() - started) * 1000))

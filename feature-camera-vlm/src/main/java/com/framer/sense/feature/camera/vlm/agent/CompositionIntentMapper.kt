@@ -212,7 +212,7 @@ object CompositionIntentMapper {
         }
     }
 
-    private fun toPlan(intent: CompositionIntent, input: DirectorInput): CompositionPlan {
+    internal fun toPlan(intent: CompositionIntent, input: DirectorInput): CompositionPlan {
         val directive = intent.poseDirective ?: AvatarPoseDirective.fromLegacy(intent.pose)
         val (height, footY, span) = placement(intent.shot, intent.subjectDistance)
         val preferredCenter = when (intent.zone) {

@@ -127,3 +127,28 @@ class ViewReply(StrictModel):
     raw: str
     selection: ViewSelection | None
     elapsedMs: int
+
+
+class PhotoReferenceIntent(StrictModel):
+    id: str = Field(min_length=1, max_length=128)
+    title: str = Field(max_length=500)
+    shot: Literal["ENVIRONMENT", "FULL", "HALF", "CLOSE_UP"]
+    zone: Literal["LEFT", "CENTER", "RIGHT"]
+    actionId: Literal["draft.rain_natural_stand", "draft.rain_side_stand", "draft.rain_look_back"]
+    expression: Literal["NEUTRAL", "SMILE", "HAPPY"]
+    expressionIntensity: float = Field(ge=0, le=1)
+    yaw: float = Field(ge=-35, le=35)
+    reason: str = Field(max_length=4000)
+    backgroundKeepRegions: list[ViewRegion] = Field(max_length=8)
+    uncertainties: list[str] = Field(max_length=16)
+
+
+class PhotoReferenceDecision(StrictModel):
+    version: Literal[2]
+    imageId: str
+    action: Literal["FINAL"]
+    intents: list[PhotoReferenceIntent] = Field(min_length=1, max_length=3)
+
+
+class PhotoStepRequest(StepRequest):
+    version: Literal[2]

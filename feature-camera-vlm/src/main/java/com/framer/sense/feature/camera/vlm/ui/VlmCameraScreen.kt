@@ -1,5 +1,8 @@
 package com.framer.sense.feature.camera.vlm.ui
 
+import android.util.Log
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.boundsInWindow
 import android.Manifest
 import android.content.pm.PackageManager
 import android.os.Build
@@ -24,6 +27,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalConfiguration
@@ -35,6 +39,7 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.compose.ui.window.Dialog
 import androidx.core.content.ContextCompat
 import androidx.core.view.doOnLayout
 import com.framer.sense.core.ui.MyApplicationTheme
@@ -74,6 +79,9 @@ fun VlmCameraScreen(
     viewModel: VlmCameraViewModel = hiltViewModel()
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
+    LaunchedEffect(state.stage,state.ar.source,state.cameraReady,state.ar.tracking,state.modelBusy) {
+        Log.i("VlmCameraUi", "页面状态 stage=${state.stage} source=${state.ar.source} ready=${state.cameraReady} tracking=${state.ar.tracking} modelBusy=${state.modelBusy} background=${state.background.status}")
+    }
     val context = LocalContext.current
     val controller = remember { VlmCameraController(context.applicationContext) }
     var permission by remember { mutableStateOf(ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) }
@@ -102,11 +110,12 @@ fun VlmCameraScreen(
         val observer = LifecycleEventObserver { _, _ ->
             val visible = lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)
             controller.foreground(visible && needPose)
+            controller.cameraForeground(visible)
             viewModel.onIntent(VlmIntent.CameraForeground(visible))
         }
         lifecycle.addObserver(observer)
         viewModel.onIntent(VlmIntent.CameraForeground(lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)))
-        onDispose { lifecycle.removeObserver(observer); controller.foreground(false); viewModel.onIntent(VlmIntent.CameraForeground(false)) }
+        onDispose { lifecycle.removeObserver(observer); controller.foreground(false); controller.cameraForeground(false); viewModel.onIntent(VlmIntent.CameraForeground(false)) }
     }
     val imageLauncher = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri -> uri?.let { viewModel.onIntent(VlmIntent.ImportImage(it)) } }
     val onEvent = remember(viewModel) { { event: VlmIntent -> viewModel.onIntent(event) } }
@@ -116,8 +125,8 @@ fun VlmCameraScreen(
         else onEvent(VlmIntent.Capture)
     }
     val latestCapture by rememberUpdatedState(captureClick)
-    LaunchedEffect(state.stage, state.cameraReady, state.saving, state.modelBusy, state.settingsVisible, permission) {
-        latestAction(VlmCaptureAction(permission && state.cameraReady && state.stage == VlmStage.LIVE && !state.saving && !state.modelBusy && !state.settingsVisible) { latestCapture() })
+    LaunchedEffect(state.stage, state.cameraReady, state.saving, state.modelBusy, state.settingsVisible, state.photoSample, permission) {
+        latestAction(VlmCaptureAction(permission && state.cameraReady && state.stage == VlmStage.LIVE && !state.saving && !state.modelBusy && !state.settingsVisible && state.photoSample == null) { latestCapture() })
     }
     DisposableEffect(viewModel, controller) {
         onDispose { controller.close(); viewModel.onLeave(); latestAction(null) }
@@ -133,7 +142,7 @@ fun VlmCameraScreen(
                 }
                 is VlmEffect.Freeze -> try {
                     val (bitmap, zoom) = controller.freeze()
-                    onEvent(VlmIntent.FrameReady(effect.token, bitmap, zoom))
+                    onEvent(VlmIntent.FrameReady(effect.token, bitmap, zoom, controller.ar?.lastFrozenConfig))
                 } catch (cancel: CancellationException) { throw cancel }
                 catch (e: Exception) { onEvent(VlmIntent.PlatformFailed(effect.token, e.message ?: "无法冻结画面")) }
                 is VlmEffect.Capture -> try {
@@ -147,7 +156,8 @@ fun VlmCameraScreen(
     BackHandler(state.stage != VlmStage.LIVE && !state.settingsVisible) {
         onEvent(if (state.stage in listOf(VlmStage.GENERATING, VlmStage.MODIFYING, VlmStage.FREEZING, VlmStage.SCANNING, VlmStage.SCAN_PROCESSING, VlmStage.VIEW_SELECTING)) VlmIntent.Cancel else VlmIntent.ResumeCamera)
     }
-    Column(modifier.fillMaxSize().statusBarsPadding().padding(12.dp)) {
+    // 页面自己绘制底色，不能依赖 SurfaceView 下方的主导航背景。
+    Column(modifier.fillMaxSize().background(MaterialTheme.colorScheme.background).statusBarsPadding().padding(12.dp)) {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             Text("AI 构图导演", style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))
             TextButton(onClick = { onEvent(VlmIntent.SettingsVisible(true)) }, enabled = state.stage !in listOf(VlmStage.SCANNING, VlmStage.SCAN_PROCESSING, VlmStage.VIEW_SELECTING)) { Text("模型设置") }
@@ -167,8 +177,67 @@ fun VlmCameraScreen(
                 }
             }
         }
+        ArSupportControl(controller, state, permission, onEvent)
     }
     if (state.settingsVisible) ModelSettingsDialog(state, onEvent, { modelLauncher.launch(arrayOf("application/zip", "application/octet-stream", "application/x-zip-compressed")) }, { directoryLauncher.launch(null) })
+    state.photoSample?.let { PhotoSampleDialog(it, onEvent) }
+}
+
+/** 单独检查制作初稿，所有动作走 MVI；不伪造一个模型构图结果。 */
+@Composable
+internal fun PhotoSampleDialog(sample: PhotoSampleState, onEvent: (VlmIntent) -> Unit) {
+    Dialog(onDismissRequest = { onEvent(VlmIntent.ClosePhotoSample) }) {
+        Surface(shape = MaterialTheme.shapes.large) {
+            Column(Modifier.fillMaxWidth().heightIn(max = 700.dp).verticalScroll(rememberScrollState()).padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                Text(stringResource(R.string.vlm_photo_sample_title), style = MaterialTheme.typography.titleMedium)
+                Text(stringResource(R.string.vlm_photo_sample_notice), style = MaterialTheme.typography.bodySmall)
+                Text(stringResource(R.string.vlm_photo_actions), style = MaterialTheme.typography.labelMedium)
+                LazyRow(Modifier.testTag("vlm_sample_actions"), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    items(PhotoActionCatalog().definitions.filter { it.id in PhotoActionCatalog.sampleActionIds }, key = { it.id }) { action ->
+                        FilterChip(selected = sample.actionId == action.id, enabled = !sample.loading,
+                            onClick = { onEvent(VlmIntent.PhotoSampleAction(action.id)) },
+                            label = { Text(stringResource(requireNotNull(action.labelResource))) },
+                            modifier = Modifier.testTag("vlm_sample_action_${action.id}"))
+                    }
+                }
+                AvatarEthnicitySelector(sample.ethnicity, !sample.loading, "vlm_sample_ethnicity") {
+                    onEvent(VlmIntent.PhotoSampleEthnicity(it))
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    listOf(ExpressionId.NEUTRAL, ExpressionId.SMILE, ExpressionId.HAPPY).forEach { expression ->
+                        FilterChip(selected = sample.expression == expression, enabled = !sample.loading,
+                            onClick = { onEvent(VlmIntent.PhotoSampleExpression(expression)) },
+                            label = { Text(expressionLabel(expression)) },
+                            modifier = Modifier.testTag("vlm_sample_expression_${expression.name}"))
+                    }
+                }
+                if (sample.loading) {
+                    CircularProgressIndicator(Modifier.size(24.dp))
+                    Text(stringResource(R.string.vlm_photo_sample_loading))
+                }
+                sample.error?.let { error ->
+                    Text(error, color = MaterialTheme.colorScheme.error)
+                    TextButton(onClick = { onEvent(VlmIntent.PhotoSampleExpression(sample.expression)) }) {
+                        Text(stringResource(R.string.vlm_photo_sample_retry))
+                    }
+                }
+                sample.body?.let { bitmap -> Image(bitmap.asImageBitmap(),
+                    stringResource(R.string.vlm_photo_sample_body_description), Modifier.height(300.dp).testTag("vlm_sample_body"),
+                    contentScale = ContentScale.Fit) }
+                sample.face?.let { bitmap -> Image(bitmap.asImageBitmap(),
+                    stringResource(R.string.vlm_photo_sample_face_description), Modifier.size(220.dp).testTag("vlm_sample_face"),
+                    contentScale = ContentScale.Fit) }
+                PhotoActionCatalog().find(sample.actionId).stepResources.forEach { step ->
+                    Text(stringResource(step), style = MaterialTheme.typography.bodySmall)
+                }
+                TextButton(onClick = { onEvent(VlmIntent.ClosePhotoSample) }, modifier = Modifier.testTag("vlm_sample_close")) {
+                    Text(stringResource(R.string.vlm_photo_sample_close))
+                }
+                Text(stringResource(R.string.vlm_photo_sample_credit), style = MaterialTheme.typography.bodySmall)
+            }
+        }
+    }
 }
 
 /** 展示严格匹配画幅的实时预览或冻结方案。
@@ -186,17 +255,25 @@ private fun CameraPane(state: VlmUiState, controller: VlmCameraController, permi
     val selected = state.result?.plans?.find { it.id == state.selectedId }
     val defaultRatio = if (LocalConfiguration.current.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE) 4f / 3f else 3f / 4f
     val ratio = if (!live && scene != null) scene.width.toFloat() / scene.height else if (state.reference != null) state.reference.avatar.width.toFloat() / state.reference.avatar.height else defaultRatio
-    Box(modifier.background(Color(0xFF101B20)), contentAlignment = Alignment.Center) {
-        BoxWithConstraints(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+    val lastBounds = remember { arrayOfNulls<String>(1) }
+    Box(modifier.background(Color(0xFF101B20)), contentAlignment = Alignment.TopCenter) {
+        BoxWithConstraints(Modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
             val fitted = if (maxWidth / maxHeight > ratio) Modifier.fillMaxHeight().aspectRatio(ratio) else Modifier.fillMaxWidth().aspectRatio(ratio)
-            Box(fitted) {
+            Box(fitted.clipToBounds().onGloballyPositioned { coordinates ->
+                val rect = coordinates.boundsInWindow()
+                val bounds = "x=${rect.left.toInt()} y=${rect.top.toInt()} size=${rect.width.toInt()}x${rect.height.toInt()}"
+                if (lastBounds[0] != bounds) { lastBounds[0] = bounds; Log.i("VlmCameraUi", "预览布局 $bounds ratio=$ratio source=${state.ar.source} topAligned=true") }
+            }) {
+                // 空间会话贯穿扫描、选景和模型分析；冻结图片只是覆盖层。
+                if (permission && state.ar.source == com.framer.sense.feature.camera.vlm.ar.ArSource.SHARED_CAMERA)
+                    ArCameraSurface(controller, state, onEvent, Modifier.fillMaxSize())
                 if (live) {
-                    if (permission) CameraSurface(controller, state, onEvent, Modifier.fillMaxSize())
-                    else Button(onClick = requestPermission, modifier = Modifier.align(Alignment.Center)) { Text("允许使用相机") }
+                    if (permission && state.ar.source == com.framer.sense.feature.camera.vlm.ar.ArSource.SCREEN) CameraSurface(controller, state, onEvent, Modifier.fillMaxSize())
+                    else if (!permission) Button(onClick = requestPermission, modifier = Modifier.align(Alignment.Center)) { Text("允许使用相机") }
                     if (state.referencePlan?.viewBinding != null && state.background.status == BackgroundStatus.SEARCHING) {
                         BackgroundReference(state, Modifier.fillMaxSize())
                     }
-                    state.reference?.takeIf { state.referencePlan?.viewBinding == null || state.background.status != BackgroundStatus.SEARCHING }?.let { Image(it.avatar.asImageBitmap(), "构图参考人偶", Modifier.fillMaxSize(), contentScale = ContentScale.FillBounds, alpha = .65f) }
+                    state.reference?.takeIf { state.ar.source != com.framer.sense.feature.camera.vlm.ar.ArSource.SHARED_CAMERA && (state.referencePlan?.viewBinding == null || state.background.status != BackgroundStatus.SEARCHING) }?.let { Image(it.avatar.asImageBitmap(), "构图参考人偶", Modifier.fillMaxSize(), contentScale = ContentScale.FillBounds, alpha = .65f) }
                 } else if (scene != null) {
                     val preview = selected?.let { state.previews[it.id] }
                     if (preview != null) {
@@ -314,8 +391,12 @@ private fun CameraSurface(controller: VlmCameraController, state: VlmUiState, on
  */
 @Composable
 internal fun Controls(state: VlmUiState, onEvent: (VlmIntent) -> Unit, importImage: () -> Unit, modifier: Modifier) {
-    val busy = state.modelBusy || state.saving || state.stage in listOf(VlmStage.FREEZING, VlmStage.GENERATING, VlmStage.MODIFYING, VlmStage.SCANNING, VlmStage.SCAN_PROCESSING, VlmStage.VIEW_SELECTING)
+    val busy = state.photoSample != null || state.modelBusy || state.saving || state.stage in listOf(VlmStage.FREEZING, VlmStage.GENERATING, VlmStage.MODIFYING, VlmStage.SCANNING, VlmStage.SCAN_PROCESSING, VlmStage.VIEW_SELECTING)
     Column(modifier, verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        if (state.stage in listOf(VlmStage.LIVE, VlmStage.FROZEN, VlmStage.READY)) {
+            TextButton(onClick = { onEvent(VlmIntent.OpenPhotoSample) }, enabled = !busy,
+                modifier = Modifier.testTag("vlm_sample_open")) { Text(stringResource(R.string.vlm_photo_sample_open)) }
+        }
         state.error?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall, modifier = Modifier.testTag("vlm_error")) }
         state.notice?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
         if (state.comparedFrames > 0) Text(stringResource(R.string.vlm_scan_compared, state.comparedFrames), style = MaterialTheme.typography.labelSmall)
@@ -379,6 +460,7 @@ internal fun Controls(state: VlmUiState, onEvent: (VlmIntent) -> Unit, importIma
             } else state.referencePlan.let { Text(compositionGuidanceText(it)) }
         }
         if (state.stage == VlmStage.LIVE) {
+            if (state.referencePlan != null) PhotoFacePreview(state,busy,onEvent)
             AvatarSelector(state, onEvent, busy)
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 Button(onClick = { onEvent(VlmIntent.StartScan) }, enabled = state.cameraReady && !busy, modifier = Modifier.testTag("vlm_scan_start")) { Text(stringResource(R.string.vlm_scan_start)) }
@@ -396,22 +478,28 @@ internal fun Controls(state: VlmUiState, onEvent: (VlmIntent) -> Unit, importIma
                 AvatarSelector(state, onEvent, busy)
             }
             state.result?.let { result ->
-                LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    itemsIndexed(result.plans, key = { _, plan -> plan.id }) { index, plan ->
-                        val isSceneFallback = plan.uncertainties.contains(CompositionIntentMapper.SCENE_FALLBACK_MARKER)
+                Row(Modifier.fillMaxWidth().testTag("vlm_composition_choices"), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    result.plans.forEachIndexed { index, plan ->
+                        val isSceneFallback = plan.title.isBlank() || plan.localCombination != null || plan.uncertainties.contains(CompositionIntentMapper.SCENE_FALLBACK_MARKER)
                         val displayTitle = if (isSceneFallback) stringResource(R.string.vlm_composition_plan_number, index + 1) else plan.title
                         Card(onClick = { onEvent(VlmIntent.Select(plan.id)) }, enabled = !busy,
-                            modifier = Modifier.width(130.dp).border(if (plan.id == state.selectedId) 2.dp else 0.dp, MaterialTheme.colorScheme.primary, MaterialTheme.shapes.medium)) {
+                            modifier = Modifier.weight(1f).testTag("vlm_composition_${plan.id}").border(if (plan.id == state.selectedId) 2.dp else 0.dp, MaterialTheme.colorScheme.primary, MaterialTheme.shapes.medium)) {
                             state.previews[plan.id]?.let { Image(it.composite.asImageBitmap(), plan.title, Modifier.fillMaxWidth().height(98.dp), contentScale = ContentScale.Fit) }
                             Text(displayTitle, Modifier.padding(horizontal = 6.dp), maxLines = 1, style = MaterialTheme.typography.labelLarge)
                             Text(stringResource(R.string.vlm_composition_pose_expression, resolvedArmLabel(CompositionGuidance.from(plan)), expressionLabel(CompositionGuidance.from(plan).expression)), Modifier.padding(horizontal = 6.dp), style = MaterialTheme.typography.labelSmall)
-                            Text(stringResource(R.string.vlm_composition_attributes, shotLabel(plan.shot), placementZoneLabel(plan.avatar.foot.x), facingLabel(plan.avatar.yaw)), Modifier.padding(6.dp), style = MaterialTheme.typography.labelSmall)
+                            Text(stringResource(R.string.vlm_composition_attributes, shotLabel(plan.shot), placementZoneLabel(plan.avatar.foot.x), planFacingLabel(plan)), Modifier.padding(6.dp), style = MaterialTheme.typography.labelSmall)
                         }
                     }
                 }
+                if (state.ar.source == com.framer.sense.feature.camera.vlm.ar.ArSource.SHARED_CAMERA)
+                    Text(stringResource(R.string.vlm_ar_preview_hint), style = MaterialTheme.typography.bodySmall)
                 CompositionDescriptions(result, state.selectedId)
                 val plan = result.plans.find { it.id == state.selectedId }
                 if (plan != null) {
+                    if (plan.resolvedSpec?.action?.readiness == ActionReadiness.DRAFT) Text(stringResource(R.string.vlm_photo_draft_reference), style = MaterialTheme.typography.labelSmall)
+                    if (plan.localCombination != null) Text(stringResource(if (plan.localAlternative) R.string.vlm_photo_local_alternative else R.string.vlm_photo_local_choice, plan.localCombination), style = MaterialTheme.typography.labelSmall)
+                    if (state.settings.mode != ModelMode.OFFLINE && state.selectedAvatar == AvatarId.ADULT_FEMALE && plan.resolvedSpec?.action?.origin == ActionOrigin.MODEL && plan.resolvedSpec?.action?.readiness == ActionReadiness.BASIC)
+                        Text(stringResource(R.string.vlm_photo_legacy_gateway), style = MaterialTheme.typography.labelSmall)
                     PhotoActionControls(state, plan, busy, onEvent)
                     if (plan.needsRetake) Text("需重新取景 · 预览仅供构图参考", color = MaterialTheme.colorScheme.tertiary, style = MaterialTheme.typography.labelSmall)
                     val visibleUncertainties = plan.uncertainties.filterNot { it == CompositionIntentMapper.SCENE_FALLBACK_MARKER }
@@ -438,11 +526,11 @@ internal fun CompositionDescriptions(result: CompositionResult, selectedId: Stri
     val index = result.plans.indexOfFirst { it.id == selectedId }
     val plan = result.plans.getOrNull(index) ?: return
     Text(stringResource(R.string.vlm_composition_recommendations), style = MaterialTheme.typography.titleSmall)
-    val fallback = plan.uncertainties.contains(CompositionIntentMapper.SCENE_FALLBACK_MARKER)
+    val fallback = plan.title.isBlank() || plan.localCombination != null || plan.uncertainties.contains(CompositionIntentMapper.SCENE_FALLBACK_MARKER)
     val title = if (fallback) stringResource(R.string.vlm_composition_plan_number, index + 1) else plan.title
     val actual = stringResource(
         R.string.vlm_composition_attributes,
-        shotLabel(plan.shot), placementZoneLabel(plan.avatar.foot.x), facingLabel(plan.avatar.yaw)
+        shotLabel(plan.shot), placementZoneLabel(plan.avatar.foot.x), planFacingLabel(plan)
     )
     Column(
         Modifier.fillMaxWidth().border(1.dp, MaterialTheme.colorScheme.outlineVariant, MaterialTheme.shapes.small).padding(8.dp),
@@ -464,8 +552,8 @@ internal fun CompositionDescriptions(result: CompositionResult, selectedId: Stri
         Text(stringResource(R.string.vlm_composition_guidance, compositionGuidanceText(plan)), style = MaterialTheme.typography.bodySmall, modifier = Modifier.testTag("vlm_resolved_guidance"))
         Text(stringResource(R.string.vlm_guidance_size, guidance.heightPercent, guidance.horizontalPercent), style = MaterialTheme.typography.labelSmall)
         // 原文只作为可追溯分析来源，不能与实际动作指令混在同一区域。
-        if (fallback) Text(stringResource(R.string.vlm_model_scene_observation, plan.guidance), style = MaterialTheme.typography.bodySmall)
-        else Text(stringResource(R.string.vlm_model_scene_observation, plan.reason), style = MaterialTheme.typography.bodySmall)
+        if (fallback && plan.guidance.isNotBlank()) Text(stringResource(R.string.vlm_model_scene_observation, plan.guidance), style = MaterialTheme.typography.bodySmall)
+        else if (!fallback && plan.reason.isNotBlank()) Text(stringResource(R.string.vlm_model_scene_observation, plan.reason), style = MaterialTheme.typography.bodySmall)
     }
 }
 
@@ -479,8 +567,16 @@ internal fun compositionGuidanceText(plan: CompositionPlan): String {
     else stringResource(R.string.vlm_guidance_placement_cropped, placementZoneLabel(plan.avatar.foot.x), shotLabel(guide.shot))
     val pose = stringResource(R.string.vlm_guidance_pose, facingLabel(plan.avatar.yaw), bodyLabel(guide.directive.body), resolvedArmLabel(guide), headLabel(guide.directive.head), stanceLabel(guide.directive.stance), expressionLabel(guide.expression))
     val steps = plan.resolvedSpec?.action?.stepResources.orEmpty().map { stringResource(it) }
-    return (listOf(camera, placement, pose) + steps).joinToString("\n")
+    // 完整姿态含动作自身的朝向；avatar.yaw 是追加布局旋转，不能冒充最终身体朝向。
+    return if (steps.isNotEmpty()) (listOf(camera, placement) + steps +
+        stringResource(R.string.vlm_photo_pose_expression, expressionLabel(guide.expression))).joinToString("\n")
+    else listOf(camera, placement, pose).joinToString("\n")
 }
+
+@Composable
+private fun planFacingLabel(plan: CompositionPlan): String =
+    plan.resolvedSpec?.action?.takeIf { it.stepResources.isNotEmpty() }?.labelResource?.let { stringResource(it) }
+        ?: facingLabel(plan.avatar.yaw)
 
 @Composable
 private fun BackgroundReference(state: VlmUiState, modifier: Modifier) {
@@ -534,6 +630,15 @@ private fun ScanViews(state: VlmUiState, busy: Boolean, onEvent: (VlmIntent) -> 
 @Composable
 internal fun PhotoActionControls(state: VlmUiState, plan: CompositionPlan, busy: Boolean, onEvent: (VlmIntent) -> Unit) {
     Text(stringResource(R.string.vlm_photo_actions), style = MaterialTheme.typography.labelLarge)
+    if (plan.resolvedSpec?.action?.readiness == ActionReadiness.DRAFT) {
+        Text(stringResource(R.string.vlm_photo_sample_draft_notice), style = MaterialTheme.typography.bodySmall)
+    }
+    if (PhotoActionCatalog.isRainAction(plan.resolvedSpec?.action?.id)) {
+        Text(stringResource(R.string.vlm_photo_sample_credit), style = MaterialTheme.typography.bodySmall)
+        AvatarEthnicitySelector(plan.avatar.ethnicity ?: AvatarEthnicity.WHITE, !busy, "vlm_ethnicity") {
+            onEvent(VlmIntent.EthnicitySelected(it))
+        }
+    }
     if (plan.resolvedSpec?.action?.id == PhotoActionCatalog.DIRECTIVE_ID) {
         Text(stringResource(R.string.vlm_photo_model_action), style = MaterialTheme.typography.bodySmall)
     }
@@ -558,6 +663,11 @@ internal fun PhotoActionControls(state: VlmUiState, plan: CompositionPlan, busy:
     Slider(value = intensity, onValueChange = { intensity = it }, valueRange = 0f..1f,
         onValueChangeFinished = { onEvent(VlmIntent.ExpressionIntensityChanged(intensity)) },
         enabled = !busy && plan.avatar.expression != ExpressionId.NEUTRAL, modifier = Modifier.testTag("vlm_expression_intensity"))
+    PhotoFacePreview(state, busy, onEvent)
+}
+
+@Composable
+private fun PhotoFacePreview(state: VlmUiState, busy: Boolean, onEvent: (VlmIntent) -> Unit) {
     TextButton(onClick = { onEvent(VlmIntent.FaceVisible(!state.faceVisible)) }, enabled = !busy,
         modifier = Modifier.testTag("vlm_show_face")) {
         Text(stringResource(if (state.faceVisible) R.string.vlm_photo_hide_face else R.string.vlm_photo_show_face))
@@ -569,6 +679,24 @@ internal fun PhotoActionControls(state: VlmUiState, plan: CompositionPlan, busy:
                 Modifier.size(160.dp).testTag("vlm_face_preview"), contentScale = ContentScale.Fit)
         }
     }
+}
+
+@Composable
+private fun AvatarEthnicitySelector(selected: AvatarEthnicity, enabled: Boolean, tagPrefix: String,
+                                    onSelect: (AvatarEthnicity) -> Unit) {
+    Text(stringResource(R.string.vlm_avatar_ethnicity_title), style = MaterialTheme.typography.labelLarge)
+    LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        items(AvatarEthnicity.entries, key = { it.name }) { ethnicity ->
+            FilterChip(selected = selected == ethnicity, enabled = enabled, onClick = { onSelect(ethnicity) },
+                modifier = Modifier.testTag("${tagPrefix}_${ethnicity.name}"),
+                label = { Text(stringResource(when (ethnicity) {
+                    AvatarEthnicity.WHITE -> R.string.vlm_avatar_ethnicity_white
+                    AvatarEthnicity.ASIAN -> R.string.vlm_avatar_ethnicity_asian
+                    AvatarEthnicity.BLACK -> R.string.vlm_avatar_ethnicity_black
+                })) })
+        }
+    }
+    Text(stringResource(R.string.vlm_avatar_ethnicity_draft), style = MaterialTheme.typography.bodySmall)
 }
 
 @Composable

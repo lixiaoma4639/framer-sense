@@ -17,7 +17,7 @@ class PlanValidator {
         plans.forEach { p ->
             if (p.viewBinding != input.viewBinding || input.viewBinding?.frameId?.let { it != input.scene.id } == true) add("${p.id}: VIEW_BINDING_MISMATCH")
             val c = p.crop
-            input.backgroundRegions.forEach { region ->
+            (input.backgroundRegions + p.backgroundKeepRegions).distinct().forEach { region ->
                 val area = (region.right - region.left) * (region.bottom - region.top)
                 val visible = (minOf(c.right, region.right) - maxOf(c.left, region.left)).coerceAtLeast(0f) *
                     (minOf(c.bottom, region.bottom) - maxOf(c.top, region.top)).coerceAtLeast(0f)
@@ -28,7 +28,7 @@ class PlanValidator {
             val numbers = listOf(c.left, c.top, c.right, c.bottom, p.zoom, a.foot.x, a.foot.y, a.height, a.yaw, a.expressionIntensity)
             if (numbers.any { !it.isFinite() }) add("${p.id}: 存在非有限数值")
             if (p.revision < 0) add("${p.id}: 方案版本不能为负数")
-            if (p.id.isBlank() || p.title.isBlank() || p.guidance.isBlank()) add("${p.id}: 缺少编号、标题或拍摄指导")
+            if (p.id.isBlank() || (p.title.isBlank() && p.localCombination == null) || (p.guidance.isBlank() && p.resolvedSpec == null)) add("${p.id}: 缺少编号、标题或拍摄指导")
             if (!(c.left >= 0f && c.top >= 0f && c.right <= 1f && c.bottom <= 1f && c.right > c.left && c.bottom > c.top)) add("${p.id}: 裁剪框越界或为空")
             if (abs((c.right - c.left) - (c.bottom - c.top)) > 0.015f) add("${p.id}: 首版裁剪必须保持原图画幅")
             if (p.zoom !in input.camera.minZoom..input.camera.maxZoom) add("${p.id}: 倍率超出设备范围")

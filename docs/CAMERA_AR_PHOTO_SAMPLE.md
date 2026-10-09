@@ -1,0 +1,191 @@
+# AR 摄影示范：卡通样片与完整动作
+
+更新：2026-10-08。状态：**卡通样片软件接入完成，手机显示与摄影质量待用户验收**。
+
+最新外观调整（目录 v5）：用户确认 sRGB 修复后显示有所改善，要求白种人更浅、亚洲人更接近东亚女性独立外观，并肯定黑人外观。新增 `white.glb`，仅混合皮肤贴图为更浅暖色，保留五官与蓝色虹膜；原始 `avatar.glb` 留作制作输入。`asian.glb` 从原始输入重新制作，调整下颌、脸颊、眼部、眉部、鼻部及嘴唇的平滑局部造型，同步作用于 Basis、微笑、露齿笑和关联面部部件，配深棕眼睛与深色头发。不是族裔外观分类器，也不代表同一族裔的统一长相。目录动作版本为 5；白种人与亚洲人资源版本为 5，黑人资源／版本保持 4。站姿、骨架、动画名称、表情通道及 sRGB 显示链不变。制作脚本默认仅导出 WHITE／ASIAN，避免覆盖已获肯定的黑人外观。未运行编译、测试、渲染或导出重载验证；白种人与亚洲人仍待用户自测，黑人仅有外观正向反馈，不等于专业摄影质量通过。
+
+手机肤色修正：用户指出基础角色的手机肤色明显暗于此前 GLB 桌面对照图，并要求沿用对照图浅暖肤色。源码确认离屏关闭后处理、未启用 sRGB swapchain，却将线性 RGB 直接写入 sRGB Bitmap；Rain 停用旧提亮滤镜后暴露该颜色错误。现在先在线性黑白底恢复 alpha／前景，再按标准 sRGB 传递函数编码；旧角色滤镜在编码后仅柔化，去掉重复 sqrt 提亮。资源贴图及肤色因子不改，“白种人”仍使用对照图对应的原始 Rain GLB，“黑人”选择仍保留其主动设计的深色材质。全身、脸部、样片共用该链；缓存追加 `linear-matte-to-srgb-v1`，日志输出线性读回／sRGB 显示及选中外观。依据：[Filament 官方维护者说明关闭后处理造成显示偏暗](https://github.com/google/filament/discussions/4690)、[1.75.1 swapchain 颜色编码约定](https://github.com/google/filament/blob/v1.75.1/filament/include/filament/SwapChain.h)。补充 JVM 参考灰、透明度顺序、暖色通道和重复转换回归代码，未运行编译／测试／渲染；光照及显示效果能否接近用户对照图由真机验收，暂不宣称逐像素一致。
+
+外观选择补充：用户已确认 v2 可显示，随后要求白种人／亚洲人／黑人可选择，并明确由用户验证。本次目录／资源缓存版本升为 **3**，样片窗口和选中“卡通自然站姿”的动作区新增选择；上次选择保存在本地偏好。白种人沿用 Rain 基础外观，亚洲人／黑人为其派生初稿，调整脸部造型、虹膜、肤色与发色。新增 `asian.glb`、`black.glb`，共用现有 69 关节骨架、站姿与三表情配置，仍为 DRAFT。当前仅适配成年女性卡通动作；其他旧角色没有这套变体，界面不提供无效选择。外观不从照片推断、不进入 v1 网关 JSON；切换不调用模型，当前方案 revision 递增，重新解析实际资产并刷新全身／脸部，失败保留原方案。拖动、缩放、换方案保留各自外观；重新选择卡通动作默认使用本地偏好。
+
+2026-10-08 动画命名修复：用户测试 v3 报 `PHOTO_ANIMATION_MISSING`。两个派生 GLB 的动画名被 Blender 自动改为 `photo-rain-natural-v1.001`，与目录不一致；v4 仅修正 JSON 动画名称，保持原 BIN、骨骼、表情和贴图数据，并先删除导入的旧 Action 再创建命名动作，避免重新制作时复发。动作与三种资源缓存版本统一升为 **4**；运行时仍要求精确匹配动画名，失败日志提供预期名称和实际名称，不静默替换动作。
+
+本次仅制作／修复资源、编写接入和回归代码，**未运行编译、测试、Lint、渲染或导出重载验证**。制作参数见 `artifacts/camera-cartoon-sample-v1/variant-authoring.json`，待验收记录见 `variants-acceptance.json`；此前对照图和编译记录仅代表基础角色 v2，不能用作两个新变体的验收证据。
+
+用户否定了第一版 Rocketbox 写实角色及表情效果，随后选择“动画电影风卡通人像”。本批使用 Blender Studio 官方 Rain 角色，替换验证入口中的写实样片；风格确认不等于角色质量验收。原写实资源保留，拒绝记录见 `artifacts/camera-photo-sample-v1/acceptance.json`，已从当前动作目录撤下。
+
+2026-10-08 18:14 用户运行资源 v1 时遇到原生 `SIGABRT: bufferCount cannot be more than 8`，尚未完成样片显示验收。原因是 Blender 4.5 默认导出多个未使用的颜色层，头部、身体等图元的属性缓冲加 dummy 槽超过 Filament 上限。当前动作／GLB 版本为 **2**，在材质烘焙后删除颜色层并显式禁用颜色导出；每个图元仅保留位置、法线、一个 UV、关节索引及权重，保守槽数上界为 **6**。三种表情保留，已重新导出重载；手机 v2 验证待用户执行。程序在能力筛选及 JNI `createAsset` 前检查同一上界，超限改为可处理错误；原生终止无法通过 Kotlin 异常捕获。依据：[gltfio 1.75.1 属性与 dummy 分配](https://github.com/google/filament/blob/v1.75.1/libs/gltfio/src/AssetLoader.cpp#L951)。
+
+## 用户只需验证
+
+1. 自行构建 APK，进入拍照页，打开 **人像样片验证**；无需扫描、网络或模型。
+2. 比较 **平静 → 自然微笑 → 开朗微笑 → 平静**。分别为放松嘴唇、闭嘴微笑、露齿笑；观察嘴角、眼睑、牙齿以及切回平静后的恢复。
+   新外观验证：分别选择白种人／亚洲人／黑人，检查全身和脸部是否属于同一角色、表情选择是否保留；关闭重开检查上次外观保留。外观造型由用户评价，不把颜色变化或标签等同于审美通过。
+3. 切换自然站立、侧身、回眸、单手扶腰、步行停顿，检查手指、衣服和脚底，并尝试模仿。当前是五个静态动作初稿，不播放步行动画。
+4. 关闭重开、切后台返回，检查迟到结果不会重新弹窗，也不改变原构图。
+5. 如需检查场景合成，生成成年女性角色方案，在“动作”中手动选择任一 **卡通动作（待验收）**。此处沿用现有角色槽位，只供样片验证；自动模型推荐尚未切换到新角色。
+
+[实际 GLB 对照图](../artifacts/camera-cartoon-sample-v1/review-grid.png)：上排从左到右平静、闭嘴微笑、露齿笑；下排正面、侧面、背面。全部是手机 GLB 导出后重新加载的三维渲染，保持人物比例，不是概念效果图。桌面渲染与手机 GPU 仍需分别验收。失败时提供 `VlmAvatarSample`、`VlmAvatar` 日志和手机型号／Android 版本。
+
+## 资源与执行事实
+
+- `src/main/assets/photo_samples/rain-natural-v1/avatar.glb`：资源版本 2，约 17 MiB，标准 glTF 2.0／PBR、69 个身体与手指绑定关节，完整静帧动画 `photo-rain-natural-v1`，时长 1 秒，采样 0 秒；源求值网格约 15.7 万顶点。目录名保留，不代表当前资源版本。
+- 同目录 `expressions.json`：版本 1、DRAFT、默认强度 100%，平静为空权重，微笑与开朗分别执行 `PhotoSmile`／`PhotoHappy`。这两个通道是整体表情，并包含原面部骨骼、修正形变和晶格的求值结果；不是几个嘴角权重的临时组合。
+- 自然站立烘焙进网格与绑定姿态；四个新增动作使用 `rain-poses-v1/` 内完整 69 关节局部矩阵快照。手机不执行 CloudRig、BendyBone 或原始控制器，也不叠加 Rocketbox 角度模板；这些是可模仿性待验收的初稿，不能执行任意文字姿势。
+- `artifacts/camera-cartoon-sample-v1/source.blend`：约 63 MiB，完整原始制作 rig、已设站姿、所需贴图已打包；内嵌脚本自动执行已关闭。
+- 同目录 `textures/`、六张对照图、`report.json` 和 `acceptance.json`：材质烘焙、结构／源文件摘要、真实顶点形变幅度以及独立验收状态。
+- 微笑／开朗均有超过一万个脸部顶点发生大于 0.1 mm 的变化，最大位移分别约 19／28 mm；这是几何检查，不能代替手机表情辨识评价。
+
+新动作 ID 为 `draft.rain_natural_stand`，骨架 ID 为 `rain-photo-sample-v1`。仅允许手动样片验证，不进入自动推荐，不接受模型指定为正式动作。五个 `professional.*` 条目保持 `AWAITING_ASSET`。不支持的旧表情在手动换动作时改为此样片支持的默认微笑；非法执行数据明确失败。
+
+脸部定位节点按动作目录配置为 `DEF-Head`，不继续硬编码旧角色头骨；缓存包括定位节点、颜色处理与资源版本。卡通样片保留 PBR 输出颜色，停用旧写实角色的提亮插画滤镜。预览、脸部示范、指导与参考仍读取同一 `ResolvedPhotoSpec`；窗口维持独立 MVI 令牌与后台取消。
+
+## 可重复制作与授权
+
+第二批（2026-10-08）：用户要求继续原计划，新增侧身、回眸、左手扶腰、左脚小步前移停顿四个完整骨骼快照 DRAFT，ID 为 `draft.rain_side_stand`、`draft.rain_look_back`、`draft.rain_hand_hip`、`draft.rain_walk_pause`。它们共用三外观 GLB 和三表情，不复制大体积贴图、不改现有肤色与黑人外观。快照动作版本 1，白种人／亚洲人资源版本 5，黑人 4。
+
+样片窗口增加动作选择与本地化制作步骤，动作／外观／表情切换保留其余选择，生成期间禁用；迟到结果由独立令牌拦截。构图页面也支持这四个手动动作，换外观保持当前动作，拖动／缩放保留选择。完整动作的文字使用制作步骤及最终表情，避免把额外布局 yaw 当作真实身体朝向。渲染先恢复全骨骼和表情再应用快照，脸部示范仍使用同一最终结果。
+
+制作脚本 `create_cartoon_photo_poses.py` 直接使用 glTF 节点坐标，写入全部 69 关节；两段 IK 使用真实关节位置，保持脚掌朝向和肢体长度，记录不可达目标的裁剪量。回眸旋转分配到身体、上背、颈和头，扶腰手指沿用原有轻弯基础。源制作参数与解算目标见 `artifacts/camera-cartoon-poses-v1/authoring.json`。脚本与参数是可重复制作源；本批未新增 Blender 可视化源工程，也未进行穿模或摄影质量检查。
+
+本批状态为 **完整动作与表情软件接入完成，五个动作待用户验收**。已制作数据、补充 JVM 全关节／三外观绑定、指导一致性、选择保留及草稿隔离测试代码，以及设备姿态投影、恢复、脸部、选择禁用与 MVI 保留代码；未运行编译、Gradle／Android 自动化测试、Lint、GPU 渲染或 APK 打包。五个 `professional.*` 条目仍待素材，不自动推荐新草稿。真机重点检查回眸颈部、扶腰手指与衣服接触、停步脚底；再逐个切换三表情／三外观并返回自然站立检查无残留。人工动作验收后才能登记 REVIEWED，推进 VLM 摄影组合选择与 AR 实景。
+
+```bash
+# 仅制作完整姿态数据，不运行渲染或测试；日常自测无需执行。
+.tools/blender-4.5.14/Blender.app/Contents/MacOS/Blender \
+  --background --factory-startup --disable-autoexec --python-exit-code 1 \
+  --python feature-camera-vlm/scripts/create_cartoon_photo_poses.py -- --repo .
+```
+
+官方角色：[Rain v3](https://studio.blender.org/characters/rain/v3/)。下载包为 `rain-v33.zip`，内部源文件名为 `Rain v3.3/rain_v3.2.blend`。来源、摘要与修改记录保存在资源 `NOTICE.md` 和报告中。原许可为 [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/)，署名 `Rain Rig (CC) Blender Foundation | studio.blender.org` 已放入样片及手动动作界面。不是宝可梦素材。
+
+Blender 工具与官方原包位于忽略目录 `.tools/`，不改系统安装、不随 APK 分发；App 只需仓库内交付的 GLB 与配置，你无需下载或配置骨骼。
+
+```bash
+# 工具／源包缺失时准备；用户日常验证不需要执行。
+bash feature-camera-vlm/scripts/prepare_photo_tools.sh
+bash feature-camera-vlm/scripts/prepare_cartoon_photo_source.sh
+
+# 重建卡通资源、完整源工程、材质及重载对照图。
+.tools/blender-4.5.14/Blender.app/Contents/MacOS/Blender \
+  --background --factory-startup --disable-autoexec --python-exit-code 1 \
+  --python feature-camera-vlm/scripts/create_cartoon_photo_sample.py -- --repo .
+```
+
+需要重建两个派生外观时，在基础资源之后执行以下制作命令；它不渲染对照、不重载校验：
+
+```bash
+.tools/blender-4.5.14/Blender.app/Contents/MacOS/Blender \
+  --background --factory-startup --disable-autoexec --python-exit-code 1 \
+  --python feature-camera-vlm/scripts/create_cartoon_avatar_variants.py -- --repo .
+```
+
+制作脚本使用米级原控制器滑杆；先求值完整表情，再校验各表情固定拓扑、烘焙移动端形变和标准材质，最后重新导入 GLB 检查。原材质的折射角膜被移除，眼睛采用标准材质；光照与原制作材质存在差异，需要手机审阅。修改发布资源必须递增目录／资源／配置版本，不静默替换已发布版本。
+
+## 验证记录与下一批
+
+基础角色 v2 已执行：官方原包摘要核验、Blender 制作、GLB 导出重载、桌面对照检查、实际形变数据／动画采样静态检查、模块／主 App／JVM 测试代码／设备测试代码编译。未运行 Gradle 自动化测试、设备仪器测试、真机 GPU 或 APK 打包。新增外观及 v4 修复未执行这些验证，由用户自行验收。
+
+新增或更新测试代码覆盖真实 GLB 顶点槽上界、8 槽边界／缺省法线／dummy 预留、旧四角色兼容、超限 GLB 在解析阶段拒绝、实际脸部顶点变化、三表情能力与非法输入、草稿推荐隔离、资源／定位／滤镜缓存身份、真实手机脸部明显像素变化及恢复、MVI 三表情选择与迟到／后台门控。`src/androidTest/assets/photo_pose_fixture/over-budget.glb` 是专用负例，只打入测试包，禁止直接传给原生加载器。
+
+重新构建安装后，样片加载日志中白种人与亚洲人应显示 `assetVersion=5`，黑人仍为 `assetVersion=4`；预期 `maxSlotsUpperBound=6 limit=8`。切换外观、平静／微笑／露齿笑，检查肤色、造型与重置；这次外观制作未运行本地验证。
+
+```bash
+# 用户自行执行。
+./gradlew :feature-camera-vlm:testDebugUnitTest
+./gradlew :feature-camera-vlm:connectedDebugAndroidTest \
+  -Pandroid.testInstrumentationRunnerArguments.class=com.framer.sense.feature.camera.vlm.PhotoPoseRenderingTest
+./gradlew :feature-camera-vlm:connectedDebugAndroidTest \
+  -Pandroid.testInstrumentationRunnerArguments.class=com.framer.sense.feature.camera.vlm.VlmSessionTest
+```
+
+五个动作初稿现已接入，验收记录见 `artifacts/camera-cartoon-poses-v1/acceptance.json`。下一步根据用户自测修正动作，人工确认后才能改为 REVIEWED。模型摄影决策、ARCore／Camera2 SharedCamera、空间锚点、光照／深度融合仍属于后续批次；当前背景合成为屏幕参考，不标记整体 AR 或商业摄影质量完成。
+
+## 2026-10-08：继续第三、四批软件实现
+
+用户明确暂停动作美感修改，继续模型摄影决策和 AR。扶腰、步行停顿保留为手动 DRAFT，排除在本次自动推荐之外；自然站立、侧身、回眸也仍是初稿。当前三个状态分别为：**软件路径已接入，尚未编译验证；专业样片未通过验收；AR 真机未通过验收**。不可据此宣称商业摄影质量完成。
+
+### 模型和同一执行结果
+
+成年女性进入新的摄影参考目录路径。云端先检查实际供应商的 `directorV2` 能力，再请求 `/v2/director/step`；模型输出三方案或选中方案的一项修改，动作仅从三项白名单选，表情仅平静／微笑／开朗，强度 0–1、额外整体朝向 ±35°。动作／外观／表情资源版本与布局、扫描来源、背景保留区域统一进入 App 内的 `ResolvedPhotoSpec`，预览、文字、脸部放大和 AR 共用。无效输出仍受原有两轮修正限制；资源失败明确失败，不替换为基础动作。
+
+云端预算仍限制实际模型调用和图片上传。缺少能力声明或 v2 能力时使用旧协议，界面提示更新网关；旧结果是原基础人像能力。其他三个角色保留旧能力。本次不是任意文字生成关节或表情。
+
+离线四帧自动选景保持不变；摄影阶段使用同一张选中背景的真实视觉通道预填充，从六个完整摄影组合的合法数字 token 中按模型 logits 选择一个。每个组合包含景别、布局、完整姿势和表情；不自由生成长 JSON，不增加计费预算。首项是模型推荐，另外两项为 App 提供的备选，界面明确标识其来源，不声称它们经过模型排序。按用户最新要求，三张构图默认全部并排显示，移除展开／收起其他构图功能。修改递增所选方案 revision，其他方案保持原值。
+
+### 相机与 AR 使用
+
+新增固定依赖 `com.google.ar:core:1.54.0`，继续 Filament 1.75.1，Manifest 为 AR Optional。构建时 Gradle 自动取得 SDK，不需要手工下载新的角色素材。手机需支持 ARCore，且安装兼容的“Google Play 服务 AR”；页面提供官方安装／启用入口。使用 [ARCore 官方支持设备列表](https://developers.google.com/ar/devices) 核对实际型号。不支持、服务未安装或运行时共享相机失败时，界面明确显示屏幕参考模式。
+
+支持时从实时页及扫描开始由 Camera2＋ARCore SharedCamera 占用后置相机，CameraX 不绑定；启用前等待 CameraX CLOSED，AR 回退等 CameraDevice.onClosed 后才发布。场景 Surface 不因结束扫描、模型分析或冻结图覆盖而卸载。扫描保存内参、可靠时的空间姿态、空间会话 ID、裁剪和旋转；未知时间源以窗口入口基线隔离视觉帧，不构造精准方向。两种相机共用递增配置编号，避免 AR 回退后丢弃 CameraX 新帧。
+
+找回背景后，按最终方案脚底位置换算回原图，在跟踪中的水平地面寻找落点；无有效命中、或半身脚底在画面外时，请用户轻点可站立地面确认一次。角色用参考身高约 1.6 m，实际画面比例随相机距离变化；不声称已经恢复模型要求的精确机位、距离或真人身高。人像按完整姿态和面部 morph 执行，默认静止，同一实时 Filament View 绘制相机背景、AR 投影、人像及软接触阴影。环境光估计调整光色／亮度；软阴影不是物理精确投影。
+
+禁用硬件深度传感器，按实际能力配置软件深度。深度图通过相机内参重建有界网格，与人像共用投影和深度缓冲；不跨缺失深度或明显前后景边缘连面。仅显示人像时处理遮挡。配置不兼容、深度尚未可用或无有效三角形时明确关闭遮挡，继续 AR，不伪造遮挡已开启。
+
+旋转、配置变化、后台恢复、跟踪失效、会话或方案 revision 变化都会失效锚点／对齐，隐藏空间人像；旧会话世界坐标不直接复用。没有确认背景或地面时保留实时相机，不显示悬空假落点。后台中断保留扫描有效帧，由用户明确继续分析或重新扫描。
+
+拍照暂停 AR，用同一 Camera2 设备建立独立 JPEG 会话。JPEG 不登记为 AR 实时额外输出、不加入预览 CaptureSession，避免持续 JPEG 编码拖慢相机。MediaStore 保存原始 JPEG，不从 Filament 截图，不合成人偶。完成后重建预览流、失效旧落点／背景对齐，要求重新确认。AR LIVE 页可展开同参数脸部示范。
+
+### 用户验证顺序
+
+1. 先构建并报告编译错误；本轮没有运行构建、测试、Lint、GPU 预览或 APK 任务。
+2. 离线扫描四帧结束后自动选景，再选择六组合之一；检查推荐标题、初稿标识、动作、表情、文字一致，两个被否定动作不进入自动推荐。修改只影响选中方案；切换三外观保持当前动作。
+3. 云端重启新版网关，确认 `/v2/capabilities` 当前模型 `directorV2=true`；检查实际动作 ID、强度、朝向与模型理由。旧网关应提示旧能力，不误称新摄影参考。
+4. 支持 AR 的真机进入页面应显示 AR 模式、原始倍率；完成 45°／340°／多圈扫描、自动选景、构图、应用、背景对齐。无地面时提示轻点；有效平面上落地、透视、朝向和表情应自然可读。
+5. 平移／旋转手机观察空间稳定性；前景有人或物体时比较遮挡开启／关闭。低纹理、远处地面和强光环境单独记录失败与耗时。
+6. 横竖屏、退后台、切页面、拍照后应隐藏旧空间人像并重新找回背景和落点；不得复用旧会话坐标或迟到结果。
+7. 查看系统相册中的照片：必须没有虚拟人像。检查共享 JPEG 与暂停 AR 拍照两条设备路径；记录手机型号、Android／AR 服务版本、是否支持软件深度。
+8. 不支持 AR／未装服务时屏幕参考可扫描和拍照；安装启用前两种相机不能同时占用设备。
+
+可执行命令（由用户运行，结果填写下表）：
+
+```bash
+./gradlew :feature-camera-vlm:testDebugUnitTest :app:compileDebugKotlin :feature-camera-vlm:compileDebugAndroidTestKotlin :feature-camera-vlm:lintDebug :app:mergeDebugNativeLibs
+python3 feature-camera-vlm/scripts/verify_native_alignment.py
+cd services/vlm-gateway
+python -m pytest tests -q
+```
+
+| 项目 | 本轮记录 | 用户结果 |
+| --- | --- | --- |
+| JVM／设备测试代码 | 已补充，未运行／未编译 | 待填写 |
+| 主 App 编译、Lint、原生库／16 KiB 对齐 | 未执行 | 待填写 |
+| 网关 pytest（模拟上游） | 已补充，未运行 | 待填写 |
+| 支持设备相机、GPU、投影、深度、照片 | 未执行 | 待填写 |
+| 专业动作／表情美感 | 未验收，扶腰与步行被用户否定 | 待填写 |
+
+诊断日志标签 `VlmAr`：空间会话、跟踪状态、遮挡开关、手动／自动落点、共享相机失败及原始 JPEG 保存；不记录图片内容。`VlmOffline` 的 `candidates=6` 表示构图选择，`images=4` 表示离线选景。基础资料：[官方 SharedCamera](https://developers.google.com/ar/develop/java/camera-sharing)、[SharedCamera 限制](https://developers.google.com/ar/reference/java/com/google/ar/core/SharedCamera)。
+
+### 黑屏／卡顿诊断日志补充
+
+本次增加限频诊断日志，未运行构建、测试、GPU 验证或打包。预览在拍照内容区顶部对齐，AR 状态移到预览及操作区之后，避免挤占顶部；帧处理耗时计入 33 ms／100 ms 的调度周期，取消处理结束后再完整等待一周期的叠加延迟。为保持跨 GL 上下文同步正确，暂保留现有每帧 GPU 等待，用日志确定其实际成本。JPEG 改为仅在暂停 AR 拍照期间使用独立流，不进入实时额外输出。
+
+| 标签 | 关键记录 |
+| --- | --- |
+| `VlmCameraUi` | 能力查询耗时、CameraX→AR 互斥切换、页面状态、预览窗口坐标／尺寸、Surface 创建／销毁 |
+| `VlmAr` | 设备和 GL 信息、EGL／Session／材质／Camera2／resume 启动节点、五秒无首帧提示、相机 AE／AF／曝光与回调延迟、Debug 输入亮度及一次性 Surface 输出探针；首帧记录配置／实际纹理 ID |
+| `VlmArRender` | 原生库、Engine、各材质构建耗时、SwapChain、首个提交画面的 UV／投影／耗时；提交不代表已验证最终像素 |
+| `VlmArPerf` | Debug 启动／关键请求变化后每五秒汇总，最多三次；包含新帧 FPS、重复／零时间戳／无效 Surface、提交／跳帧数，以及 AR update、渲染、深度、GPU 等待、分析复制、工作线程排队耗时 |
+| `VlmCamera` | 回退 CameraX 的绑定耗时和分析采样 |
+| `VlmScan` | 限频扫描处理／背景匹配耗时及队列等待 |
+
+用户复现：冷启动后直接进入拍照页，保持 15 秒，缓慢左右转动；开始扫描 5–10 秒再结束；如可继续，应用参考后找回背景并拍一张。保留从“AR 能力查询开始”到问题出现后至少三条“预览汇总”的日志，连同异常堆栈发送。推荐使用 Debug 包获得亮度探针；不记录或上传图片、整帧像素、令牌或用户要求。时间源未知时输入年龄为 null，不伪造采集延迟。
+
+扫描处理和背景匹配日志为每两秒抽样的一次调用耗时；`VlmArPerf` 的 avg/max 是该窗口内调用的平均值／最大值，字段存在包含关系，不应相加为总耗时。图像亮度正常、已经提交仍黑屏时继续查纹理／呈现；不能仅凭首次 submit 日志宣布黑屏已修复。
+
+2026-10-09 用户日志分析：本次只有一个相机 generation／空间会话，重复行来自性能汇总，不是相机重复初始化。稳定时相机约 30 帧／秒，预览约 10 帧／秒，`modelBusy=true` 导致 LIVE 阶段的 `render=false`，误用了冻结分析的 100 ms 调度周期。已改为依据实际显示阶段决定实时预览，不因模型加载降帧；冻结分析仍降低后台绘制频率。GPU 等待稳定约 3–5 ms，首次较慢不能代表持续卡顿；CPU 输入亮度正常，黑屏原因仍未确认。
+
+AR 性能汇总、相机回调统计与 Debug 输入探针统一限频至五秒。Debug 每个空间会话在首个提交后仅发起一次异步 PixelCopy，将 Surface 缓冲缩小至 16×16，记录亮度／透明度汇总后立即回收，不保存或打印像素。`status=0` 表示复制成功；`surfacePixelsVerified=true` 只证明读取到了 Surface 缓冲，不证明其未被页面覆盖或最终可见。结合输入亮度、输出亮度与实际纹理 ID 定位显示链问题。新增预览阶段回归测试代码；本次仍未运行构建或测试。
+
+用户第二轮日志与截图确认相机可见、新帧约 29.5 帧／秒；整页底色仍显示黑色，实时画面左右镜像。页面补充显式主题底色，Compose／原生 SurfaceView／Canvas 清屏均限定预览边界，Surface 使用 RGBA8888，Filament View 显式 OPAQUE。相机材质关闭 Filament 默认 `flipUV`，保持 ARCore 转换得到的纹理坐标，CPU 扫描／冻结图像不额外镜像；UV 仅在显示几何变化时上传。底色和方向修改尚待用户复验，不宣称已经验证通过。
+
+定期性能统计、相机回调统计和 CPU 亮度探针仅在 Debug 启动或扫描／参考等关键请求变化后的前三个五秒窗口采集，第三次汇总标记 `diagnosticsComplete=true`，之后停止；错误和状态变化继续记录。`uid=... identical ... lines` 是系统合并重复日志的提示，缺少原始消息和 Tag 时不能判断具体调用来源，不能据此宣称模型循环推理，也不通过关闭系统日志掩盖异常。若修改后仍出现，保留其前面最早的原始行与 Tag 继续定位。
+
+### 扫描采样性能与 AR 展示区别（2026-10-09）
+
+用户报告扫描时明显掉帧，但提供的两条日志为 `sampling=false`、约 29 帧／秒，不能用来确定扫描时的实际瓶颈。源码中找到逐像素访问直接 YUV 缓冲以及 JPEG 编码／解码中间步骤：两条相机路径统一使用按行／整块批量读取，保留行填充、交错 UV 和最后一行无填充的兼容性，复制完成立即关闭相机图像。后台分析改为低优先级串行线程，沿用容量一、丢弃旧候选的队列；NV21 通过 OpenCV 直接转 RGBA，仅原生库不可用时保留原 JPEG 路径。扫描评估上限仍为每秒四帧，不减少候选容量／质量校验。AR 汇总新增 `imageAcquire`、`imageCopy`，供用户区别采样阻塞与后台计算；不以代码修改宣称真机性能已经达标。
+
+生成阶段的三张图是离屏静态构图预览，ARCore 不会令这些图片产生空间透视。点击应用方案后，在实时相机找回背景、识别水平地面并建立锚点，才由 AR 投影绘制空间人像；必要时轻点地面确认。此时使用同一最终动作和表情，支持跟踪、环境光、接触阴影及可用深度遮挡。固定参考身高并不保证与静态预览的画面占比完全一致，也不检测真人姿势。界面增加说明，日志新增“应用参考”，随后可查看“空间状态”及“地面落点”。
+
+补充批量 YUV JVM 测试、直接 RGBA 色彩／方向设备测试和三方案默认可见设备测试代码；本次未执行构建、自动化测试或 APK 任务。用户复验：扫描持续 15 秒，发送 `sampling=true` 的三条“预览汇总”和“扫描处理性能”；再应用方案，找回背景、确认地面、平移手机，观察人像是否固定在空间中，提供“应用参考／空间状态／地面落点”日志。

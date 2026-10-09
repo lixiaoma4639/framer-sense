@@ -29,6 +29,11 @@ class PreviewStore(private val renderer: AvatarRenderer) : PreviewInspector {
     suspend fun availableExpressions(plan: CompositionPlan) = renderer.availableExpressions(plan)
     suspend fun selectAction(plan: CompositionPlan, id: String) = renderer.resolve(plan, id)
 
+    /** 无冻结图片、无模型调用的制作样片入口，仍使用正式 Filament 执行链。 */
+    suspend fun sample(plan: CompositionPlan): AvatarPreview = mutex.withLock {
+        renderer.render(renderer.resolve(plan), 512, 768, 0f, .6f)
+    }
+
     /** 脸部单独渲染，不放大构图缩略图；最多缓存两张示范。 */
     suspend fun face(plan: CompositionPlan): AvatarPreview? = mutex.withLock {
         val resolved = renderer.resolve(plan)
@@ -100,7 +105,7 @@ class PreviewStore(private val renderer: AvatarRenderer) : PreviewInspector {
 
     private fun key(sceneId: String, plan: CompositionPlan, purpose: AvatarRenderPurpose = AvatarRenderPurpose.COMPOSITION): String =
         sceneId + VlmJson.encodeToString(plan) + ":" + plan.avatar.projectionCalibrated + ":" + purpose + ":" +
-            plan.resolvedSpec?.action?.cacheIdentity() + ":" + plan.viewBinding
+            plan.resolvedSpec?.action?.cacheIdentity() + ":" + plan.viewBinding + ":" + AvatarDisplayColor.VERSION
 
     /** 从稀疏像素估计色温倾向与亮度。
      * @param bitmap 原始相机背景，不包含虚拟人偶。

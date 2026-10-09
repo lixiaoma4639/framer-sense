@@ -47,6 +47,16 @@ class FilamentAvatarRenderer(context: Context, private val catalog: PhotoActionC
     private val metadataMutex = Mutex()
     private val metadataCache = mutableMapOf<String, AvatarAssetMetadata>()
     private val resolver = PhotoActionResolver(catalog)
+    private val expressionProfiles = mutableMapOf<String, PhotoExpressionProfile>()
+
+    private fun profile(action: ResolvedPhotoAction): PhotoExpressionProfile? = action.expressionProfilePath?.let { path ->
+        expressionProfiles.getOrPut("$path:${action.avatarAssetVersion}:${action.version}") {
+            appContext.assets.open(path).bufferedReader().use { VlmJson.decodeFromString<PhotoExpressionProfile>(it.readText()) }
+        }
+    }
+
+    private fun weights(action: ResolvedPhotoAction, expression: ExpressionId, intensity: Float): Map<String, Float> =
+        action.expressionProfile?.weights(expression, intensity) ?: AvatarCatalog.expressionWeights(expression, intensity)
 
     private data class LoadedAvatar(
         val asset: FilamentAsset,
@@ -68,9 +78,9 @@ class FilamentAvatarRenderer(context: Context, private val catalog: PhotoActionC
     private fun snapshot(source: PhotoPoseSource.Snapshot): PhotoPoseSnapshot =
         appContext.assets.open(source.path).bufferedReader().use { VlmJson.decodeFromString<PhotoPoseSnapshot>(it.readText()) }
 
-    private fun validateAction(definition: PhotoActionDefinition, role: AvatarId) {
-        val data = metadata(definition.asset(role))
-        PhotoActionSupport.validate(definition, role, data, (definition.source as? PhotoPoseSource.Snapshot)?.let(::snapshot))
+    private fun validateAction(definition: PhotoActionDefinition, role: AvatarId, ethnicity: AvatarEthnicity? = null) {
+        val data = metadata(definition.asset(role, ethnicity))
+        PhotoActionSupport.validate(definition, role, data, (definition.source as? PhotoPoseSource.Snapshot)?.let(::snapshot), ethnicity)
     }
 
     override suspend fun availableActions(role: AvatarId, shot: ShotType): List<PhotoActionDefinition> =
@@ -82,7 +92,11 @@ class FilamentAvatarRenderer(context: Context, private val catalog: PhotoActionC
         withContext(kotlinx.coroutines.Dispatchers.IO) { metadataMutex.withLock {
             val action = resolver.resolve(plan).resolvedSpec!!.action
             val data = metadata(AvatarCatalog.Asset(action.avatarAssetPath, action.avatarAssetVersion, action.rigId))
-            ExpressionId.entries.filter { data.morphs.containsAll(AvatarCatalog.expressionWeights(it, 1f).keys) }
+            val configured = profile(action)
+            configured?.validate(data.morphs)
+            (configured?.expressions?.keys?.toList() ?: ExpressionId.entries).filter {
+                data.morphs.containsAll(configured?.weights(it, 1f)?.keys ?: AvatarCatalog.expressionWeights(it, 1f).keys)
+            }
         } }
 
     override suspend fun resolve(plan: CompositionPlan, selectedActionId: String?): CompositionPlan =
@@ -91,19 +105,38 @@ class FilamentAvatarRenderer(context: Context, private val catalog: PhotoActionC
                 val automatic = if (selectedActionId == null && plan.resolvedSpec == null) {
                     val usable = catalog.candidates(plan.avatar.avatarId, plan.shot).filter {
                         it.readiness == ActionReadiness.REVIEWED && runCatching {
-                            validateAction(it, plan.avatar.avatarId)
-                            val required = AvatarCatalog.expressionWeights(plan.avatar.expression, plan.avatar.expressionIntensity).filterValues { weight -> weight > 0f }.keys
-                            require(metadata(it.asset(plan.avatar.avatarId)).morphs.containsAll(required))
+                            validateAction(it, plan.avatar.avatarId, plan.avatar.ethnicity)
+                            val action = resolver.resolve(plan, it.id, ActionOrigin.MODEL).resolvedSpec!!.action
+                            val configured = profile(action)
+                            val data = metadata(it.asset(plan.avatar.avatarId, plan.avatar.ethnicity))
+                            configured?.validate(data.morphs)
+                            val required = (configured?.weights(plan.avatar.expression, plan.avatar.expressionIntensity)
+                                ?: AvatarCatalog.expressionWeights(plan.avatar.expression, plan.avatar.expressionIntensity)).filterValues { weight -> weight > 0f }.keys
+                            require(data.morphs.containsAll(required))
                         }.isSuccess
                     }
                     resolver.automaticActionId(plan, usable)
                 } else null
-                val resolved = resolver.resolve(plan, selectedActionId ?: automatic,
+                var resolved = resolver.resolve(plan, selectedActionId ?: automatic,
                     if (automatic != null) ActionOrigin.MODEL else null)
+                val rawSpec = resolved.resolvedSpec!!
+                val configured = profile(rawSpec.action)
+                if (configured != null) {
+                    require(configured.status == rawSpec.action.readiness) { "PHOTO_EXPRESSION_REVIEW_MISMATCH" }
+                    configured.validate(metadata(AvatarCatalog.Asset(rawSpec.action.avatarAssetPath,
+                        rawSpec.action.avatarAssetVersion, rawSpec.action.rigId)).morphs)
+                    if (resolved.avatar.expression !in configured.expressions && selectedActionId != null) {
+                        resolved = resolved.withActualAvatar(resolved.avatar.copy(expression = ExpressionId.SMILE,
+                            expressionIntensity = configured.defaultIntensity))
+                    }
+                    val currentSpec = requireNotNull(resolved.resolvedSpec)
+                    resolved = resolved.copy(resolvedSpec = currentSpec.copy(
+                        action = currentSpec.action.copy(expressionProfile = configured)))
+                }
                 val spec = resolved.resolvedSpec!!
-                validateAction(catalog.find(spec.action.id), spec.avatar.avatarId)
+                validateAction(catalog.find(spec.action.id), spec.avatar.avatarId, spec.avatar.ethnicity)
                 val data = metadata(AvatarCatalog.Asset(spec.action.avatarAssetPath, spec.action.avatarAssetVersion, spec.action.rigId))
-                val required = AvatarCatalog.expressionWeights(spec.avatar.expression, spec.avatar.expressionIntensity).filterValues { it > 0f }.keys
+                val required = weights(spec.action, spec.avatar.expression, spec.avatar.expressionIntensity).filterValues { it > 0f }.keys
                 require(data.morphs.containsAll(required)) { "PHOTO_EXPRESSION_MISSING" }
                 val controlled = spec.action.source as? PhotoPoseSource.Controlled
                 if (controlled != null) {
@@ -147,6 +180,12 @@ class FilamentAvatarRenderer(context: Context, private val catalog: PhotoActionC
         assets[key]?.let { return it }
         val bytes = appContext.assets.open(action.avatarAssetPath).use { it.readBytes() }
         val metadata = AvatarAssetMetadata.read(bytes)
+        Log.i(LOG_TAG, "GLB 顶点布局检查 asset=${action.avatarAssetPath} assetVersion=${action.avatarAssetVersion} " +
+            "primitives=${metadata.vertexLayouts.size} maxSlotsUpperBound=${metadata.maxFilamentSlots} " +
+            "limit=${AvatarVertexLayout.FILAMENT_SLOT_LIMIT}")
+        // PreconditionPanic 会在 JNI 触发 SIGABRT，不能靠 Kotlin try/catch 捕获。
+        // 必须先校验再调用 createAsset；也在动作能力筛选阶段执行同一校验。
+        metadata.validateFilamentVertexBuffers()
         val buffer = ByteBuffer.allocateDirect(bytes.size).order(ByteOrder.nativeOrder()).apply {
             put(bytes)
             flip()
@@ -255,9 +294,13 @@ class FilamentAvatarRenderer(context: Context, private val catalog: PhotoActionC
                 view.camera = camera
                 view.viewport = Viewport(0, 0, width, height)
                 view.blendMode = View.BlendMode.TRANSLUCENT
-                // 后处理最终合成会把透明交换链的 alpha 写成 1，导致整个 GLB 离屏层遮住
-                // 冻结照片；人像参考图需要保留每个像素的原始透明度，故在该离屏路径关闭它。
+                // 黑白底必须保持线性才能恢复透明度。这里关闭后处理且不启用 SRGB swapchain，
+                // 读回后由 AvatarDisplayColor 恢复 alpha 并编码 sRGB，不能直接当屏幕颜色使用。
                 view.isPostProcessingEnabled = false
+                Log.i(LOG_TAG, "GLB 显示颜色 action=${plan.resolvedSpec?.action?.id} " +
+                    "ethnicity=${plan.avatar.ethnicity} purpose=$purpose " +
+                    "pipeline=${AvatarDisplayColor.VERSION} readback=LINEAR bitmap=SRGB " +
+                    "warmth=$warmth brightness=$brightness")
                 lightEntity = EntityManager.get().create()
                 LightManager.Builder(LightManager.Type.SUN)
                     .color(1f, 1f - warmth.coerceIn(-1f, 1f) * .08f, 1f - warmth.coerceIn(-1f, 1f) * .16f)
@@ -281,7 +324,8 @@ class FilamentAvatarRenderer(context: Context, private val catalog: PhotoActionC
                 var expectedBounds = applyPlan(loaded, renderedPlan, aspect)
                 if (purpose == AvatarRenderPurpose.FACE) focusFace(loaded, renderedPlan, camera)
                 scene.addEntities(loaded.asset.entities)
-                var bitmap = renderTransparent(e, renderer, view, swapChain, width, height)
+                val softenColors = requireNotNull(plan.resolvedSpec).action.softenColors
+                var bitmap = renderTransparent(e, renderer, view, swapChain, width, height, softenColors)
                 var actualBounds = alphaCropRect(bitmap)
                 // 个别 GLB 导出会报告不准确包围盒。按真实透明像素高度只做一次向下校准，
                 // 正常资产不会触发；绝不为了填满画面而放大人像。
@@ -291,7 +335,7 @@ class FilamentAvatarRenderer(context: Context, private val catalog: PhotoActionC
                     renderedPlan = renderedPlan.shrinkProjection(shrink)
                     expectedBounds = applyPlan(loaded, renderedPlan, aspect)
                     bitmap.recycle()
-                    bitmap = renderTransparent(e, renderer, view, swapChain, width, height)
+                    bitmap = renderTransparent(e, renderer, view, swapChain, width, height, softenColors)
                     actualBounds = alphaCropRect(bitmap)
                     Log.w(LOG_TAG, "GLB 比例校准 role=${plan.avatar.avatarId} targetHeight=$originalHeight shrink=$shrink")
                 }
@@ -327,7 +371,8 @@ class FilamentAvatarRenderer(context: Context, private val catalog: PhotoActionC
     }
 
     private fun focusFace(loaded: LoadedAvatar, plan: CompositionPlan, camera: Camera) {
-        val head = loaded.asset.getFirstEntityByName("Bip01 Head")
+        val anchor = requireNotNull(plan.resolvedSpec).action.faceAnchorNode
+        val head = loaded.asset.getFirstEntityByName(anchor)
         check(head != 0) { appContext.getString(R.string.vlm_photo_face_unavailable) }
         val transforms = engine!!.transformManager
         val world = transforms.getWorldTransform(transforms.getInstance(head), FloatArray(16))
@@ -336,6 +381,7 @@ class FilamentAvatarRenderer(context: Context, private val catalog: PhotoActionC
         val x = world[12].toDouble()
         val y = world[13].toDouble() + plan.avatar.height * .02
         val z = world[14].toDouble()
+        Log.i(LOG_TAG, "脸部示范定位 action=${plan.resolvedSpec.action.id} anchor=$anchor expression=${plan.avatar.expression}")
         camera.lookAt(x, y, z + 6.0, x, y, z, 0.0, 1.0, 0.0)
     }
 
@@ -398,14 +444,21 @@ class FilamentAvatarRenderer(context: Context, private val catalog: PhotoActionC
                 "mesh=${firstMesh ?: 0} meshWorld=${firstMesh?.let(::worldMatrixText) ?: "none"}"
         )
 
-        val desiredWeights = AvatarCatalog.expressionWeights(avatar.expression, avatar.expressionIntensity)
+        val desiredWeights = weights(plan.resolvedSpec.action, avatar.expression, avatar.expressionIntensity)
+        val executedNames = mutableSetOf<String>()
         for (entity in loaded.asset.renderableEntities) {
             val instance = renderables.getInstance(entity)
             if (instance == 0) continue
             val names = loaded.asset.getMorphTargetNames(entity)
             if (names.isEmpty()) continue
             val weights = FloatArray(names.size) { index -> desiredWeights[names[index]] ?: 0f }
+            executedNames += names.toList()
             renderables.setMorphWeights(instance, weights, 0)
+            Log.d(LOG_TAG, "表情执行 action=${plan.resolvedSpec.action.id} entity=$entity targets=${names.size} " +
+                "expression=${avatar.expression} intensity=${avatar.expressionIntensity} nonZero=${weights.count { it > 0f }}")
+        }
+        check(executedNames.containsAll(desiredWeights.filterValues { it > 0f }.keys)) {
+            appContext.getString(R.string.vlm_photo_expression_binding_failed)
         }
         loaded.asset.instance.animator.updateBoneMatrices()
 
@@ -463,13 +516,18 @@ class FilamentAvatarRenderer(context: Context, private val catalog: PhotoActionC
         view: View,
         swapChain: SwapChain,
         width: Int,
-        height: Int
+        height: Int,
+        softenColors: Boolean
     ): Bitmap {
         renderer.clearOptions = opaqueClear(0.0)
         val blackMatte = readBitmap(e, renderer, view, swapChain, width, height)
-        renderer.clearOptions = opaqueClear(1.0)
-        val whiteMatte = readBitmap(e, renderer, view, swapChain, width, height)
-        return restoreTransparency(blackMatte, whiteMatte)
+        try {
+            renderer.clearOptions = opaqueClear(1.0)
+            val whiteMatte = readBitmap(e, renderer, view, swapChain, width, height)
+            try {
+                return restoreTransparency(blackMatte, whiteMatte, softenColors)
+            } finally { whiteMatte.recycle() }
+        } finally { blackMatte.recycle() }
     }
 
     private fun opaqueClear(value: Double) = Renderer.ClearOptions().apply {
@@ -481,7 +539,7 @@ class FilamentAvatarRenderer(context: Context, private val catalog: PhotoActionC
      * 黑底像素为 alpha × 前景色，白底像素多出的部分为 (1 - alpha)。
      * 这样即使驱动把 readPixels 的 alpha 强制写成 255，也能恢复抗锯齿边缘的透明度。
      */
-    private fun restoreTransparency(black: Bitmap, white: Bitmap): Bitmap {
+    private fun restoreTransparency(black: Bitmap, white: Bitmap, softenColors: Boolean): Bitmap {
         check(black.width == white.width && black.height == white.height) { "avatar_matte_size_mismatch" }
         val size = black.width * black.height
         val blackPixels = IntArray(size)
@@ -489,37 +547,9 @@ class FilamentAvatarRenderer(context: Context, private val catalog: PhotoActionC
         val output = IntArray(size)
         black.getPixels(blackPixels, 0, black.width, 0, 0, black.width, black.height)
         white.getPixels(whitePixels, 0, white.width, 0, 0, white.width, white.height)
-        for (index in 0 until size) {
-            val dark = blackPixels[index]
-            val light = whitePixels[index]
-            val darkRed = dark ushr 16 and 0xff
-            val darkGreen = dark ushr 8 and 0xff
-            val darkBlue = dark and 0xff
-            val difference = (
-                ((light ushr 16 and 0xff) - darkRed).coerceIn(0, 255) +
-                    ((light ushr 8 and 0xff) - darkGreen).coerceIn(0, 255) +
-                    ((light and 0xff) - darkBlue).coerceIn(0, 255)
-                ) / 3
-            val alpha = (255 - difference).coerceIn(0, 255)
-            if (alpha == 0) continue
-            val rawRed = (darkRed * 255 / alpha).coerceAtMost(255)
-            val rawGreen = (darkGreen * 255 / alpha).coerceAtMost(255)
-            val rawBlue = (darkBlue * 255 / alpha).coerceAtMost(255)
-            // Rocketbox 原始贴图偏写实且暗部很重。轻度提亮、降低局部对比和饱和度，
-            // 使参考人像更接近柔和插画效果，同时保留衣物与表情细节。
-            val luminance = rawRed * .2126f + rawGreen * .7152f + rawBlue * .0722f
-            val red = softIllustrationChannel(rawRed, luminance)
-            val green = softIllustrationChannel(rawGreen, luminance)
-            val blue = softIllustrationChannel(rawBlue, luminance)
-            output[index] = alpha shl 24 or (red shl 16) or (green shl 8) or blue
-        }
+        for (index in 0 until size)
+            output[index] = AvatarDisplayColor.restorePixel(blackPixels[index], whitePixels[index], softenColors)
         return Bitmap.createBitmap(output, black.width, black.height, Bitmap.Config.ARGB_8888)
-    }
-
-    private fun softIllustrationChannel(channel: Int, luminance: Float): Int {
-        val softened = luminance + (channel - luminance) * .82f
-        val lifted = kotlin.math.sqrt((softened / 255f).coerceIn(0f, 1f)) * 255f
-        return (lifted * .90f + 255f * .10f).toInt().coerceIn(0, 255)
     }
 
     private companion object {

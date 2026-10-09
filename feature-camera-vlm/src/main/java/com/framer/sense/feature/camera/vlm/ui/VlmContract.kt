@@ -10,8 +10,21 @@ import com.framer.sense.feature.camera.vlm.model.*
 
 enum class VlmStage { LIVE, SCANNING, SCAN_PROCESSING, SCAN_REVIEW, VIEW_SELECTING, FREEZING, FROZEN, GENERATING, READY, MODIFYING }
 
+/** 样片独立于扫描/构图会话，关闭即失效，不修改选中方案。 */
+data class PhotoSampleState(
+    val token: String,
+    val expression: ExpressionId = ExpressionId.SMILE,
+    val body: Bitmap? = null,
+    val face: Bitmap? = null,
+    val loading: Boolean = true,
+    val error: String? = null,
+    val ethnicity: AvatarEthnicity = AvatarEthnicity.WHITE,
+    val actionId: String = com.framer.sense.feature.camera.vlm.avatar.PhotoActionCatalog.SAMPLE_ID
+)
+
 data class VlmUiState(
     val stage: VlmStage = VlmStage.LIVE,
+    val ar: com.framer.sense.feature.camera.vlm.ar.ArUiState = com.framer.sense.feature.camera.vlm.ar.ArUiState(),
     val scanSession: ScanSession? = null,
     val scanProgress: ScanProgress = ScanProgress(),
     val scanSnapshot: ScanSnapshot? = null,
@@ -31,6 +44,7 @@ data class VlmUiState(
     val diagnostics: CompositionResult? = null,
     val selectedId: String? = null,
     val selectedAvatar: AvatarId = AvatarId.ADULT_FEMALE,
+    val selectedEthnicity: AvatarEthnicity = AvatarEthnicity.WHITE,
     val previews: Map<String, PlanPreview> = emptyMap(),
     val availableActions: Map<String, List<PhotoActionDefinition>> = emptyMap(),
     val availableExpressions: Map<String, List<ExpressionId>> = emptyMap(),
@@ -47,8 +61,13 @@ data class VlmUiState(
     val saving: Boolean = false,
     val settingsVisible: Boolean = false,
     val fromImportedImage: Boolean = false,
-    val directorProgress: DirectorProgress? = null
+    val directorProgress: DirectorProgress? = null,
+    val photoSample: PhotoSampleState? = null
 ) {
+    /** 实时画面不因离线模型加载而降帧；冻结分析时才降低后台绘制频率。 */
+    val requiresLivePreview: Boolean
+        get() = photoSample == null && stage in listOf(VlmStage.LIVE, VlmStage.SCANNING, VlmStage.FREEZING)
+
     /** 仅显示扫描预览，不能作为已选背景、构图输入或应用参考。 */
     val displayScene: SceneSnapshot?
         get() = scene ?: if (stage in listOf(VlmStage.SCAN_PROCESSING, VlmStage.SCAN_REVIEW, VlmStage.VIEW_SELECTING))
@@ -56,6 +75,12 @@ data class VlmUiState(
 }
 
 sealed interface VlmIntent {
+    data class ArUpdated(val state: com.framer.sense.feature.camera.vlm.ar.ArUiState) : VlmIntent
+    data object OpenPhotoSample : VlmIntent
+    data object ClosePhotoSample : VlmIntent
+    data class PhotoSampleExpression(val expression: ExpressionId) : VlmIntent
+    data class PhotoSampleEthnicity(val ethnicity: AvatarEthnicity) : VlmIntent
+    data class PhotoSampleAction(val actionId: String) : VlmIntent
     data class UserMessage(val message: String) : VlmIntent
     data object StartScan : VlmIntent
     data object StopScan : VlmIntent
@@ -68,7 +93,7 @@ sealed interface VlmIntent {
     data class AnalysisReceived(val sample: com.framer.sense.feature.camera.vlm.scan.AnalysisSample) : VlmIntent
     data object ConfirmBackground : VlmIntent
     data object StartComposition : VlmIntent
-    data class FrameReady(val token: String, val bitmap: Bitmap, val zoom: Float) : VlmIntent
+    data class FrameReady(val token: String, val bitmap: Bitmap, val zoom: Float, val arConfig: ScanCameraConfig? = null) : VlmIntent
     data class PlatformFailed(val token: String?, val message: String) : VlmIntent
     data class CameraReady(val capabilities: CameraCapabilities) : VlmIntent
     data object CameraStopped : VlmIntent
@@ -82,6 +107,7 @@ sealed interface VlmIntent {
     data class Move(val dx: Float, val dy: Float) : VlmIntent
     data class Resize(val height: Float) : VlmIntent
     data class ActionSelected(val actionId: String) : VlmIntent
+    data class EthnicitySelected(val ethnicity: AvatarEthnicity) : VlmIntent
     data class ExpressionSelected(val expression: ExpressionId) : VlmIntent
     data class ExpressionIntensityChanged(val intensity: Float) : VlmIntent
     data class FaceVisible(val visible: Boolean) : VlmIntent

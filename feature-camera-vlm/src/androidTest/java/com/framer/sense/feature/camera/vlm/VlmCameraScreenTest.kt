@@ -2,6 +2,8 @@ package com.framer.sense.feature.camera.vlm
 
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.ui.Modifier
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.test.assertTextContains
 import androidx.compose.ui.test.junit4.createComposeRule
@@ -9,6 +11,9 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.assertIsNotEnabled
+import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.hasTestTag
+import androidx.compose.ui.test.performScrollToNode
 import com.framer.sense.feature.camera.vlm.agent.DirectorProgress
 import com.framer.sense.feature.camera.vlm.ui.VlmLoadingOverlay
 import com.framer.sense.feature.camera.vlm.ui.VlmStage
@@ -23,6 +28,48 @@ import org.junit.Test
 /** 验证导演加载遮罩展示当前真实步骤，而不是旧的通用固定文案。 */
 class VlmCameraScreenTest {
     @get:Rule val composeRule = createComposeRule()
+
+    @Test fun allThreeCompositionChoicesAreVisibleWithoutExpanding() {
+        val plans = (1..3).map { CompositionPlan("p$it", "方案$it", ShotType.FULL, CropRect(), 1f,
+            AvatarPlacement(), "指导", "背景") }
+        val state = VlmUiState(stage = VlmStage.READY, selectedId = "p1",
+            result = CompositionResult(plans, emptyList(), emptyList(), emptyList()))
+        val events = mutableListOf<VlmIntent>()
+        composeRule.setContent { MaterialTheme { Controls(state, { events += it }, {}, Modifier.fillMaxWidth()) } }
+        plans.forEach { composeRule.onNodeWithTag("vlm_composition_${it.id}").assertIsDisplayed() }
+        composeRule.onNodeWithText("展开其他构图").assertDoesNotExist()
+        composeRule.onNodeWithText("收起其他构图").assertDoesNotExist()
+        composeRule.onNodeWithTag("vlm_composition_p3").performClick()
+        assertEquals(listOf(VlmIntent.Select("p3")), events)
+    }
+
+    @Test fun sampleDialogUsesDedicatedEventsAndDisablesExpressionWhileRendering() {
+        val sample = mutableStateOf(PhotoSampleState("sample", loading = true))
+        val events = mutableListOf<VlmIntent>()
+        composeRule.setContent { MaterialTheme { PhotoSampleDialog(sample.value) { events += it } } }
+        composeRule.onNodeWithTag("vlm_sample_expression_NEUTRAL").assertIsNotEnabled()
+        composeRule.onNodeWithTag("vlm_sample_expression_HAPPY").assertIsNotEnabled()
+        composeRule.onNodeWithTag("vlm_sample_ethnicity_ASIAN").assertIsNotEnabled()
+        composeRule.onNodeWithTag("vlm_sample_action_${PhotoActionCatalog.SAMPLE_ID}").assertIsNotEnabled()
+        composeRule.runOnIdle { sample.value = sample.value.copy(loading = false) }
+        composeRule.onNodeWithTag("vlm_sample_expression_NEUTRAL").performClick()
+        composeRule.onNodeWithTag("vlm_sample_expression_HAPPY").performClick()
+        composeRule.onNodeWithTag("vlm_sample_ethnicity_ASIAN").performClick()
+        composeRule.onNodeWithTag("vlm_sample_close").performClick()
+        assertEquals(listOf(VlmIntent.PhotoSampleExpression(ExpressionId.NEUTRAL),
+            VlmIntent.PhotoSampleExpression(ExpressionId.HAPPY), VlmIntent.PhotoSampleEthnicity(AvatarEthnicity.ASIAN),
+            VlmIntent.ClosePhotoSample), events)
+    }
+
+    @Test fun samplePoseSelectionUsesIndependentEventAndKeepsExpressionAndAppearance() {
+        val events = mutableListOf<VlmIntent>()
+        composeRule.setContent { MaterialTheme { PhotoSampleDialog(PhotoSampleState("pose",
+            expression = ExpressionId.HAPPY, loading = false, ethnicity = AvatarEthnicity.ASIAN)) { events += it } } }
+        val tag = "vlm_sample_action_${PhotoActionCatalog.WALK_PAUSE_ID}"
+        composeRule.onNodeWithTag("vlm_sample_actions").performScrollToNode(hasTestTag(tag))
+        composeRule.onNodeWithTag(tag).performClick()
+        assertEquals(listOf(VlmIntent.PhotoSampleAction(PhotoActionCatalog.WALK_PAUSE_ID)), events)
+    }
 
     @Test fun loadingOverlayShowsCurrentDirectorStepInsteadOfGenericCopy() {
         composeRule.setContent {

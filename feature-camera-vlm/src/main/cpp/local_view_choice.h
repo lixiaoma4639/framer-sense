@@ -11,6 +11,9 @@ struct LocalViewChoice {
     std::vector<float> scores;
 };
 
+// 摄影组合数与输入图片数独立；一张背景可以比较六个摄影组合。
+inline constexpr size_t kMaxLocalChoices = 6;
+
 /** 接受单行或完整未填充序列的最后一行；分块/填充位置不明确时拒绝。 */
 inline size_t localViewLogitOffset(size_t elements, size_t vocabulary, int promptTokens) {
     if (elements == 0 || vocabulary == 0 || elements % vocabulary != 0 || promptTokens <= 0)
@@ -24,7 +27,7 @@ inline size_t localViewLogitOffset(size_t elements, size_t vocabulary, int promp
 /** 仅比较真实模型的合法编号分数；缺失、越界或非有限分数不得兜底选首帧。 */
 inline LocalViewChoice chooseLocalView(const float* logits, size_t vocabulary,
                                      const std::vector<int>& digitTokens) {
-    if (!logits || digitTokens.empty() || digitTokens.size() > kMaxLocalImages)
+    if (!logits || digitTokens.empty() || digitTokens.size() > kMaxLocalChoices)
         throw std::runtime_error("LOCAL_VIEW_CHOICE_INVALID");
     std::unordered_set<int> unique;
     LocalViewChoice choice{1, {}};

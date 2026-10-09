@@ -5,20 +5,19 @@ import android.graphics.*
 import androidx.core.graphics.scale
 import com.framer.sense.feature.camera.vlm.model.*
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
-import java.io.ByteArrayOutputStream
 import java.io.File
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.Executors
 
 /** 相机已经关闭 ImageProxy，缓冲区的所有权交给串行会话工作者。 */
 data class AnalysisSample(val targetId: String, val timestampNs: Long, val receivedNs: Long,
     val config: ScanCameraConfig, val pose: ScanPose?, val width: Int, val height: Int, val nv21: ByteArray) {
     fun bitmap(): Bitmap {
-        val encoded = ByteArrayOutputStream()
-        check(YuvImage(nv21, ImageFormat.NV21, width, height, null).compressToJpeg(Rect(0, 0, width, height), 95, encoded))
-        val decoded = requireNotNull(BitmapFactory.decodeByteArray(encoded.toByteArray(), 0, encoded.size()))
+        val decoded = YuvBitmapDecoder.decode(nv21, width, height)
         val r = config.crop
         val x = (r.left * width).toInt().coerceIn(0, width - 1); val y = (r.top * height).toInt().coerceIn(0, height - 1)
         val w = ((r.right - r.left) * width).toInt().coerceIn(1, width - x); val h = ((r.bottom - r.top) * height).toInt().coerceIn(1, height - y)
@@ -30,6 +29,9 @@ data class AnalysisSample(val targetId: String, val timestampNs: Long, val recei
 
 /** 生命周期归 ViewModel 所有；文件操作与特征处理串行，模型预算归扫描会话所有。 */
 class PhotoSessionController(context: Context, private val vision: OpenCvSceneTools = OpenCvSceneTools()) {
+    private val processingDispatcher = Executors.newSingleThreadExecutor { task ->
+        Thread({ android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_BACKGROUND); task.run() }, "vlm-scan-analysis")
+    }.asCoroutineDispatcher()
     private val root = File(context.cacheDir, "vlm-scans/${newVlmId()}")
     init { synchronized(activeRoots) { activeRoots += root.path; root.mkdirs() } }
     private val mutex = Mutex()
@@ -58,7 +60,7 @@ class PhotoSessionController(context: Context, private val vision: OpenCvSceneTo
     fun progress(atNs: Long) = collector?.progress(atNs) ?: ScanProgress()
     fun prefer(atNs: Long) = collector?.preferLatest(atNs) == true
 
-    suspend fun collect(sample: AnalysisSample): ScanProgress = withContext(Dispatchers.Default) { mutex.withLock {
+    suspend fun collect(sample: AnalysisSample): ScanProgress = withContext(processingDispatcher) { mutex.withLock {
         val active = collector ?: return@withLock ScanProgress()
         if (!active.accepts(sample.targetId, sample.timestampNs, sample.receivedNs, sample.config)) return@withLock active.progress(sample.receivedNs)
         active.observePose(sample.pose)
@@ -98,7 +100,7 @@ class PhotoSessionController(context: Context, private val vision: OpenCvSceneTo
     } }
 
     suspend fun align(sample: AnalysisSample, plan: CompositionPlan, scene: SceneSnapshot, targetPose: ScanPose?): BackgroundGuidance =
-        withContext(Dispatchers.Default) { mutex.withLock {
+        withContext(processingDispatcher) { mutex.withLock {
             if (sample.config.version != latestConfig) return@withLock BackgroundGuidance()
             val key = "${scene.id}:${plan.revision}:${plan.crop}:${plan.avatar}:${sample.config.version}:${referenceEpoch.get()}"
             if (referenceId != key) {
@@ -127,8 +129,10 @@ class PhotoSessionController(context: Context, private val vision: OpenCvSceneTo
         } }
 
     suspend fun dispose() {
-        clear()
-        withContext(Dispatchers.IO) { synchronized(activeRoots) { root.deleteRecursively(); activeRoots.remove(root.path) } }
+        try {
+            clear()
+            withContext(Dispatchers.IO) { synchronized(activeRoots) { root.deleteRecursively(); activeRoots.remove(root.path) } }
+        } finally { processingDispatcher.close() }
     }
 
     fun resetReference() { referenceEpoch.incrementAndGet() }

@@ -1,0 +1,15 @@
+{
+  "id": "female-natural-expression-v1",
+  "version": 1,
+  "status": "DRAFT",
+  "defaultIntensity": 0.8,
+  "expressions": {
+    "NEUTRAL": {},
+    "SMILE": {
+      "AK_44_MouthSmileLeft": 0.75,
+      "AK_45_MouthSmileRight": 0.75,
+      "AK_07_CheekSquintLeft": 0.15,
+      "AK_08_CheekSquintRight": 0.15
+    }
+  }
+}

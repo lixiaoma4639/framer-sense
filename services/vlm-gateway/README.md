@@ -89,3 +89,11 @@ python -m pytest tests -q
 ```
 
 部署前保留 HTTPS、令牌与原有上游配置；无需为实时背景匹配增加接口。取消、内容拒绝和参数错误不由服务端自动重试。
+
+## 摄影参考目录 v2（2026-10-08）
+
+本次新增 `POST /v2/director/step` 和 `/v2/capabilities.providers[].directorV2`；该声明绑定环境变量中实际配置的模型，不代表供应商已实测通过。请求仍为单张 JPEG、provider、requestId、imageId 和 prompt，但 `version=2`。响应保持 `{model,raw,decision,elapsedMs}`，v2 数据位于 raw，`decision=null`，避免改变 v1 的 Decision 类型。
+
+raw 顶层为 `version=2,imageId,action=FINAL,intents`；每项字段 `id,title,shot,zone,actionId,expression,expressionIntensity,yaw,reason,backgroundKeepRegions,uncertainties`。初稿白名单为 `draft.rain_natural_stand`、`draft.rain_side_stand`、`draft.rain_look_back`，表情 `NEUTRAL/SMILE/HAPPY`，强度 0–1、额外朝向 ±35°。模型不能指定骨骼矩阵、资源路径或更改角色外观。四供应商沿用真实图像通道，GPT／Gemini 使用新 schema；千问和 Seed 使用 JSON 提示词。最终数量、来源、布局和动作校验由 App 执行，不合法 raw 交有限修正轮次；不静默生成默认专业姿势。
+
+部署需更新这些 Python 文件并重启现有网关进程（保持原令牌、上游配置和 HTTPS）；无需重新配置密钥。App 查询不存在 v2 的旧网关或缺少 directorV2 声明时走 v1，并提示旧能力。计费预算继续由 App 会话统一统计，不因版本、重新生成或切供应商重置。新增 `tests/test_photo_reference.py` 使用模拟上游；本轮未运行测试，真实供应商可用性由用户联调。

@@ -79,6 +79,7 @@ dependencies {
     implementation(libs.androidx.camera.lifecycle)
     implementation(libs.androidx.camera.view)
     implementation("org.opencv:opencv:4.12.0")
+    implementation("com.google.ar:core:1.54.0")
 
     implementation(libs.androidx.exifinterface)
     implementation(libs.kotlinx.serialization.json)

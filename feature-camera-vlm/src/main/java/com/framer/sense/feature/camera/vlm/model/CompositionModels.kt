@@ -28,6 +28,8 @@ val VlmJson = Json { encodeDefaults = true; explicitNulls = true }
 /** 模型对人物与相机距离的摄影语义，不是未经校验的真实测距。 */
 @Serializable enum class SubjectDistance { FAR, MID, NEAR }
 @Serializable enum class AvatarId { ADULT_FEMALE, ADULT_MALE, CHILD_GIRL, CHILD_BOY }
+/** 用户选择的卡通角色外观；不从照片推断，不交给模型改写。 */
+enum class AvatarEthnicity { WHITE, ASIAN, BLACK }
 @Serializable enum class ActionKind { CAPABILITIES, VALIDATE, RENDER, FINAL }
 @Serializable enum class CompositionZone { LEFT, CENTER, RIGHT }
 @Serializable enum class FacingDirection { FRONT, THREE_QUARTER_LEFT, THREE_QUARTER_RIGHT }
@@ -51,7 +53,9 @@ val VlmJson = Json { encodeDefaults = true; explicitNulls = true }
     /** 用于说明与比例策略的摄影距离语义。 */
     val subjectDistance: SubjectDistance = SubjectDistance.MID,
     /** 仅在 App 内避免已校准的投影再次缩小；不进入 v1 云端协议。 */
-    @kotlinx.serialization.Transient val projectionCalibrated: Boolean = false
+    @kotlinx.serialization.Transient val projectionCalibrated: Boolean = false,
+    /** 仅用于 App 内角色资源选择，保持现有网关协议不变。 */
+    @kotlinx.serialization.Transient val ethnicity: AvatarEthnicity? = null
 )
 
 /**
@@ -110,7 +114,10 @@ val VlmJson = Json { encodeDefaults = true; explicitNulls = true }
     @Required val uncertainties: List<String> = emptyList(),
     @Required val revision: Int = 0,
     @kotlinx.serialization.Transient val resolvedSpec: ResolvedPhotoSpec? = null,
-    @kotlinx.serialization.Transient val viewBinding: PhotoViewBinding? = null
+    @kotlinx.serialization.Transient val viewBinding: PhotoViewBinding? = null,
+    @kotlinx.serialization.Transient val backgroundKeepRegions: List<CropRect> = emptyList(),
+    @kotlinx.serialization.Transient val localCombination: Int? = null,
+    @kotlinx.serialization.Transient val localAlternative: Boolean = false
 )
 /** 模型仅表达摄影意图；坐标、裁剪和倍率由客户端映射并校验。 */
 @Serializable data class CompositionIntent(
@@ -141,7 +148,8 @@ val VlmJson = Json { encodeDefaults = true; explicitNulls = true }
     val height: Int,
     val currentZoom: Float,
     val imagePath: String,
-    val modelImagePath: String
+    val modelImagePath: String,
+    @kotlinx.serialization.Transient val arBinding: PhotoViewBinding? = null
 )
 @Serializable data class CameraCapabilities(
     val minZoom: Float = 1f,
@@ -173,7 +181,8 @@ val VlmJson = Json { encodeDefaults = true; explicitNulls = true }
     val model: String,
     val raw: String,
     val decision: DirectorDecision? = null,
-    val elapsedMs: Long = 0
+    val elapsedMs: Long = 0,
+    @kotlinx.serialization.Transient val photoProtocol: Boolean = false
 )
 @Serializable data class GatewayCapability(
     val provider: ProviderId,
@@ -202,9 +211,12 @@ data class DirectorInput(
     val avatarId: AvatarId = AvatarId.ADULT_FEMALE,
     val viewBinding: PhotoViewBinding? = null,
     val backgroundRegions: List<CropRect> = emptyList(),
-    val sessionBudget: com.framer.sense.feature.camera.vlm.scan.PhotoSessionBudget? = null
+    val sessionBudget: com.framer.sense.feature.camera.vlm.scan.PhotoSessionBudget? = null,
+    val photoReferences: Boolean = false,
+    val ethnicity: AvatarEthnicity = AvatarEthnicity.WHITE,
+    val arMode: Boolean = false
 )
-data class ModelCall(val input: DirectorInput, val prompt: String, val requestId: String)
+data class ModelCall(val input: DirectorInput, val prompt: String, val requestId: String, val legacyPrompt: String? = null)
 data class CallTrace(val provider: ProviderId, val model: String, val elapsedMs: Long, val detail: String)
 data class CompositionResult(
     val plans: List<CompositionPlan>,

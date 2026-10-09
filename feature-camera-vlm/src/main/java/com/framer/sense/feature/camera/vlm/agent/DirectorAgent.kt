@@ -108,7 +108,8 @@ class DirectorAgent(
                         val prompt = DirectorPrompt.build(input, observations, lastRaw, turn == 1, offline = id == ProviderId.LOCAL)
                         logger.info("调用模型 turn=${turn + 1} provider=$id fallback=$switchingProvider")
                         if (id == ProviderId.LOCAL) localAttempted = true
-                        val answer = providerFactory(id).step(ModelCall(input, prompt, newVlmId()))
+                        val answer = providerFactory(id).step(ModelCall(input, prompt, newVlmId(),
+                            if (PhotoReferenceDecisionPolicy.enabled(input)) DirectorPrompt.build(input.copy(photoReferences = false), observations, lastRaw, turn == 1, offline = id == ProviderId.LOCAL) else null))
                         traces += CallTrace(id, answer.model, (System.nanoTime() - start) / 1_000_000, "决策 ${turn + 1}")
                         logger.info("模型返回 turn=${turn + 1} provider=$id model=${answer.model} elapsedMs=${traces.last().elapsedMs} outputBytes=${answer.raw.toByteArray().size}")
                         reply = answer
@@ -129,6 +130,18 @@ class DirectorAgent(
                 outputs += answer.raw
                 onProgress(DirectorProgress.ValidatingResponse(turn + 1))
                 val localReply = traces.last().provider == ProviderId.LOCAL
+                val photoProtocol = PhotoReferenceDecisionPolicy.enabled(input) && (localReply || answer.photoProtocol)
+                val decision = if (photoProtocol) {
+                    val plans = try { PhotoReferenceDecisionPolicy.decode(answer.raw, input, localReply) }
+                    catch (failure: IllegalArgumentException) {
+                        observations += ToolObservation("validate_photo_reference", listOf(failure.message.orEmpty()),
+                            issues = listOf(ToolIssue("PHOTO_REFERENCE_INVALID", failure.message.orEmpty())))
+                        if (localReply) throw ModelFailure("LOCAL_PHOTO_INVALID_OUTPUT", "", false)
+                        return@repeat
+                    }
+                    observations += ToolObservation("photo_reference_catalog", listOf("PREVIEW_ONLY; HAND_HIP/WALK_PAUSE excluded"))
+                    DirectorDecision(ActionKind.FINAL, plans, imageId = input.scene.id)
+                } else {
                 val intentDecision = answer.decision?.let(CompositionIntentMapper::fromLegacy) ?: try {
                     if (localReply) OfflineDirectorProtocol.decodeIntent(answer.raw, input)
                     else decodeGatewayIntent(answer.raw)
@@ -169,7 +182,8 @@ class DirectorAgent(
                     mapped.messages.ifEmpty { listOf("已将模型构图意图映射为安全的坐标、裁剪与倍率") }
                 )
                 // 人像身份只来自拍摄前的用户选择，映射器不会接受或推断模型指定的角色。
-                val decision = DirectorDecision(intentDecision.action, mapped.plans, intentDecision.version, intentDecision.imageId)
+                DirectorDecision(intentDecision.action, mapped.plans, intentDecision.version, intentDecision.imageId)
+                }
                 val errors = validator.validate(decision.plans, input)
                 logger.info("校验模型输出 turn=${turn + 1} action=${decision.action} plans=${decision.plans.size} errors=${errors.size}")
                 if (errors.isNotEmpty()) logger.warn("模型输出校验详情 turn=${turn + 1} errors=${errors.joinToString("；")}")

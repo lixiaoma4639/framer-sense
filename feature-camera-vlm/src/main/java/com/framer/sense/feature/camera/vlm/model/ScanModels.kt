@@ -18,7 +18,9 @@ object ScanLimits {
 
 @Serializable data class ScanPose(val basisId: String, val timestampNs: Long, val heading: Float?, val pitch: Float, val angularTravel: Float? = null)
 @Serializable data class ScanCameraConfig(val version: Int, val rotation: Int, val zoom: Float,
-    val crop: CropRect, val realtimeTimestamp: Boolean)
+    val crop: CropRect, val realtimeTimestamp: Boolean,
+    val arSessionId: String? = null, val cameraIntrinsics: List<Float> = emptyList(),
+    val arCameraPose: List<Float> = emptyList())
 data class ScanSession(val id: String, val startedNs: Long, val endedNs: Long? = null)
 data class ScanFrame(val id: String, val scanId: String, val timestampNs: Long, val receivedNs: Long,
     val config: ScanCameraConfig, val pose: ScanPose?, val quality: Float, val scene: SceneSnapshot,
@@ -26,7 +28,7 @@ data class ScanFrame(val id: String, val scanId: String, val timestampNs: Long, 
 data class ScanSnapshot(val session: ScanSession, val frames: List<ScanFrame>, val totalTurn: Float)
 data class ScanProgress(val frames: Int = 0, val preferred: Int = 0, val elapsedSeconds: Int = 0,
     val totalTurn: Float = 0f, val paused: Boolean = false)
-@Serializable data class PhotoViewBinding(val scanId: String, val frameId: String, val configVersion: Int)
+@Serializable data class PhotoViewBinding(val scanId: String, val frameId: String, val configVersion: Int, val arSessionId: String? = null)
 @Serializable data class ViewCandidate(val frameId: String, val subject: String, val reason: String,
     val backgroundRegions: List<CropRect>, val subjectRegions: List<CropRect>, val uncertainties: List<String>)
 @Serializable data class ViewSelection(val version: Int = 2, val scanId: String,
@@ -38,7 +40,7 @@ data class ScanProgress(val frames: Int = 0, val preferred: Int = 0, val elapsed
 @Serializable data class ViewSelectionReply(val model: String, val raw: String, val selection: ViewSelection? = null,
     val elapsedMs: Long = 0)
 @Serializable data class MultiImageCapability(val provider: ProviderId, val model: String,
-    val configured: Boolean, val multiImage: Boolean, val maxImages: Int)
+    val configured: Boolean, val multiImage: Boolean, val maxImages: Int, val directorV2: Boolean = false)
 @Serializable data class MultiImageCapabilities(val providers: List<MultiImageCapability>, val version: Int = 2)
 
 enum class BackgroundStatus { SEARCHING, ALIGNED_AUTO, ALIGNED_MANUAL }

@@ -22,6 +22,60 @@ import java.util.UUID
 
 /** 验证相机事件门控，不调用摄像头、网络、GPU 或原生模型。 */
 class VlmSessionTest {
+    @Test fun sampleDoesNotInvokeModelOrCaptureAndClosedResultsCannotReopenIt() = runBlocking {
+        withContext(Dispatchers.Main) {
+            val entered = CompletableDeferred<Unit>()
+            val released = CompletableDeferred<Unit>()
+            val renderer = object : AvatarRenderer {
+                override suspend fun render(plan: CompositionPlan, width: Int, height: Int, warmth: Float, brightness: Float): AvatarPreview {
+                    entered.complete(Unit)
+                    withContext(NonCancellable) { released.await() }
+                    return AvatarPreview(Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888), CropRect(), plan.avatar, plan.resolvedSpec)
+                }
+            }
+            val vm = viewModel(renderer = renderer)
+            val effects = mutableListOf<VlmEffect>()
+            val listener = launch(start = CoroutineStart.UNDISPATCHED) { vm.effects.collect { effects += it } }
+            try {
+                vm.onIntent(VlmIntent.CameraReady(CameraCapabilities()))
+                vm.onIntent(VlmIntent.OpenPhotoSample)
+                entered.await()
+                assertEquals(VlmStage.LIVE, vm.state.value.stage)
+                assertNull(vm.state.value.result)
+                vm.onIntent(VlmIntent.Capture)
+                vm.onIntent(VlmIntent.StartScan)
+                vm.onIntent(VlmIntent.StartComposition)
+                yield()
+                assertTrue(effects.isEmpty())
+                assertEquals(VlmStage.LIVE, vm.state.value.stage)
+                vm.onIntent(VlmIntent.ClosePhotoSample)
+                released.complete(Unit)
+                yield()
+                assertNull(vm.state.value.photoSample)
+                vm.onIntent(VlmIntent.OpenPhotoSample)
+                withTimeout(5000) { vm.state.first { it.photoSample?.loading == false } }
+                assertEquals(ExpressionId.SMILE, vm.state.value.photoSample!!.expression)
+                vm.onIntent(VlmIntent.PhotoSampleAction(PhotoActionCatalog.HAND_HIP_ID))
+                withTimeout(5000) { vm.state.first { it.photoSample?.loading == false } }
+                assertEquals(PhotoActionCatalog.HAND_HIP_ID, vm.state.value.photoSample!!.actionId)
+                vm.onIntent(VlmIntent.PhotoSampleExpression(ExpressionId.HAPPY))
+                withTimeout(5000) { vm.state.first { it.photoSample?.loading == false } }
+                assertEquals(ExpressionId.HAPPY, vm.state.value.photoSample!!.expression)
+                vm.onIntent(VlmIntent.PhotoSampleEthnicity(AvatarEthnicity.ASIAN))
+                withTimeout(5000) { vm.state.first { it.photoSample?.loading == false } }
+                assertEquals(AvatarEthnicity.ASIAN, vm.state.value.photoSample!!.ethnicity)
+                assertEquals(ExpressionId.HAPPY, vm.state.value.photoSample!!.expression)
+                assertEquals(PhotoActionCatalog.HAND_HIP_ID, vm.state.value.photoSample!!.actionId)
+                assertEquals(AvatarEthnicity.ASIAN, vm.state.value.selectedEthnicity)
+                assertTrue(effects.isEmpty())
+                vm.onIntent(VlmIntent.CameraForeground(false))
+                assertNull(vm.state.value.photoSample)
+            } finally {
+                released.complete(Unit); listener.cancel(); vm.onLeave()
+            }
+        }
+    }
+
     /** 为状态机创建测试依赖。
      * @param saved 进程恢复状态。
      * @return 无外部模型调用的状态机。
