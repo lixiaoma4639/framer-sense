@@ -188,7 +188,7 @@ class NavigationTest {
     }
 
     @Test
-    fun selectedCameraTab_becomesCaptureAction_andRestoresCameraLabelAfterLeaving() {
+    fun selectedCameraTab_neverTriggersCapture_andKeepsNavigationAvailable() {
         val captureCount = mutableStateOf(0)
 
         composeTestRule.setContent {
@@ -219,7 +219,7 @@ class NavigationTest {
 
         composeTestRule.onNodeWithText("拍摄").assertIsDisplayed()
         composeTestRule.onNodeWithTag("bottom_tab_CAMERA").performClick()
-        composeTestRule.runOnIdle { assertEquals(1, captureCount.value) }
+        composeTestRule.runOnIdle { assertEquals(0, captureCount.value) }
 
         composeTestRule.onNodeWithTag("bottom_tab_HOME").performClick()
         composeTestRule.onNodeWithText("相机").assertIsDisplayed()
@@ -227,7 +227,7 @@ class NavigationTest {
         composeTestRule.onNodeWithText("拍摄页").assertIsDisplayed()
 
         composeTestRule.onNodeWithTag("bottom_tab_CAMERA").performClick()
-        composeTestRule.runOnIdle { assertEquals(2, captureCount.value) }
+        composeTestRule.runOnIdle { assertEquals(0, captureCount.value) }
     }
 
     /** 拍摄回调尚未准备好时丢弃点击，不在相机恢复后补拍；无参数。 */
@@ -274,7 +274,7 @@ class NavigationTest {
     }
 
     @Test
-    fun cameraLandscape_usesRightNavigationRail_andKeepsTabSwitchingAvailable() {
+    fun cameraLandscape_keepsBottomNavigation_andTabSwitchingAvailable() {
         composeTestRule.setContent {
             MyApplicationTheme {
                 var uiState by mutableStateOf(
@@ -291,8 +291,8 @@ class NavigationTest {
             }
         }
 
-        composeTestRule.onNodeWithTag("camera_landscape_navigation").assertIsDisplayed()
-        composeTestRule.onNodeWithTag("bottom_navigation").assertDoesNotExist()
+        composeTestRule.onNodeWithTag("camera_landscape_navigation").assertDoesNotExist()
+        composeTestRule.onNodeWithTag("bottom_navigation").assertIsDisplayed()
         composeTestRule.onNodeWithTag("bottom_tab_CAMERA").assertIsSelected()
 
         composeTestRule.onNodeWithTag("bottom_tab_HOME").performClick()
@@ -304,7 +304,7 @@ class NavigationTest {
         composeTestRule.onNodeWithTag("bottom_tab_MY_MODEL").assertIsSelected()
 
         composeTestRule.onNodeWithTag("bottom_tab_CAMERA").performClick()
-        composeTestRule.onNodeWithTag("camera_landscape_navigation").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("camera_landscape_navigation").assertDoesNotExist()
         composeTestRule.onNodeWithTag("bottom_tab_CAMERA").assertIsSelected()
     }
 

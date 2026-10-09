@@ -35,79 +35,71 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlin.coroutines.resume
 
-/** 能力查询在首次绑定相机之前完成；安装完成后先等 CameraX 关闭，再启用 AR。 */
+/** 普通相机不查询或自动接管；用户开启 AR 后等待旧相机真正关闭。 */
 @Composable
 internal fun ArSupportControl(controller: VlmCameraController, state: VlmUiState, permission: Boolean, onEvent: (VlmIntent) -> Unit) {
     val context = LocalContext.current
     val lifecycle = LocalLifecycleOwner.current.lifecycle
     val scope = rememberCoroutineScope()
     val latestEvent by rememberUpdatedState(onEvent)
-    var availability by remember { mutableStateOf<ArCoreApk.Availability?>(null) }
-    var installing by remember { mutableStateOf(false) }
-    var activating by remember { mutableStateOf(false) }
+    val latestState by rememberUpdatedState(state)
+    var installingEpoch by remember { mutableStateOf<Int?>(null) }
+    var activatingEpoch by remember { mutableStateOf<Int?>(null) }
     val failure = stringResource(R.string.vlm_ar_install_failed)
-    suspend fun activate() {
-        if (activating) return
-        activating = true
+    suspend fun activate(epoch: Int) {
+        if (activatingEpoch == epoch || latestState.cameraMode != CameraMode.AR || latestState.cameraEpoch != epoch) return
+        activatingEpoch = epoch
         try {
-            val started = SystemClock.elapsedRealtime()
-            Log.i("VlmCameraUi", "启用 AR：等待 CameraX 关闭")
             controller.releaseForAr()
-            Log.i("VlmCameraUi", "相机互斥切换完成 elapsedMs=${SystemClock.elapsedRealtime()-started}")
-            latestEvent(VlmIntent.ArUpdated(ArUiState(source = ArSource.SHARED_CAMERA)))
+            if (latestState.cameraMode == CameraMode.AR && latestState.cameraEpoch == epoch)
+                latestEvent(VlmIntent.ArUpdated(ArUiState(source = ArSource.SHARED_CAMERA), epoch))
         } catch (cancel: CancellationException) { throw cancel }
-          catch (_: Exception) { latestEvent(VlmIntent.UserMessage(failure)) }
-        finally { activating = false }
+        catch (_: Exception) {
+            latestEvent(VlmIntent.ArUpdated(ArUiState(ArSource.SCREEN, ArTrackingState.UNSUPPORTED), epoch))
+            latestEvent(VlmIntent.UserMessage(failure))
+        } finally { if (activatingEpoch == epoch) activatingEpoch = null }
     }
-    LaunchedEffect(permission) {
-        if (!permission) return@LaunchedEffect
-        val started = SystemClock.elapsedRealtime()
-        Log.i("VlmCameraUi", "AR 能力查询开始 permission=$permission")
-        availability = suspendCancellableCoroutine { continuation ->
-            ArCoreApk.getInstance().checkAvailabilityAsync(context.applicationContext) { result ->
-                if (continuation.isActive) continuation.resume(result)
+    LaunchedEffect(permission, state.cameraMode, state.cameraEpoch) {
+        if (!permission || state.cameraMode != CameraMode.AR) return@LaunchedEffect
+        val epoch = state.cameraEpoch
+        try {
+            val availability = suspendCancellableCoroutine<ArCoreApk.Availability> { continuation ->
+                ArCoreApk.getInstance().checkAvailabilityAsync(context.applicationContext) { result ->
+                    if (continuation.isActive) continuation.resume(result)
+                }
             }
-        }
-        Log.i("VlmCameraUi", "AR 能力查询完成 availability=$availability elapsedMs=${SystemClock.elapsedRealtime()-started} source=${state.ar.source}")
-        if (state.ar.source == ArSource.CHECKING) {
-            if (availability == ArCoreApk.Availability.SUPPORTED_INSTALLED) activate()
-            else latestEvent(VlmIntent.ArUpdated(ArUiState(ArSource.SCREEN, ArTrackingState.UNSUPPORTED)))
+            if (!availability.isSupported) {
+                latestEvent(VlmIntent.ArUpdated(ArUiState(ArSource.SCREEN, ArTrackingState.UNSUPPORTED), epoch))
+                return@LaunchedEffect
+            }
+            val activity = context.activity() ?: error("AR_ACTIVITY_MISSING")
+            if (ArCoreApk.getInstance().requestInstall(activity, true) == ArCoreApk.InstallStatus.INSTALL_REQUESTED)
+                installingEpoch = epoch
+            else activate(epoch)
+        } catch (cancel: CancellationException) { throw cancel }
+        catch (_: Exception) {
+            latestEvent(VlmIntent.ArUpdated(ArUiState(ArSource.SCREEN, ArTrackingState.UNSUPPORTED), epoch))
         }
     }
     DisposableEffect(lifecycle) {
         val observer = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_RESUME && installing) {
-                installing = false
-                try {
-                    val activity = context.activity() ?: error("AR_ACTIVITY_MISSING")
-                    if (ArCoreApk.getInstance().requestInstall(activity, false) == ArCoreApk.InstallStatus.INSTALLED) scope.launch { activate() }
-                } catch (_: Exception) { latestEvent(VlmIntent.UserMessage(failure)) }
+            val epoch = installingEpoch
+            if (event == Lifecycle.Event.ON_RESUME && epoch != null) {
+                installingEpoch = null
+                if (latestState.cameraMode == CameraMode.AR && latestState.cameraEpoch == epoch) {
+                    try {
+                        val activity = context.activity() ?: error("AR_ACTIVITY_MISSING")
+                        if (ArCoreApk.getInstance().requestInstall(activity, false) == ArCoreApk.InstallStatus.INSTALLED)
+                            scope.launch { activate(epoch) }
+                        else latestEvent(VlmIntent.ArUpdated(ArUiState(ArSource.SCREEN, ArTrackingState.UNSUPPORTED), epoch))
+                    } catch (_: Exception) {
+                        latestEvent(VlmIntent.ArUpdated(ArUiState(ArSource.SCREEN, ArTrackingState.UNSUPPORTED), epoch))
+                    }
+                }
             }
         }
         lifecycle.addObserver(observer)
         onDispose { lifecycle.removeObserver(observer) }
-    }
-    Text(stringResource(when (state.ar.source) {
-        ArSource.CHECKING -> R.string.vlm_ar_checking
-        ArSource.SCREEN -> R.string.vlm_ar_screen_mode
-        ArSource.SHARED_CAMERA -> when (state.ar.tracking) {
-            ArTrackingState.NEEDS_GROUND -> R.string.vlm_ar_choose_ground
-            ArTrackingState.PLACED -> R.string.vlm_ar_placed
-            ArTrackingState.LOST, ArTrackingState.PAUSED -> R.string.vlm_ar_tracking_lost
-            else -> R.string.vlm_ar_tracking
-        }
-    }), modifier = Modifier.height(44.dp), maxLines = 2)
-    if (state.ar.source == ArSource.SHARED_CAMERA && state.referencePlan != null)
-        Text(stringResource(if (state.ar.depth) R.string.vlm_ar_depth_on else R.string.vlm_ar_depth_off))
-    if (state.ar.source == ArSource.SCREEN && availability?.isSupported == true) {
-        TextButton(enabled = permission && !activating && !installing && state.stage == VlmStage.LIVE && !state.saving && !state.modelBusy && state.scanSnapshot == null,
-            onClick = {
-                try {
-                    val activity = context.activity() ?: error("AR_ACTIVITY_MISSING")
-                    if (ArCoreApk.getInstance().requestInstall(activity, true) == ArCoreApk.InstallStatus.INSTALL_REQUESTED) installing = true
-                    else scope.launch { activate() }
-                } catch (_: Exception) { latestEvent(VlmIntent.UserMessage(failure)) }
-            }) { Text(stringResource(R.string.vlm_ar_enable)) }
     }
 }
 
@@ -125,19 +117,20 @@ internal fun ArCameraSurface(controller: VlmCameraController, state: VlmUiState,
     val latestEvent by rememberUpdatedState(onEvent)
     val rotation = LocalView.current.display?.rotation ?: 0
     var view by remember { mutableStateOf<SurfaceView?>(null) }
+    val epoch = state.cameraEpoch
     val arOwner = remember(controller) { arrayOfNulls<ArSharedCameraController>(1) }
     val ar = remember(controller) {
         ArSharedCameraController(context, { update ->
             val own = arOwner[0]
             if (controller.ar !== own || own == null) return@ArSharedCameraController
             if (update.source == ArSource.SCREEN) controller.removeAr(own)
-            latestEvent(VlmIntent.ArUpdated(update))
-        }, { if (controller.ar === arOwner[0]) latestEvent(VlmIntent.CameraConfigured(it)) }, { if (controller.ar === arOwner[0]) latestEvent(VlmIntent.CameraReady(it)) }, { if (controller.ar === arOwner[0]) latestEvent(VlmIntent.AnalysisReceived(it)) }).also { arOwner[0] = it }
+            latestEvent(VlmIntent.ArUpdated(update, epoch))
+        }, { if (controller.ar === arOwner[0]) latestEvent(VlmIntent.CameraConfigured(it, epoch)) }, { if (controller.ar === arOwner[0]) latestEvent(VlmIntent.CameraReady(it, epoch)) }, { if (controller.ar === arOwner[0]) latestEvent(VlmIntent.AnalysisReceived(it, epoch)) }).also { arOwner[0] = it }
     }
     DisposableEffect(ar) {
         controller.installAr(ar)
         ar.foreground(lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED))
-        onDispose { controller.removeAr(ar); latestEvent(VlmIntent.CameraStopped) }
+        onDispose { controller.removeAr(ar); latestEvent(VlmIntent.CameraBindingStopped(epoch)) }
     }
     val live = state.stage == VlmStage.LIVE
     val plan = state.referencePlan.takeIf { live }
@@ -160,8 +153,11 @@ internal fun ArCameraSurface(controller: VlmCameraController, state: VlmUiState,
             }
             override fun surfaceDestroyed(holder: SurfaceHolder) { Log.i("VlmCameraUi", "Surface 销毁"); ar.detachSurface() }
         })
+        val gestureGate = CameraGestureGate()
         setOnTouchListener { _, event ->
-            if (event.action == MotionEvent.ACTION_UP) { ar.tap(event.x, event.y); performClick() }
+            if (event.actionMasked == MotionEvent.ACTION_DOWN) gestureGate.begin()
+            gestureGate.pointers(event.pointerCount)
+            if (event.action == MotionEvent.ACTION_UP && gestureGate.canClick()) { ar.tap(event.x, event.y); performClick() }
             true
         }
     } })

@@ -151,9 +151,6 @@ internal fun MainNavigationContent(
     val layoutDirection = LocalLayoutDirection.current
     val currentUiState by rememberUpdatedState(uiState)
     var cameraCaptureAction by remember { mutableStateOf<VlmCaptureAction?>(null) }
-    val currentCameraCaptureAction by rememberUpdatedState(cameraCaptureAction)
-    val showCameraSideNavigation =
-        uiState.showBottomBar && uiState.selectedTab == BottomNavTab.CAMERA && isLandscape
 
     LaunchedEffect(uiState.selectedTab) {
         if (uiState.selectedTab != BottomNavTab.CAMERA) {
@@ -174,13 +171,7 @@ internal fun MainNavigationContent(
 
     fun onNavigationItemClick(tab: BottomNavTab) {
         val latestUiState = currentUiState
-        val latestCaptureAction = currentCameraCaptureAction
-        if (tab == BottomNavTab.CAMERA && latestUiState.selectedTab == BottomNavTab.CAMERA) {
-            if (latestCaptureAction?.enabled == true) {
-                latestCaptureAction.onClick()
-            }
-            return
-        }
+        if (tab == BottomNavTab.CAMERA && latestUiState.selectedTab == BottomNavTab.CAMERA) return
 
         cameraCaptureAction = null
         onTabSelected(tab)
@@ -194,7 +185,7 @@ internal fun MainNavigationContent(
     Box(modifier = modifier.fillMaxSize()) {
         Scaffold(
             bottomBar = {
-                if (uiState.showBottomBar && !showCameraSideNavigation) {
+                if (uiState.showBottomBar) {
                     BottomNavigationBar(
                         selectedTab = uiState.selectedTab,
                         cameraCaptureAction = cameraCaptureAction,
@@ -225,25 +216,7 @@ internal fun MainNavigationContent(
                         end = innerPadding.calculateEndPadding(layoutDirection),
                         bottom = innerPadding.calculateBottomPadding()
                     )
-                    .then(
-                        if (showCameraSideNavigation) {
-                            Modifier.padding(end = CAMERA_LANDSCAPE_RAIL_WIDTH)
-                        } else {
-                            Modifier
-                        }
-                    )
-            )
-        }
 
-        if (showCameraSideNavigation) {
-            CameraLandscapeNavigationRail(
-                selectedTab = uiState.selectedTab,
-                cameraCaptureAction = cameraCaptureAction,
-                onTabClick = ::onNavigationItemClick,
-                modifier = Modifier
-                    .align(Alignment.CenterEnd)
-                    .fillMaxHeight()
-                    .width(CAMERA_LANDSCAPE_RAIL_WIDTH)
             )
         }
 
@@ -281,7 +254,7 @@ private fun BottomNavigationBar(
                 },
                 label = null,
                 selected = selectedTab == tab,
-                enabled = tab.isEnabled(selectedTab, cameraCaptureAction),
+                enabled = true,
                 colors = if (isCaptureAction) {
                     NavigationBarItemDefaults.colors(
                         selectedIconColor = Color.White,
@@ -299,64 +272,13 @@ private fun BottomNavigationBar(
     }
 }
 
-@Composable
-private fun CameraLandscapeNavigationRail(
-    selectedTab: BottomNavTab,
-    cameraCaptureAction: VlmCaptureAction?,
-    onTabClick: (BottomNavTab) -> Unit,
-    modifier: Modifier = Modifier
-) {
-    NavigationRail(
-        modifier = modifier.testTag("camera_landscape_navigation")
-    ) {
-        BottomNavTab.entries.forEach { tab ->
-            Spacer(modifier = Modifier.weight(1f))
-            val isCaptureAction = tab.isCaptureAction(selectedTab)
-            NavigationRailItem(
-                modifier = Modifier.testTag("bottom_tab_${tab.name}"),
-                icon = {
-                    if (isCaptureAction) {
-                        CaptureActionContent(tab.icon)
-                    } else {
-                        Icon(tab.icon, contentDescription = tab.label)
-                    }
-                },
-                label = if (isCaptureAction) null else ({ Text(tab.label) }),
-                selected = selectedTab == tab,
-                enabled = tab.isEnabled(selectedTab, cameraCaptureAction),
-                colors = if (isCaptureAction) {
-                    NavigationRailItemDefaults.colors(
-                        selectedIconColor = Color.White,
-                        selectedTextColor = Color.White,
-                        indicatorColor = Color.Transparent,
-                        disabledIconColor = Color.White.copy(alpha = 0.60f),
-                        disabledTextColor = Color.White.copy(alpha = 0.60f)
-                    )
-                } else {
-                    NavigationRailItemDefaults.colors()
-                },
-                onClick = { onTabClick(tab) }
-            )
-        }
-        Spacer(modifier = Modifier.weight(1f))
-    }
-}
-
 private val BOTTOM_NAVIGATION_HEIGHT = 64.dp
-private val CAMERA_LANDSCAPE_RAIL_WIDTH = 54.dp
 
 private fun BottomNavTab.displayLabel(selectedTab: BottomNavTab): String =
     if (isCaptureAction(selectedTab)) "拍摄" else label
 
 private fun BottomNavTab.isCaptureAction(selectedTab: BottomNavTab): Boolean =
     this == BottomNavTab.CAMERA && selectedTab == BottomNavTab.CAMERA
-
-private fun BottomNavTab.isEnabled(
-    selectedTab: BottomNavTab,
-    cameraCaptureAction: VlmCaptureAction?
-): Boolean =
-    this != BottomNavTab.CAMERA || selectedTab != BottomNavTab.CAMERA ||
-        cameraCaptureAction?.enabled == true
 
 @Composable
 private fun CaptureActionContent(icon: ImageVector) {

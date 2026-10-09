@@ -24,7 +24,7 @@ data class PhotoSampleState(
 
 data class VlmUiState(
     val stage: VlmStage = VlmStage.LIVE,
-    val ar: com.framer.sense.feature.camera.vlm.ar.ArUiState = com.framer.sense.feature.camera.vlm.ar.ArUiState(),
+    val ar: com.framer.sense.feature.camera.vlm.ar.ArUiState = com.framer.sense.feature.camera.vlm.ar.ArUiState(source = com.framer.sense.feature.camera.vlm.ar.ArSource.SCREEN),
     val scanSession: ScanSession? = null,
     val scanProgress: ScanProgress = ScanProgress(),
     val scanSnapshot: ScanSnapshot? = null,
@@ -39,6 +39,13 @@ data class VlmUiState(
     val camera: CameraCapabilities = CameraCapabilities(),
     val cameraReady: Boolean = false,
     val zoom: Float = 1f,
+    val actualZoom: Float = 1f,
+    val normalZoom: Float = 1f,
+    val photoPreferences: PhotoPreferences = PhotoPreferences(),
+    val cameraMode: CameraMode = CameraMode.NORMAL,
+    val cameraEpoch: Int = 0,
+    val photoSettingsVisible: Boolean = false,
+    val compositionDetailsVisible: Boolean = false,
     val instruction: String = "自然一些，保留环境主体",
     val result: CompositionResult? = null,
     val diagnostics: CompositionResult? = null,
@@ -64,11 +71,21 @@ data class VlmUiState(
     val directorProgress: DirectorProgress? = null,
     val photoSample: PhotoSampleState? = null
 ) {
+    val operationBusy: Boolean
+        get() = modelBusy || saving || photoSample != null || stage in listOf(VlmStage.FREEZING,
+            VlmStage.GENERATING, VlmStage.MODIFYING, VlmStage.SCANNING, VlmStage.SCAN_PROCESSING, VlmStage.VIEW_SELECTING)
+    val framingUnlocked: Boolean
+        get() = stage == VlmStage.LIVE && !modelBusy && !saving && photoSample == null
+    val canCapture: Boolean
+        get() = framingUnlocked && cameraReady && !settingsVisible && !photoSettingsVisible
+    val canZoom: Boolean
+        get() = framingUnlocked && cameraReady && cameraMode == CameraMode.NORMAL
+
     /** 重启业务允许取消生成／扫描，但不能打断模型管理、保存或样片资源操作。 */
     val canRestartScan: Boolean
-        get() = !modelBusy && !saving && !settingsVisible && photoSample == null && (cameraReady || stage != VlmStage.LIVE)
+        get() = !modelBusy && !saving && !settingsVisible && !photoSettingsVisible && photoSample == null && (cameraReady || stage != VlmStage.LIVE)
     val canGenerate: Boolean
-        get() = !modelBusy && !saving && !settingsVisible && photoSample == null && scene != null &&
+        get() = !modelBusy && !saving && !settingsVisible && !photoSettingsVisible && photoSample == null && scene != null &&
             stage in listOf(VlmStage.FROZEN, VlmStage.READY, VlmStage.GENERATING, VlmStage.MODIFYING)
 
     /** 实时画面不因离线模型加载而降帧；冻结分析时才降低后台绘制频率。 */
@@ -82,7 +99,7 @@ data class VlmUiState(
 }
 
 sealed interface VlmIntent {
-    data class ArUpdated(val state: com.framer.sense.feature.camera.vlm.ar.ArUiState) : VlmIntent
+    data class ArUpdated(val state: com.framer.sense.feature.camera.vlm.ar.ArUiState, val epoch: Int? = null) : VlmIntent
     data object OpenPhotoSample : VlmIntent
     data object ClosePhotoSample : VlmIntent
     data class PhotoSampleExpression(val expression: ExpressionId) : VlmIntent
@@ -96,14 +113,21 @@ sealed interface VlmIntent {
     data object AnalyzeScan : VlmIntent
     data class ScanViewSelected(val frameId: String) : VlmIntent
     data class ManualScanSelectionVisible(val visible: Boolean) : VlmIntent
-    data class CameraConfigured(val version: Int) : VlmIntent
-    data class AnalysisReceived(val sample: com.framer.sense.feature.camera.vlm.scan.AnalysisSample) : VlmIntent
+    data class CameraConfigured(val version: Int, val epoch: Int? = null) : VlmIntent
+    data class AnalysisReceived(val sample: com.framer.sense.feature.camera.vlm.scan.AnalysisSample, val epoch: Int? = null) : VlmIntent
     data object ConfirmBackground : VlmIntent
     data object StartComposition : VlmIntent
     data class FrameReady(val token: String, val bitmap: Bitmap, val zoom: Float, val arConfig: ScanCameraConfig? = null) : VlmIntent
     data class PlatformFailed(val token: String?, val message: String) : VlmIntent
-    data class CameraReady(val capabilities: CameraCapabilities) : VlmIntent
+    data class CameraReady(val capabilities: CameraCapabilities, val epoch: Int? = null) : VlmIntent
     data object CameraStopped : VlmIntent
+    data class CameraBindingStopped(val epoch: Int) : VlmIntent
+    data class ZoomReported(val zoom: Float, val epoch: Int) : VlmIntent
+    data class AspectRatioSelected(val ratio: CaptureAspectRatio) : VlmIntent
+    data class CameraModeSelected(val mode: CameraMode) : VlmIntent
+    data class PhotoSettingsVisible(val visible: Boolean) : VlmIntent
+    data class CompositionDetailsVisible(val visible: Boolean) : VlmIntent
+    data class PreferredEthnicity(val ethnicity: AvatarEthnicity) : VlmIntent
     data class InstructionChanged(val text: String) : VlmIntent
     data class AvatarSelected(val avatarId: AvatarId) : VlmIntent
     data object Generate : VlmIntent

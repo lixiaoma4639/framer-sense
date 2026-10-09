@@ -22,6 +22,37 @@ import java.util.UUID
 
 /** 验证相机事件门控，不调用摄像头、网络、GPU 或原生模型。 */
 class VlmSessionTest {
+    @Test fun framingModeAndLateCallbacksAreIsolatedFromCurrentCamera() = runBlocking {
+        withContext(Dispatchers.Main) {
+            val vm = viewModel()
+            try {
+                vm.onIntent(VlmIntent.CameraReady(CameraCapabilities(.6f, 10f)))
+                vm.onIntent(VlmIntent.ZoomChanged(8f))
+                assertEquals(8f, vm.state.value.zoom, 0f)
+                val oldEpoch = vm.state.value.cameraEpoch
+                vm.onIntent(VlmIntent.CameraModeSelected(CameraMode.AR))
+                assertEquals(1f, vm.state.value.zoom, 0f)
+                assertFalse(vm.state.value.canZoom)
+                vm.onIntent(VlmIntent.CameraReady(CameraCapabilities(1f, 10f), oldEpoch))
+                vm.onIntent(VlmIntent.CameraConfigured(999, oldEpoch))
+                assertEquals(0, vm.state.value.cameraConfigVersion)
+                assertFalse(vm.state.value.cameraReady)
+                vm.onIntent(VlmIntent.CameraModeSelected(CameraMode.NORMAL))
+                assertEquals(8f, vm.state.value.zoom, 0f)
+                val epoch = vm.state.value.cameraEpoch
+                vm.onIntent(VlmIntent.CameraReady(CameraCapabilities(.6f, 10f), epoch))
+                vm.onIntent(VlmIntent.CameraBindingStopped(oldEpoch))
+                assertTrue(vm.state.value.cameraReady)
+                vm.onIntent(VlmIntent.ArUpdated(com.framer.sense.feature.camera.vlm.ar.ArUiState(
+                    com.framer.sense.feature.camera.vlm.ar.ArSource.SHARED_CAMERA), oldEpoch))
+                assertEquals(CameraMode.NORMAL, vm.state.value.cameraMode)
+                vm.onIntent(VlmIntent.AspectRatioSelected(CaptureAspectRatio.NINE_SIXTEEN))
+                assertEquals(CaptureAspectRatio.NINE_SIXTEEN, vm.state.value.photoPreferences.aspectRatio)
+                assertFalse(vm.state.value.cameraReady)
+            } finally { vm.onLeave() }
+        }
+    }
+
     @Test fun sampleDoesNotInvokeModelOrCaptureAndClosedResultsCannotReopenIt() = runBlocking {
         withContext(Dispatchers.Main) {
             val entered = CompletableDeferred<Unit>()

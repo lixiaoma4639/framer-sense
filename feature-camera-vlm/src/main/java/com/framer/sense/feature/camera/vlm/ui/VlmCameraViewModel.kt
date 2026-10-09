@@ -34,8 +34,12 @@ class VlmCameraViewModel @Inject constructor(
     savedStateHandle: SavedStateHandle,
     private val sessions: PhotoSessionController
 ) : ViewModel() {
+    private val initialPhotoPreferences = settingsStore.readPhotoPreferences()
     private val _state = MutableStateFlow(VlmUiState(settings = settingsStore.read(), modelStatus = modelDescription(),
-        selectedEthnicity = settingsStore.readAvatarEthnicity(), modelBusy = local.loadState.value.phase == LocalModelPhase.LOADING,
+        photoPreferences = initialPhotoPreferences, selectedAvatar = initialPhotoPreferences.avatar,
+        faceVisible = initialPhotoPreferences.showFace,
+        instruction = initialPhotoPreferences.instruction.ifBlank { models.message(R.string.vlm_photo_default_requirement) },
+        selectedEthnicity = initialPhotoPreferences.ethnicity, modelBusy = local.loadState.value.phase == LocalModelPhase.LOADING,
         notice = if (savedStateHandle.get<Boolean>("vlm_started") == true) models.message(R.string.vlm_scan_restore) else null))
     val state: StateFlow<VlmUiState> = _state.asStateFlow()
     private val _effects = MutableSharedFlow<VlmEffect>(extraBufferCapacity = 4)
@@ -106,6 +110,26 @@ class VlmCameraViewModel @Inject constructor(
                 modelStatus = if (maintenanceBusy && value.phase != LocalModelPhase.LOADING) it.modelStatus else modelDescription(value)) }
         } }
         viewModelScope.launch { state.collect { maybeAutoLoad() } }
+    }
+
+    private fun updatePhotoPreferences(change: (PhotoPreferences) -> PhotoPreferences) {
+        val value = change(_state.value.photoPreferences)
+        settingsStore.savePhotoPreferences(value)
+        _state.update { it.copy(photoPreferences = value) }
+    }
+
+    private fun switchCameraMode(mode: CameraMode) {
+        val old = _state.value
+        if (old.cameraMode == mode) return
+        guidanceEpoch++
+        _state.update { it.copy(cameraMode = mode, cameraEpoch = it.cameraEpoch + 1, cameraReady = false,
+            normalZoom = if (mode == CameraMode.AR) it.zoom else it.normalZoom,
+            zoom = if (mode == CameraMode.AR) 1f else it.normalZoom,
+            actualZoom = if (mode == CameraMode.AR) 1f else it.normalZoom,
+            camera = if (mode == CameraMode.AR) CameraCapabilities() else it.camera,
+            ar = com.framer.sense.feature.camera.vlm.ar.ArUiState(source = if (mode == CameraMode.AR)
+                com.framer.sense.feature.camera.vlm.ar.ArSource.CHECKING else com.framer.sense.feature.camera.vlm.ar.ArSource.SCREEN),
+            reference = null, referencePlan = null, background = BackgroundGuidance()) }
     }
 
     private fun modelDescription(value: LocalModelLoadState = local.loadState.value): String = when (value.phase) {
@@ -204,6 +228,13 @@ class VlmCameraViewModel @Inject constructor(
             is VlmIntent.ManualScanSelectionVisible -> if (!busy() && _state.value.stage in listOf(VlmStage.SCAN_REVIEW, VlmStage.READY))
                 _state.update { it.copy(manualScanSelectionVisible = intent.visible) }
             is VlmIntent.ArUpdated -> {
+                if (intent.epoch != null && intent.epoch != _state.value.cameraEpoch) return
+                if (_state.value.cameraMode != CameraMode.AR && intent.state.source != com.framer.sense.feature.camera.vlm.ar.ArSource.SCREEN) return
+                if (intent.state.source == com.framer.sense.feature.camera.vlm.ar.ArSource.SCREEN && _state.value.cameraMode == CameraMode.AR) {
+                    switchCameraMode(CameraMode.NORMAL)
+                    _state.update { it.copy(error = models.message(R.string.vlm_ar_install_failed)) }
+                    return
+                }
                 if (_state.value.ar.sessionId != intent.state.sessionId || intent.state.tracking in listOf(com.framer.sense.feature.camera.vlm.ar.ArTrackingState.LOST, com.framer.sense.feature.camera.vlm.ar.ArTrackingState.PAUSED)) guidanceEpoch++
                 _state.update { current ->
                 current.copy(ar = intent.state, zoom = if (intent.state.source == com.framer.sense.feature.camera.vlm.ar.ArSource.SHARED_CAMERA) 1f else current.zoom,
@@ -211,12 +242,14 @@ class VlmCameraViewModel @Inject constructor(
                 }
             }
             is VlmIntent.CameraConfigured -> {
+                if (intent.epoch != null && intent.epoch != _state.value.cameraEpoch) return
                 guidanceEpoch++
                 if (intent.version <= _state.value.cameraConfigVersion) return
                 sessions.configure(intent.version)
                 _state.update { it.copy(cameraConfigVersion = intent.version, background = BackgroundGuidance()) }
             }
             is VlmIntent.AnalysisReceived -> {
+                if (intent.epoch != null && intent.epoch != _state.value.cameraEpoch) return
                 if (_state.value.stage == VlmStage.SCANNING) scanQueue?.trySend(intent.sample)
                 else if (_state.value.stage == VlmStage.LIVE) guideQueue.trySend(intent.sample)
             }
@@ -224,7 +257,7 @@ class VlmCameraViewModel @Inject constructor(
                 _state.update { it.copy(background = it.background.copy(status = BackgroundStatus.ALIGNED_MANUAL)) }
             is VlmIntent.UserMessage -> _state.update { it.copy(error = intent.message) }
             VlmIntent.StartComposition -> if (_state.value.stage in listOf(VlmStage.LIVE, VlmStage.FREEZING) && _state.value.cameraReady &&
-                !_state.value.modelBusy && !_state.value.saving && !_state.value.settingsVisible && _state.value.photoSample == null) {
+                !_state.value.modelBusy && !_state.value.saving && !_state.value.settingsVisible && !_state.value.photoSettingsVisible && _state.value.photoSample == null) {
                 cancelWork()
                 _state.update { it.copy(stage = VlmStage.FREEZING, error = null, notice = null, directorProgress = null,
                     scanSession = null, scanSnapshot = null, viewCandidates = emptyList(), selectedFrameId = null,
@@ -238,13 +271,37 @@ class VlmCameraViewModel @Inject constructor(
                 if (_state.value.stage == VlmStage.SCANNING) stopScan(false)
                 if (intent.token == null || intent.token == requestToken) _state.update { it.copy(stage = if (it.stage == VlmStage.SCAN_PROCESSING) it.stage else if (it.scene == null) VlmStage.LIVE else VlmStage.FROZEN, error = intent.message, cameraReady = if (intent.token != null && it.ar.source == com.framer.sense.feature.camera.vlm.ar.ArSource.SHARED_CAMERA) it.cameraReady else false) }
             }
-            is VlmIntent.CameraReady -> _state.update { it.copy(camera = intent.capabilities, cameraReady = true) }
+            is VlmIntent.CameraReady -> if (intent.epoch == null || intent.epoch == _state.value.cameraEpoch)
+                _state.update { it.copy(camera = intent.capabilities, cameraReady = true,
+                    zoom = CameraZoomPolicy.clamp(it.zoom, intent.capabilities.minZoom, intent.capabilities.maxZoom)) }
+            is VlmIntent.CameraBindingStopped -> if (intent.epoch == _state.value.cameraEpoch) {
+                guidanceEpoch++
+                _state.update { it.copy(cameraReady = false, background = BackgroundGuidance()) }
+            }
+            is VlmIntent.ZoomReported -> if (intent.epoch == _state.value.cameraEpoch && _state.value.cameraMode == CameraMode.NORMAL)
+                _state.update { it.copy(actualZoom = intent.zoom) }
+            is VlmIntent.AspectRatioSelected -> if (_state.value.framingUnlocked && intent.ratio != _state.value.photoPreferences.aspectRatio) {
+                guidanceEpoch++
+                updatePhotoPreferences { it.copy(aspectRatio = intent.ratio) }
+                _state.update { it.copy(cameraEpoch = it.cameraEpoch + 1, cameraReady = false,
+                    ar = if (it.cameraMode == CameraMode.AR) com.framer.sense.feature.camera.vlm.ar.ArUiState(source = com.framer.sense.feature.camera.vlm.ar.ArSource.CHECKING) else it.ar,
+                    reference = null, referencePlan = null, background = BackgroundGuidance()) }
+            }
+            is VlmIntent.CameraModeSelected -> if (_state.value.framingUnlocked) switchCameraMode(intent.mode)
+            is VlmIntent.PhotoSettingsVisible -> if (!intent.visible || !busy())
+                _state.update { it.copy(photoSettingsVisible = intent.visible) }
+            is VlmIntent.CompositionDetailsVisible -> _state.update { it.copy(compositionDetailsVisible = intent.visible) }
+            is VlmIntent.PreferredEthnicity -> if (!busy()) {
+                updatePhotoPreferences { it.copy(ethnicity = intent.ethnicity) }
+                _state.update { it.copy(selectedEthnicity = intent.ethnicity) }
+            }
             VlmIntent.CameraStopped -> _state.update { it.copy(cameraReady = false) }
-            is VlmIntent.InstructionChanged -> _state.update { it.copy(instruction = intent.text.take(2000)) }
-            is VlmIntent.AvatarSelected -> if (!busy() && (
-                    _state.value.stage == VlmStage.LIVE ||
-                        (_state.value.stage == VlmStage.FROZEN && _state.value.result == null)
-                )) {
+            is VlmIntent.InstructionChanged -> if (!busy()) {
+                _state.update { it.copy(instruction = intent.text.take(2000)) }
+                updatePhotoPreferences { it.copy(instruction = intent.text.take(2000)) }
+            }
+            is VlmIntent.AvatarSelected -> if (!busy()) {
+                updatePhotoPreferences { it.copy(avatar = intent.avatarId) }
                 _state.update { it.copy(selectedAvatar = intent.avatarId) }
             }
             VlmIntent.Generate -> compose(false)
@@ -252,7 +309,10 @@ class VlmCameraViewModel @Inject constructor(
             VlmIntent.Cancel -> { if (_state.value.stage == VlmStage.SCANNING || _state.value.stage == VlmStage.SCAN_PROCESSING) { cancelScan(); return }; if (busy() && _state.value.modelBusy) return; cancelWork(); _state.update { it.copy(stage = if (it.scanSnapshot != null && it.scene == null) VlmStage.SCAN_REVIEW else if (it.scene == null) VlmStage.LIVE else if (it.result == null) VlmStage.FROZEN else VlmStage.READY, error = null, directorProgress = null) } }
             VlmIntent.ResumeCamera -> { if (_state.value.scanSnapshot != null) { cancelScan(); return }; cancelWork(); _state.update { it.copy(stage = VlmStage.LIVE, reference = null, referencePlan = null, error = null, cameraReady = if (it.ar.source == com.framer.sense.feature.camera.vlm.ar.ArSource.SHARED_CAMERA) it.cameraReady else false, directorProgress = null) } }
             is VlmIntent.Select -> if (!busy() && _state.value.result?.plans?.any { it.id == intent.id } == true) {
-                _state.update { it.copy(selectedId = intent.id, facePreview = null) }
+                _state.update { it.copy(selectedId = intent.id, facePreview = null,
+                    stage = if (it.stage == VlmStage.LIVE) VlmStage.READY else it.stage,
+                    reference = if (it.stage == VlmStage.LIVE) null else it.reference,
+                    referencePlan = if (it.stage == VlmStage.LIVE) null else it.referencePlan) }
                 requestFace()
             }
             is VlmIntent.Move -> adjust { it.copy(foot = Point2((it.foot.x + intent.dx).coerceIn(0f, 1f), (it.foot.y + intent.dy).coerceIn(0f, 4f))) }
@@ -262,12 +322,18 @@ class VlmCameraViewModel @Inject constructor(
             is VlmIntent.ExpressionSelected -> changeSelection(expression = intent.expression)
             is VlmIntent.ExpressionIntensityChanged -> if (intent.intensity.isFinite()) changeSelection(intensity = intent.intensity.coerceIn(0f, 1f))
             is VlmIntent.FaceVisible -> if (!busy()) {
+                updatePhotoPreferences { it.copy(showFace = intent.visible) }
                 _state.update { it.copy(faceVisible = intent.visible, facePreview = null, faceLoading = false) }
                 faceWork?.cancel()
                 requestFace()
             }
             VlmIntent.Apply -> applyPlan()
-            is VlmIntent.ZoomChanged -> if (_state.value.stage == VlmStage.LIVE && !busy()) _state.update { it.copy(zoom = intent.zoom.coerceIn(it.camera.minZoom, it.camera.maxZoom), background = BackgroundGuidance()) }
+            is VlmIntent.ZoomChanged -> if (_state.value.canZoom && intent.zoom.isFinite() && kotlin.math.abs(intent.zoom - _state.value.zoom) > .0001f) {
+                guidanceEpoch++
+                _state.update { it.copy(zoom = CameraZoomPolicy.clamp(intent.zoom, it.camera.minZoom, it.camera.maxZoom),
+                    normalZoom = CameraZoomPolicy.clamp(intent.zoom, it.camera.minZoom, it.camera.maxZoom),
+                    reference = null, referencePlan = null, background = BackgroundGuidance()) }
+            }
             is VlmIntent.SettingsVisible -> if (_state.value.stage !in listOf(VlmStage.SCANNING, VlmStage.SCAN_PROCESSING, VlmStage.VIEW_SELECTING)) _state.update { it.copy(settingsVisible = intent.visible) }
             is VlmIntent.SaveSettings -> {
                 cancelWork()
@@ -325,7 +391,7 @@ class VlmCameraViewModel @Inject constructor(
                     catch (e: Exception) { if (token == requestToken) _state.update { it.copy(stage = VlmStage.LIVE, error = if ((e as? ModelFailure)?.code == "LOCAL_PHOTO_INVALID_OUTPUT") models.message(R.string.vlm_photo_model_invalid) else e.message) } }
                 }
             }
-            VlmIntent.Capture -> if (_state.value.stage == VlmStage.LIVE && _state.value.cameraReady && !busy() && !_state.value.settingsVisible) {
+            VlmIntent.Capture -> if (_state.value.stage == VlmStage.LIVE && _state.value.cameraReady && !busy() && !_state.value.settingsVisible && !_state.value.photoSettingsVisible) {
                 val token = newVlmId()
                 captureToken = token
                 _state.update { it.copy(saving = true, error = null) }
@@ -547,11 +613,13 @@ class VlmCameraViewModel @Inject constructor(
     private fun inputFor(s: VlmUiState, existing: List<CompositionPlan> = emptyList(), selectedId: String? = null): DirectorInput {
         val scene = requireNotNull(s.scene)
         val frame = s.scanSnapshot?.frames?.firstOrNull { it.id == scene.id }
-        return DirectorInput(scene, s.camera, s.instruction, existing, selectedId, s.selectedAvatar,
+        val actor = existing.firstOrNull()?.avatar?.avatarId ?: s.selectedAvatar
+        val ethnicity = existing.firstOrNull()?.avatar?.ethnicity ?: s.selectedEthnicity
+        return DirectorInput(scene, s.camera, s.instruction, existing, selectedId, actor,
             frame?.let { PhotoViewBinding(it.scanId, it.id, it.config.version, it.config.arSessionId) } ?: scene.arBinding,
             s.viewCandidates.firstOrNull { it.frameId == scene.id }?.backgroundRegions.orEmpty(),
             if (frame != null) sessions.budget else null,
-            photoReferences = s.selectedAvatar == AvatarId.ADULT_FEMALE, ethnicity = s.selectedEthnicity, arMode = s.ar.source == com.framer.sense.feature.camera.vlm.ar.ArSource.SHARED_CAMERA)
+            photoReferences = actor == AvatarId.ADULT_FEMALE, ethnicity = ethnicity, arMode = s.ar.source == com.framer.sense.feature.camera.vlm.ar.ArSource.SHARED_CAMERA)
     }
 
     private fun guidanceTarget(plan: CompositionPlan) = "guide:${plan.viewBinding?.frameId}:${plan.id}:${plan.revision}"
@@ -710,7 +778,7 @@ class VlmCameraViewModel @Inject constructor(
                 val image = previews.preview(scene, changed)
                 check(previews.inspect(image.appliedPlan, scene).errors.isEmpty())
                 val replacement = result.plans.map { if (it.id == selected.id) image.appliedPlan else it }
-                check(PlanValidator().validate(replacement, inputFor(original)).isEmpty())
+                check(PlanValidator().validate(replacement, inputFor(original, original.result?.plans.orEmpty(), original.selectedId)).isEmpty())
                 val actions = previews.availableActions(image.appliedPlan.avatar.avatarId, image.appliedPlan.shot)
                 val expressions = previews.availableExpressions(image.appliedPlan)
                 _state.update { current ->
@@ -771,7 +839,7 @@ class VlmCameraViewModel @Inject constructor(
         val result = s.result ?: return
         val plan = result.plans.find { it.id == s.selectedId } ?: return
         val scene = s.scene ?: return
-        val errors = PlanValidator().validate(result.plans, inputFor(s))
+        val errors = PlanValidator().validate(result.plans, inputFor(s, result.plans, s.selectedId))
         if (errors.isNotEmpty()) { _state.update { it.copy(error = if (errors.any { error -> "RESOLVED_SPEC_MISMATCH" in error || "VIEW_BINDING_MISMATCH" in error }) models.message(R.string.vlm_photo_spec_invalid) else errors.joinToString("\n")) }; return }
         cancelWork()
         val token = requestToken
@@ -783,9 +851,9 @@ class VlmCameraViewModel @Inject constructor(
                 val currentPreview = previews.preview(scene, plan)
                 val applied = currentPreview.appliedPlan
                 val appliedPlans = result.plans.map { if (it.id == applied.id) applied else it }
-                check(PlanValidator().validate(appliedPlans, inputFor(s)).isEmpty()) { models.message(R.string.vlm_avatar_invalid_resolution) }
+                check(PlanValidator().validate(appliedPlans, inputFor(s, result.plans, s.selectedId)).isEmpty()) { models.message(R.string.vlm_avatar_invalid_resolution) }
                 if (token == requestToken) Log.i("VlmAr", "应用参考 source=${s.ar.source} plan=${applied.id} revision=${applied.revision} frame=${applied.viewBinding?.frameId} requiresBackgroundConfirmation=${applied.viewBinding != null}")
-                if (token == requestToken) _state.update { it.copy(stage = VlmStage.LIVE, result = result.copy(plans = appliedPlans), reference = currentPreview, referencePlan = applied, background = BackgroundGuidance(), zoom = applied.zoom, cameraReady = if (s.ar.source == com.framer.sense.feature.camera.vlm.ar.ArSource.SHARED_CAMERA) s.cameraReady else false, notice = if (applied.needsRetake || s.fromImportedImage) models.message(R.string.vlm_reference_retake) else models.message(R.string.vlm_reference_applied)) }
+                if (token == requestToken) _state.update { it.copy(stage = VlmStage.LIVE, result = result.copy(plans = appliedPlans), reference = currentPreview, referencePlan = applied, background = BackgroundGuidance(), zoom = if (s.cameraMode == CameraMode.AR) 1f else applied.zoom, cameraReady = if (s.ar.source == com.framer.sense.feature.camera.vlm.ar.ArSource.SHARED_CAMERA) s.cameraReady else false, notice = if (applied.needsRetake || s.fromImportedImage) models.message(R.string.vlm_reference_retake) else models.message(R.string.vlm_reference_applied)) }
                 if (token == requestToken) requestFace()
             } catch (cancel: CancellationException) { throw cancel }
             catch (e: Exception) { if (token == requestToken) _state.update { it.copy(stage = VlmStage.READY, error = if ((e as? ModelFailure)?.code == "LOCAL_PHOTO_INVALID_OUTPUT") models.message(R.string.vlm_photo_model_invalid) else e.message) } }
@@ -818,14 +886,15 @@ class VlmCameraViewModel @Inject constructor(
     }
 
     /** UI 离开相机模块时取消平台相关操作；无参数，保留冻结会话供返回查看。 */
-    fun onLeave() {
+    fun onLeave(resetCameraMode: Boolean = true) {
+        if (resetCameraMode) switchCameraMode(CameraMode.NORMAL)
         closeSample()
         if (_state.value.stage == VlmStage.SCANNING) stopScan(false)
         foreground = false
         guidanceEpoch++
         cancelWork()
         captureToken = null
-        _state.update { it.copy(cameraReady = false, saving = false, stage = if (it.stage == VlmStage.SCAN_PROCESSING || it.stage == VlmStage.SCAN_REVIEW) it.stage else if (it.scanSnapshot != null && it.scene == null) VlmStage.SCAN_REVIEW else if (it.scene != null && it.stage != VlmStage.LIVE) { if (it.result == null) VlmStage.FROZEN else VlmStage.READY } else VlmStage.LIVE, directorProgress = null) }
+        _state.update { it.copy(cameraReady = false, saving = false, photoSettingsVisible = false, compositionDetailsVisible = false, stage = if (it.stage == VlmStage.SCAN_PROCESSING || it.stage == VlmStage.SCAN_REVIEW) it.stage else if (it.scanSnapshot != null && it.scene == null) VlmStage.SCAN_REVIEW else if (it.scene != null && it.stage != VlmStage.LIVE) { if (it.result == null) VlmStage.FROZEN else VlmStage.READY } else VlmStage.LIVE, directorProgress = null) }
     }
 
     override fun onCleared() {

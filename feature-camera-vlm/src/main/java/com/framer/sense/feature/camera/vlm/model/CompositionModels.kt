@@ -29,7 +29,7 @@ val VlmJson = Json { encodeDefaults = true; explicitNulls = true }
 @Serializable enum class SubjectDistance { FAR, MID, NEAR }
 @Serializable enum class AvatarId { ADULT_FEMALE, ADULT_MALE, CHILD_GIRL, CHILD_BOY }
 /** 用户选择的卡通角色外观；不从照片推断，不交给模型改写。 */
-enum class AvatarEthnicity { WHITE, ASIAN, BLACK }
+@Serializable enum class AvatarEthnicity { WHITE, ASIAN, BLACK }
 @Serializable enum class ActionKind { CAPABILITIES, VALIDATE, RENDER, FINAL }
 @Serializable enum class CompositionZone { LEFT, CENTER, RIGHT }
 @Serializable enum class FacingDirection { FRONT, THREE_QUARTER_LEFT, THREE_QUARTER_RIGHT }

@@ -440,6 +440,7 @@ class ArSharedCameraController(private val context: Context,
             handler.post { beginPhoto(continuation) }
             continuation.invokeOnCancellation { handler.post { if (pendingPhoto === continuation) finishPhoto(null, CancellationException()) } }
         }
+        val croppedBytes = cropPhotoToViewport(bytes)
         val values = ContentValues().apply {
             put(MediaStore.Images.Media.DISPLAY_NAME, "Framer_${System.currentTimeMillis()}.jpg")
             put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg")
@@ -447,16 +448,41 @@ class ArSharedCameraController(private val context: Context,
         }
         val uri = requireNotNull(context.contentResolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values))
         try {
-            context.contentResolver.openOutputStream(uri)?.use { it.write(bytes) } ?: error("AR_PHOTO_WRITE_FAILED")
+            context.contentResolver.openOutputStream(uri)?.use { it.write(croppedBytes) } ?: error("AR_PHOTO_WRITE_FAILED")
             if (Build.VERSION.SDK_INT >= 29) context.contentResolver.update(uri, ContentValues().apply { put(MediaStore.Images.Media.IS_PENDING, 0) }, null, null)
             uri
         } catch (failure: Exception) { context.contentResolver.delete(uri, null, null); throw failure }
     }
+    /** JPEG 的 EXIF 先转正，再与当前预览视口同中心裁切；不包含 Filament 图像。 */
+    private fun cropPhotoToViewport(bytes: ByteArray): ByteArray {
+        val decoded = requireNotNull(android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size))
+        val exif = androidx.exifinterface.media.ExifInterface(java.io.ByteArrayInputStream(bytes))
+        val matrix = android.graphics.Matrix().apply {
+            postRotate(exif.rotationDegrees.toFloat())
+            if (exif.isFlipped) postScale(-1f, 1f)
+        }
+        val upright = Bitmap.createBitmap(decoded, 0, 0, decoded.width, decoded.height, matrix, true)
+        // 保存开始后取景尺寸锁定，避免后台线程读取到下一次旋转的尺寸。
+        val target = photoViewportRatio
+        val rect = centerCropToAspect(upright.width, upright.height, target)
+        val w = ((rect.right - rect.left) * upright.width).toInt().coerceIn(1, upright.width)
+        val h = ((rect.bottom - rect.top) * upright.height).toInt().coerceIn(1, upright.height)
+        val cropped = Bitmap.createBitmap(upright, (upright.width - w) / 2, (upright.height - h) / 2, w, h)
+        return try { java.io.ByteArrayOutputStream().use { out ->
+            check(cropped.compress(Bitmap.CompressFormat.JPEG, 95, out)); out.toByteArray()
+        } } finally {
+            if (cropped !== upright) cropped.recycle()
+            if (upright !== decoded) upright.recycle()
+            decoded.recycle()
+        }
+    }
+    @Volatile private var photoViewportRatio = 3f / 4f
     @Suppress("DEPRECATION")
     private fun beginPhoto(continuation: CancellableContinuation<ByteArray>) {
         if (!continuation.isActive) return
         if (capturing || closing || !running || jpeg == null) { continuation.resumeWithException(IllegalStateException("AR_PHOTO_UNAVAILABLE")); return }
         try {
+            photoViewportRatio = width.toFloat() / height.coerceAtLeast(1)
             capturing = true; pendingPhoto = continuation; session?.pause(); running = false
             handler.removeCallbacks(tick); invalidateAnchor(); frame = null
             photoTimeout = Runnable { finishPhoto(null, IllegalStateException("AR_PHOTO_TIMEOUT")) }.also { handler.postDelayed(it, 15_000) }
@@ -515,9 +541,11 @@ class ArSharedCameraController(private val context: Context,
         runCatching { session?.close() }; session = null; shared = null
         egl?.let { gl -> runCatching { gl.makeCurrent(); if (textureId != 0) GLES20.glDeleteTextures(1, intArrayOf(textureId), 0); gl.close() } }; egl = null; textureId = 0
         closing = false
-        if (disposed) { thread.quitSafely(); return }
+        if (disposed) { closed.complete(Unit); thread.quitSafely(); return }
         if (fallback) main.post { onState(ArUiState(ArSource.SCREEN, ArTrackingState.UNSUPPORTED)) }
         else if (foreground && surface?.isValid == true) open()
     }
-    override fun close() { handler.post { disposed = true; closeCamera(false) } }
+    private val closed = kotlinx.coroutines.CompletableDeferred<Unit>()
+    suspend fun closeAndAwait() { close(); closed.await() }
+    override fun close() { if (!closed.isCompleted) handler.post { if (!disposed) { disposed = true; closeCamera(false) } } }
 }

@@ -273,4 +273,30 @@
     <string name="vlm_photo_local_alternative">App 备选组合 %1$d：未经过模型排序</string>
     <string name="vlm_photo_legacy_gateway">当前网关使用旧构图能力，请更新网关以选择卡通摄影参考</string>
     <string name="vlm_photo_model_invalid">离线模型未返回有效摄影组合；背景已保留，请重试</string>
+
+    <string name="vlm_photo_default_requirement">自然一些，保留环境主体</string>
+    <string name="vlm_camera_permission">允许使用相机</string>
+    <string name="vlm_camera_start_failed">相机暂时无法启动，请重试</string>
+    <string name="vlm_selected_composition">选中的构图参考</string>
+    <string name="vlm_screen_reference_short">屏幕参考</string>
+    <string name="vlm_photo_settings_title">拍照设置</string>
+    <string name="vlm_model_settings_title">模型设置</string>
+    <string name="vlm_ratio_3_4">3:4</string>
+    <string name="vlm_ratio_9_16">9:16</string>
+    <string name="vlm_ratio_4_3">4:3</string>
+    <string name="vlm_ratio_16_9">16:9</string>
+    <string name="vlm_zoom_value">%1$.1f×</string>
+    <string name="vlm_take_photo">拍摄照片</string>
+    <string name="vlm_apply_plan">应用构图</string>
+    <string name="vlm_back_camera">返回相机</string>
+    <string name="vlm_composition_details">构图详情</string>
+    <string name="vlm_photo_requirement">拍摄要求</string>
+    <string name="vlm_ar_mode_label">AR 空间参考</string>
+    <string name="vlm_ar_zoom_locked">AR 使用原始 1× 镜头。请重新对齐背景，再识别地面；照片只保存真实画面。</string>
+    <string name="vlm_normal_camera_hint">普通相机支持设备变焦；开启 AR 后恢复 1×，退出后恢复普通倍率。</string>
+    <string name="vlm_debug_image">测试图片</string>
+    <string name="vlm_avatar_size">参考人物大小</string>
+    <string name="vlm_director_revision_request">修改要求</string>
+    <string name="vlm_director_revise">让导演修改</string>
+    <string name="vlm_close_dialog">关闭设置</string>
 </resources>

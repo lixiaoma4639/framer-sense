@@ -30,6 +30,61 @@ import org.junit.Test
 class VlmCameraScreenTest {
     @get:Rule val composeRule = createComposeRule()
 
+    @Test fun independentShutterAndTwoSettingsUseDedicatedEvents() {
+        val state = mutableStateOf(VlmUiState(cameraReady = true))
+        val events = mutableListOf<VlmIntent>()
+        var photos = 0
+        composeRule.setContent { MaterialTheme { Column {
+            CameraTopBar(state.value, { events += it })
+            CameraBottomBar(state.value, { events += it }, { photos++ }, true)
+        } } }
+        composeRule.onNodeWithTag("vlm_shutter").assertIsEnabled().performClick()
+        composeRule.onNodeWithTag("vlm_model_settings").performClick()
+        composeRule.onNodeWithTag("vlm_photo_settings").performClick()
+        assertEquals(1, photos)
+        assertEquals(listOf(VlmIntent.SettingsVisible(true), VlmIntent.PhotoSettingsVisible(true)), events)
+        composeRule.onNodeWithText("AI 构图导演").assertDoesNotExist()
+        composeRule.onNodeWithTag("vlm_sample_open").assertDoesNotExist()
+        composeRule.runOnIdle { state.value = state.value.copy(stage = VlmStage.SCANNING) }
+        composeRule.onNodeWithTag("vlm_shutter").assertIsNotEnabled()
+        composeRule.onNodeWithTag("vlm_photo_settings").assertIsNotEnabled()
+        composeRule.onNodeWithTag("vlm_aspect_ratio").assertIsNotEnabled()
+    }
+
+    @Test fun photoSettingsOwnsRoleSampleAndFaceOptions() {
+        val events = mutableListOf<VlmIntent>()
+        composeRule.setContent { MaterialTheme { PhotoSettingsDialog(VlmUiState(), { events += it }, {}) } }
+        composeRule.onNodeWithTag("vlm_photo_settings_dialog").assertIsDisplayed()
+        composeRule.onNodeWithTag("vlm_preferred_ethnicity_ASIAN").performClick()
+        assertEquals(listOf(VlmIntent.PreferredEthnicity(AvatarEthnicity.ASIAN)), events)
+        composeRule.onNodeWithText("AI 构图导演").assertDoesNotExist()
+    }
+
+    @Test fun modelSettingsRetainsItsOwnDialog() {
+        composeRule.setContent { MaterialTheme { ModelSettingsDialog(VlmUiState(), {}, {}, {}) } }
+        composeRule.onNodeWithTag("vlm_model_settings_dialog").assertIsDisplayed()
+        composeRule.onNodeWithTag("vlm_photo_settings_dialog").assertDoesNotExist()
+    }
+
+    @Test fun ratioLabelFollowsLandscapeWithoutChangingPreference() {
+        val configuration = android.content.res.Configuration().apply { orientation = android.content.res.Configuration.ORIENTATION_LANDSCAPE }
+        composeRule.setContent {
+            androidx.compose.runtime.CompositionLocalProvider(androidx.compose.ui.platform.LocalConfiguration provides configuration) {
+                MaterialTheme { CameraTopBar(VlmUiState(photoPreferences = PhotoPreferences(CaptureAspectRatio.NINE_SIXTEEN)), {}) }
+            }
+        }
+        composeRule.onNodeWithText("16:9").assertIsDisplayed()
+    }
+
+    @Test fun aspectMenuUsesMviAndDoesNotOpenPhotoSettings() {
+        val events = mutableListOf<VlmIntent>()
+        composeRule.setContent { MaterialTheme { CameraTopBar(VlmUiState(), { events += it }) } }
+        composeRule.onNodeWithTag("vlm_aspect_ratio").performClick()
+        composeRule.onNodeWithTag("vlm_ratio_NINE_SIXTEEN").performClick()
+        assertEquals(listOf(VlmIntent.AspectRatioSelected(CaptureAspectRatio.NINE_SIXTEEN)), events)
+        composeRule.onNodeWithTag("vlm_photo_settings_dialog").assertDoesNotExist()
+    }
+
     @Test fun restartActionsRemainAvailableDuringGenerationButNotModelManagement() {
         val state = mutableStateOf(VlmUiState(stage = VlmStage.GENERATING,
             scene = SceneSnapshot("scene",640,480,1f,"/scene","/input")))

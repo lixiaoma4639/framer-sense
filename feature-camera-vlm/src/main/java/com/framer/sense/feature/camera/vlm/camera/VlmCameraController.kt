@@ -25,17 +25,24 @@ import java.util.concurrent.Executors
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.asExecutor
+import kotlinx.coroutines.launch
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 
 /** 只负责平台相机资源；UI 销毁时必须解绑，不持有 ViewModel。 */
 class VlmCameraController(private val context: Context) {
+    companion object {
+        // Tab／Activity 重建不能绕过上一控制器尚未完成的 CameraDevice.onClosed。
+        @Volatile private var retiringAr: com.framer.sense.feature.camera.vlm.ar.ArSharedCameraController? = null
+    }
     // 相机所有权互斥：AR 回退只能在 CameraDevice.onClosed 后清除这个引用。
     var ar: com.framer.sense.feature.camera.vlm.ar.ArSharedCameraController? = null
         private set
     suspend fun releaseForAr() {
-        val info = camera?.cameraInfo ?: return
+        val info = camera?.cameraInfo ?: closingCameraInfo
         unbind()
+        releaseForNormal()
+        if (info == null) return
         kotlinx.coroutines.withTimeout(5_000) {
             suspendCancellableCoroutine<Unit> { continuation ->
                 val observer = object : androidx.lifecycle.Observer<CameraState> {
@@ -51,8 +58,18 @@ class VlmCameraController(private val context: Context) {
             }
         }
     }
+    private var closingCameraInfo: CameraInfo? = null
     fun installAr(value: com.framer.sense.feature.camera.vlm.ar.ArSharedCameraController) { check(ar == null && camera == null); ar = value }
-    fun removeAr(value: com.framer.sense.feature.camera.vlm.ar.ArSharedCameraController) { if (ar === value) { ar = null; value.close() } }
+    private val ownershipScope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + Dispatchers.Main.immediate)
+    fun removeAr(value: com.framer.sense.feature.camera.vlm.ar.ArSharedCameraController) {
+        if (ar === value) ownershipScope.launch { value.closeAndAwait(); if (ar === value) ar = null }
+    }
+    suspend fun releaseForNormal() {
+        val previous = ar ?: retiringAr ?: return
+        previous.closeAndAwait()
+        if (ar === previous) ar = null
+        if (retiringAr === previous) retiringAr = null
+    }
     fun cameraForeground(visible: Boolean) { ar?.foreground(visible) }
     private var bindingEpoch = 0
     private var provider: ProcessCameraProvider? = null
@@ -63,7 +80,11 @@ class VlmCameraController(private val context: Context) {
     private val analysisExecutor = Executors.newSingleThreadExecutor()
     private val poses = CameraPoseTracker(context)
     fun foreground(visible: Boolean) { if (visible) poses.start() else poses.stop() }
-    fun close() { ar?.close(); ar = null; unbind(); poses.stop(); analysisExecutor.shutdown() }
+    fun close() {
+        ar?.let { retiringAr = it; it.close() }; ar = null
+        unbind(); poses.stop(); analysisExecutor.shutdown()
+    }
+    private var zoomOwner: LifecycleOwner? = null
     private var zoomOperation: ListenableFuture<Void>? = null
     private val executor = ContextCompat.getMainExecutor(context)
 
@@ -77,7 +98,8 @@ class VlmCameraController(private val context: Context) {
     suspend fun bind(view: PreviewView, owner: LifecycleOwner, initialZoom: Float,
         targetId: String? = null, scanStartedNs: Long? = null,
         sampling: () -> Boolean = { true },
-        onConfigured: (Int) -> Unit = {}, onSample: (AnalysisSample) -> Unit = {}): CameraCapabilities {
+        onConfigured: (Int) -> Unit = {}, onSample: (AnalysisSample) -> Unit = {}, onZoom: (Float) -> Unit = {}): CameraCapabilities {
+        releaseForNormal()
         check(ar == null) { "AR_CAMERA_OWNS_DEVICE" }
         val bindStarted = SystemClock.elapsedRealtime()
         android.util.Log.i("VlmCamera", "CameraX 绑定开始 view=${view.width}x${view.height} rotation=${view.display?.rotation} target=${targetId?.take(16)} zoom=$initialZoom")
@@ -111,6 +133,10 @@ class VlmCameraController(private val context: Context) {
         catch (failure: IllegalArgumentException) {
             if (targetId == null) throw failure
             unbind(invalidatePending = false); bindGroup(android.util.Size(640, 480))
+        }
+        zoomOwner = owner
+        camera!!.cameraInfo.zoomState.observe(owner) { current ->
+            if (epoch == bindingEpoch && ar == null) onZoom(current.zoomRatio)
         }
         val state = camera!!.cameraInfo.zoomState.value
         val minimum = state?.minZoomRatio ?: 1f
@@ -155,7 +181,30 @@ class VlmCameraController(private val context: Context) {
                 }
             }
         }
-        return CameraCapabilities(minimum, maximum, (listOf(minimum, 1f, 2f, 3f, maximum)).filter { it in minimum..maximum }.distinct().sorted())
+        return CameraCapabilities(minimum, maximum, CameraZoomPolicy.presets(minimum, maximum))
+    }
+
+    private var pendingZoom: Float? = null
+    private var pendingZoomView: android.view.View? = null
+    private var pendingZoomTask: Runnable? = null
+
+    /** 高频手势只保留最后值，每个显示帧最多一次提交。 */
+    fun queueZoom(view: android.view.View, ratio: Float) {
+        pendingZoom = ratio
+        if (pendingZoomTask != null) return
+        pendingZoomView = view
+        val task = Runnable { flushZoom() }
+        pendingZoomTask = task
+        view.postOnAnimation(task)
+    }
+    private fun flushZoom(requested: Float? = null) {
+        val value = requested ?: pendingZoom
+        cancelQueuedZoom()
+        if (value != null) zoom(value)
+    }
+    private fun cancelQueuedZoom() {
+        pendingZoomTask?.let { pendingZoomView?.removeCallbacks(it) }
+        pendingZoomTask = null; pendingZoomView = null; pendingZoom = null
     }
 
     /** 设置支持范围内的倍率。
@@ -193,9 +242,10 @@ class VlmCameraController(private val context: Context) {
     /** 拍摄一帧供冻结，不写入系统相册；无参数。
      * @return 已按预览裁剪并转正的独立 Bitmap 与拍摄倍率，由调用方回收 Bitmap。
      */
-    suspend fun freeze(): Pair<Bitmap, Float> {
+    suspend fun freeze(requestedZoom: Float? = null): Pair<Bitmap, Float> {
         ar?.let { return it.freeze() }
         val active = capture ?: error("相机尚未准备完成")
+        flushZoom(requestedZoom)
         awaitZoom()
         val ratio = camera?.cameraInfo?.zoomState?.value?.zoomRatio ?: 1f
         return suspendCancellableCoroutine { continuation ->
@@ -227,9 +277,10 @@ class VlmCameraController(private val context: Context) {
     /** 保存真实照片，不合入人偶；无参数。
      * @return 系统相册 URI；Android 9 及以下由 UI 先取得写入权限。
      */
-    suspend fun capturePhoto(): Uri? {
+    suspend fun capturePhoto(requestedZoom: Float? = null): Uri? {
         ar?.let { return it.capturePhoto() }
         val active = capture ?: error("相机尚未准备完成")
+        flushZoom(requestedZoom)
         awaitZoom()
         val values = ContentValues().apply {
             put(MediaStore.Images.Media.DISPLAY_NAME, "Framer_${System.currentTimeMillis()}.jpg")
@@ -253,7 +304,10 @@ class VlmCameraController(private val context: Context) {
 
     /** 解绑本实例使用的相机用例；无参数，不解绑其他模块的相机资源。 */
     fun unbind(invalidatePending: Boolean = true) {
+        cancelQueuedZoom()
         if (invalidatePending) bindingEpoch++
+        camera?.cameraInfo?.let { closingCameraInfo = it }
+        zoomOwner?.let { camera?.cameraInfo?.zoomState?.removeObservers(it) }; zoomOwner = null
         analysis?.clearAnalyzer()
         val useCases = listOfNotNull(preview, capture, analysis).toTypedArray()
         if (useCases.isNotEmpty()) provider?.unbind(*useCases)

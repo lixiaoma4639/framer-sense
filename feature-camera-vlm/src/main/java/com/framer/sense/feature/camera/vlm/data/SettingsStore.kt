@@ -25,6 +25,15 @@ class SettingsStore(context: Context) {
         prefs.edit().putString("avatar-ethnicity", value.name).apply()
     }
 
+    fun readPhotoPreferences(): PhotoPreferences = runCatching {
+        VlmJson.decodeFromString<PhotoPreferences>(prefs.getString("photo-preferences", null) ?: "{}")
+    }.getOrDefault(PhotoPreferences()).copy(ethnicity = readAvatarEthnicity())
+
+    fun savePhotoPreferences(value: PhotoPreferences) {
+        prefs.edit().putString("photo-preferences", VlmJson.encodeToString(value))
+            .putString("avatar-ethnicity", value.ethnicity.name).apply()
+    }
+
     /** 读取设置；无参数，无法解密时清空令牌，提示用户重新配置。 */
     fun read(): ModelSettings {
         val settings = runCatching { VlmJson.decodeFromString<ModelSettings>(prefs.getString("settings", null) ?: "{}") }.getOrDefault(ModelSettings())
