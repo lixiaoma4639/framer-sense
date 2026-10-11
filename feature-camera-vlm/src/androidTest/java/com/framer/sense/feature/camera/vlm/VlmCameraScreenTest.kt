@@ -2,6 +2,10 @@ package com.framer.sense.feature.camera.vlm
 
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.height
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.ui.Modifier
 import androidx.compose.runtime.mutableStateOf
@@ -67,6 +71,7 @@ class VlmCameraScreenTest {
             CameraTopBar(state.value, { events += it })
             CameraBottomBar(state.value, { events += it }, { photos++ }, true)
         } } }
+        composeRule.onNodeWithTag("vlm_actual_zoom").assertDoesNotExist()
         composeRule.onNodeWithTag("vlm_shutter").assertIsEnabled().performClick()
         composeRule.onNodeWithTag("vlm_model_settings").performClick()
         composeRule.onNodeWithTag("vlm_photo_settings").performClick()
@@ -127,18 +132,40 @@ class VlmCameraScreenTest {
         composeRule.onNodeWithTag("vlm_scan_restart_active").assertIsNotEnabled()
     }
 
-    @Test fun allThreeCompositionChoicesAreVisibleWithoutExpanding() {
-        val plans = (1..3).map { CompositionPlan("p$it", "方案$it", ShotType.FULL, CropRect(), 1f,
+    @Test fun compositionSelectionCollapsesTogetherAndDetailsFollowSelectedPlan() {
+        val plans = (1..3).map { CompositionPlan("p$it", "测试标题$it", ShotType.FULL, CropRect(), 1f,
             AvatarPlacement(), "指导", "背景") }
-        val state = VlmUiState(stage = VlmStage.READY, selectedId = "p1",
-            result = CompositionResult(plans, emptyList(), emptyList(), emptyList()))
+        val state = mutableStateOf(VlmUiState(stage = VlmStage.READY, selectedId = "p1",
+            compositionDetailsVisible = true, result = CompositionResult(plans, emptyList(), emptyList(), emptyList())))
         val events = mutableListOf<VlmIntent>()
-        composeRule.setContent { MaterialTheme { Controls(state, { events += it }, {}, Modifier.fillMaxWidth()) } }
+        val onEvent: (VlmIntent) -> Unit = { event ->
+            events += event
+            when (event) {
+                is VlmIntent.Select -> state.value = state.value.copy(selectedId = event.id)
+                is VlmIntent.CompositionDetailsVisible -> state.value = state.value.copy(compositionDetailsVisible = event.visible)
+                else -> Unit
+            }
+        }
+        composeRule.setContent { MaterialTheme {
+            Controls(state.value, onEvent, {}, Modifier.fillMaxWidth().height(620.dp))
+        } }
         plans.forEach { composeRule.onNodeWithTag("vlm_composition_${it.id}").assertIsDisplayed() }
-        composeRule.onNodeWithText("展开其他构图").assertDoesNotExist()
-        composeRule.onNodeWithText("收起其他构图").assertDoesNotExist()
+        val rowWidth = composeRule.onNodeWithTag("vlm_composition_choices").getUnclippedBoundsInRoot().width
+        val card = composeRule.onNodeWithTag("vlm_composition_p1").getUnclippedBoundsInRoot()
+        org.junit.Assert.assertTrue(card.width < rowWidth / 3)
+        org.junit.Assert.assertTrue(card.height == 88.dp || card.height == 52.dp)
         composeRule.onNodeWithTag("vlm_composition_p3").performClick()
-        assertEquals(listOf(VlmIntent.Select("p3")), events)
+        composeRule.onNodeWithText("测试标题3", substring = true).assertExists()
+        composeRule.onNodeWithText("测试标题1", substring = true).assertDoesNotExist()
+        composeRule.onNodeWithTag("vlm_apply").performScrollTo().performClick()
+        assertEquals(listOf(VlmIntent.Select("p3"), VlmIntent.Apply), events)
+        composeRule.onNodeWithTag("vlm_details").performClick()
+        composeRule.onNodeWithTag("vlm_composition_choices").assertDoesNotExist()
+        composeRule.onNodeWithTag("vlm_composition_details_panel").assertDoesNotExist()
+        composeRule.onNodeWithTag("vlm_apply").assertDoesNotExist()
+        composeRule.onNodeWithTag("vlm_details").performClick()
+        composeRule.onNodeWithTag("vlm_composition_p3").assertIsDisplayed()
+        composeRule.onNodeWithText("测试标题3", substring = true).assertExists()
     }
 
     @Test fun sampleDialogUsesDedicatedEventsAndDisablesExpressionWhileRendering() {
@@ -189,17 +216,34 @@ class VlmCameraScreenTest {
             AvatarPlacement(foot = Point2(.3f, .92f), poseDirective = AvatarPoseDirective(arms = ArmPose.WAVE), expression = ExpressionId.SMILE),
             "原文建议双手叉腰", "背景是花园"))
         composeRule.setContent { MaterialTheme { CompositionDescriptions(CompositionResult(listOf(plan.value), emptyList(), emptyList(), emptyList()), "p1") } }
+        composeRule.onNodeWithTag("vlm_scene_description").assertTextContains("背景是花园", substring = true)
+        composeRule.onNodeWithTag("vlm_pose_description").assertTextContains(";  ", substring = true)
+        composeRule.onNodeWithTag("vlm_resolved_guidance").assertTextContains("\n", substring = true)
         composeRule.onNodeWithTag("vlm_resolved_guidance").assertTextContains("画面左侧", substring = true)
             .assertTextContains("轻抬手", substring = true)
             .assertTextContains("自然微笑", substring = true)
         composeRule.runOnIdle {
-            plan.value = plan.value.copy(avatar = plan.value.avatar.copy(foot = Point2(.7f, .92f),
+            plan.value = plan.value.copy(localCombination = 1, sceneDescription = "右侧草坪开阔，远处有树木。", avatar = plan.value.avatar.copy(foot = Point2(.7f, .92f),
                 poseDirective = AvatarPoseDirective(arms = ArmPose.HANDS_FRONT), expressionIntensity = 0f))
         }
         composeRule.onNodeWithTag("vlm_resolved_guidance").assertTextContains("画面右侧", substring = true)
             .assertTextContains("双手身前交叠", substring = true)
             .assertTextContains("平静", substring = true)
+        composeRule.onNodeWithTag("vlm_scene_description").assertTextContains("右侧草坪开阔", substring = true)
+        val environment = composeRule.onNodeWithTag("vlm_scene_description").getUnclippedBoundsInRoot()
+        val guidance = composeRule.onNodeWithTag("vlm_resolved_guidance").getUnclippedBoundsInRoot()
+        org.junit.Assert.assertTrue(environment.top >= guidance.bottom)
         composeRule.onNodeWithText("原文建议双手叉腰", substring = true).assertDoesNotExist()
+    }
+
+    @Test fun environmentDoesNotUseAppGuidanceWhenModelDescriptionIsAbsent() {
+        val plan = CompositionPlan("p1", "", ShotType.FULL, CropRect(), 1f,
+            AvatarPlacement(), "App 固定动作指导", "", localCombination = 1)
+        composeRule.setContent { MaterialTheme {
+            CompositionDescriptions(CompositionResult(listOf(plan), emptyList(), emptyList(), emptyList()), "p1")
+        } }
+        composeRule.onNodeWithTag("vlm_scene_description").assertDoesNotExist()
+        composeRule.onNodeWithText("App 固定动作指导", substring = true).assertDoesNotExist()
     }
 
     @Test fun actionControlsEmitLocalEventsAndDisableDuringGeneration() {

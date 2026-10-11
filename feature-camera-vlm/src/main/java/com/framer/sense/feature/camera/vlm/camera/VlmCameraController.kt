@@ -181,7 +181,39 @@ class VlmCameraController(private val context: Context) {
                 }
             }
         }
-        return CameraCapabilities(minimum, maximum, CameraZoomPolicy.presets(minimum, maximum))
+        val lensRatios = deviceLensRatios(camera!!.cameraInfo)
+        val options = CameraZoomPolicy.presets(minimum, maximum, lensRatios)
+        android.util.Log.i("VlmCamera", "倍率快捷档 range=$minimum..$maximum lensEstimates=$lensRatios presets=$options")
+        return CameraCapabilities(minimum, maximum, options)
+    }
+
+    /** 仅查询当前逻辑相机的成员镜头，不把其他不可访问镜头登记为可切换档位。 */
+    @androidx.annotation.OptIn(ExperimentalCamera2Interop::class)
+    private fun deviceLensRatios(info: CameraInfo): List<Float> = runCatching {
+        if (Build.VERSION.SDK_INT < 28) return@runCatching emptyList<Float>()
+        val camera2 = Camera2CameraInfo.from(info)
+        val referenceFocal = camera2.getCameraCharacteristic(CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS)
+            ?.filter { it.isFinite() && it > 0f }?.minOrNull() ?: return@runCatching emptyList<Float>()
+        val referenceSize = camera2.getCameraCharacteristic(CameraCharacteristics.SENSOR_INFO_PHYSICAL_SIZE)
+            ?: return@runCatching emptyList<Float>()
+        val manager = context.getSystemService(Context.CAMERA_SERVICE) as android.hardware.camera2.CameraManager
+        val logical = manager.getCameraCharacteristics(camera2.cameraId)
+        logical.physicalCameraIds.flatMap { id ->
+            runCatching lens@ {
+                val physical = manager.getCameraCharacteristics(id)
+                val size = physical.get(CameraCharacteristics.SENSOR_INFO_PHYSICAL_SIZE)
+                    ?: return@lens emptyList<Float>()
+                val focalLengths = physical.get(CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS)
+                    ?: floatArrayOf()
+                focalLengths.toList().mapNotNull { focal ->
+                    CameraZoomPolicy.lensRatio(focal, size.width, size.height,
+                        referenceFocal, referenceSize.width, referenceSize.height)
+                }
+            }.getOrDefault(emptyList())
+        }
+    }.getOrElse {
+        android.util.Log.w("VlmCamera", "读取镜头倍率失败，使用范围内基础档位", it)
+        emptyList()
     }
 
     private var pendingZoom: Float? = null

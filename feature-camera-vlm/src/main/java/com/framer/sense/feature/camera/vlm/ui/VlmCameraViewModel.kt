@@ -683,7 +683,7 @@ class VlmCameraViewModel @Inject constructor(
                 val expressions = resolved.plans.associate { it.id to previews.availableExpressions(it) }
                 if (token == requestToken) {
                     Log.i(LOG_TAG, "构图任务成功 token=${token.take(8)} plans=${result.plans.size} traces=${result.traces.size}")
-                    _state.update { it.copy(result = resolved, diagnostics = resolved, previews = images, selectedId = previous.selectedId?.takeIf { id -> resolved.plans.any { p -> p.id == id } } ?: resolved.plans.first().id, stage = VlmStage.READY, directorProgress = null, availableActions = actions, availableExpressions = expressions) }
+                    _state.update { it.copy(compositionDetailsVisible = true, result = resolved, diagnostics = resolved, previews = images, selectedId = previous.selectedId?.takeIf { id -> resolved.plans.any { p -> p.id == id } } ?: resolved.plans.first().id, stage = VlmStage.READY, directorProgress = null, availableActions = actions, availableExpressions = expressions) }
                     Log.i(LOG_TAG, "构图界面已就绪 token=${token.take(8)} stage=${_state.value.stage} scenePresent=${_state.value.scene != null} previews=${images.size} selectedPlan=${_state.value.selectedId?.take(8)}")
                     requestFace()
                 }

@@ -35,6 +35,17 @@ class CameraFramingTest {
         }
     }
 
+    @Test fun fullWidthViewportKeepsBothRatiosEvenWhenAvailableHeightIsSmall() {
+        listOf(240f, 400f, 720f).forEach { width ->
+            CaptureAspectRatio.entries.forEach { aspect ->
+                val ratio = aspect.ratio(false)
+                val size = widthCaptureViewport(width, ratio)
+                assertEquals(width, size.width, 0f)
+                assertEquals(width / ratio, size.height, .0001f)
+            }
+        }
+    }
+
     @Test fun knownLandscapeImageCropsToPortraitWithoutStretchingScene() {
         val crop = CaptureAspectRatio.NINE_SIXTEEN.centerCrop(4000, 3000, false)
         assertEquals(.2890625f, crop.left, .00001f)
@@ -48,7 +59,12 @@ class CameraFramingTest {
     }
 
     @Test fun presetsRespectActualDeviceRangeButPinchCanReachBeyondFive() {
-        assertEquals(listOf(.6f, 1f, 2f, 3f, 5f), CameraZoomPolicy.presets(.6f, 10f))
+        assertEquals(listOf(.6f, 1f, 2f), CameraZoomPolicy.presets(.6f, 10f))
+        assertEquals(listOf(.5f, 1f, 3.5f, 10f), CameraZoomPolicy.presets(.5f, 10f, listOf(.5f, 1f, 3.49f, 10f)))
+        assertEquals(listOf(1f, 2f), CameraZoomPolicy.presets(1f, 2.5f, listOf(.5f, 10f)))
+        assertEquals(listOf(1f, 2f), CameraZoomPolicy.presets(1f, 2f, listOf(Float.NaN, -1f)))
+        assertEquals(3.5f, CameraZoomPolicy.lensRatio(7f, 4f, 3f, 4f, 8f, 6f)!!, .0001f)
+        assertNull(CameraZoomPolicy.lensRatio(4f, 0f, 3f, 4f, 8f, 6f))
         assertEquals(listOf(1f, 2f), CameraZoomPolicy.presets(1f, 2.5f))
         assertEquals(listOf(1f), CameraZoomPolicy.presets(1f, 1f))
         assertEquals(10f, CameraZoomPolicy.clamp(20f, .6f, 10f), 0f)

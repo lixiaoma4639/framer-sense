@@ -4,6 +4,8 @@ import android.os.Build
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import androidx.core.graphics.scale
+import com.framer.sense.feature.camera.vlm.agent.OfflineSceneDescription
+import com.framer.sense.feature.camera.vlm.agent.OfflineSceneDescriptionCache
 import com.framer.sense.feature.camera.vlm.agent.OfflineViewSelectionProtocol
 import android.util.Log
 import com.framer.sense.feature.camera.vlm.R
@@ -44,6 +46,8 @@ object MnnNative {
     external fun inferImages(handle: Long, imagePaths: Array<String>, prompt: ByteArray, cancelled: AtomicBoolean, progress: MnnTokenProgress): ByteArray
     /** 单图兼容入口。 */
     external fun infer(handle: Long, imagePath: String, prompt: ByteArray, cancelled: AtomicBoolean, progress: MnnTokenProgress): ByteArray
+    /** 环境描述使用独立的 192-token 输出上限，复用现有算子边界取消。 */
+    external fun describeScene(handle: Long, imagePath: String, prompt: ByteArray, cancelled: AtomicBoolean, progress: MnnTokenProgress): ByteArray
     external fun choosePhoto(handle: Long, imagePath: String, prompt: ByteArray, cancelled: AtomicBoolean): ByteArray
     /** 释放空闲句柄。@param handle 已结束所有推理的模型句柄。 */
     external fun release(handle: Long)
@@ -61,6 +65,8 @@ interface MnnRuntime {
     fun release(handle: Long)
     /** 图像推理。@param handle 活跃句柄。@param image 私有图像路径。@param prompt UTF-8 提示。@param cancel 取消标志。@param onToken 实际输出新 token 的回调。@return 输出字节。 */
     fun infer(handle: Long, image: String, prompt: ByteArray, cancel: AtomicBoolean, onToken: () -> Unit): ByteArray
+    fun describeScene(handle: Long, image: String, prompt: ByteArray, cancel: AtomicBoolean, onToken: () -> Unit): ByteArray =
+        infer(handle, image, prompt, cancel, onToken)
     fun inferImages(handle: Long, images: List<String>, prompt: ByteArray, cancel: AtomicBoolean, onToken: () -> Unit): ByteArray {
         if (images.size == 1) return infer(handle, images.single(), prompt, cancel, onToken)
         throw UnsupportedOperationException("LOCAL_MULTIVIEW_UNSUPPORTED")
@@ -80,6 +86,8 @@ object NativeMnnRuntime : MnnRuntime {
     /** 执行多模态推理。@param handle 活跃句柄。@param image 图片路径。@param prompt UTF-8 输入。@param cancel 取消标志。@return UTF-8 输出。 */
     override fun infer(handle: Long, image: String, prompt: ByteArray, cancel: AtomicBoolean, onToken: () -> Unit): ByteArray =
         MnnNative.infer(handle, image, prompt, cancel, MnnTokenProgress(onToken))
+    override fun describeScene(handle: Long, image: String, prompt: ByteArray, cancel: AtomicBoolean, onToken: () -> Unit): ByteArray =
+        MnnNative.describeScene(handle, image, prompt, cancel, MnnTokenProgress(onToken))
     override fun inferImages(handle: Long, images: List<String>, prompt: ByteArray, cancel: AtomicBoolean, onToken: () -> Unit): ByteArray =
         MnnNative.inferImages(handle, images.toTypedArray(), prompt, cancel, MnnTokenProgress(onToken))
 }
@@ -95,6 +103,7 @@ class MnnProvider(
     private val runtime: MnnRuntime = NativeMnnRuntime
 ) : VisionModelProvider {
     private val executor = Executors.newSingleThreadExecutor { task -> Thread(task, "vlm-mnn").apply { isDaemon = true } }
+    private val sceneDescriptions = OfflineSceneDescriptionCache()
     private var handle = 0L
     private var loadedPath: String? = null
     private val nativeInferenceRunning = AtomicBoolean(false)
@@ -133,6 +142,7 @@ class MnnProvider(
         _loadState.value = LocalModelLoadState(LocalModelPhase.LOADING, dir.path)
         try {
         if (handle != 0L) runtime.release(handle)
+        sceneDescriptions.clear()
         handle = 0L
         loadedPath = null
         runtime.initialize()
@@ -164,6 +174,7 @@ class MnnProvider(
     suspend fun unload(): Unit = submit { _ ->
         val previousPath = loadedPath ?: store.activeDirectory()?.path
         if (handle != 0L) runtime.release(handle)
+        sceneDescriptions.clear()
         handle = 0L
         loadedPath = null
         _loadState.value = LocalModelLoadState(LocalModelPhase.UNLOADED, previousPath)
@@ -198,10 +209,40 @@ class MnnProvider(
             if (cancel.get()) throw CancellationException()
             val start = System.nanoTime()
             nativeInferenceRunning.set(true)
+            var sceneObservation: SceneObservation? = null
             val output = try {
-                (if (com.framer.sense.feature.camera.vlm.agent.PhotoReferenceDecisionPolicy.enabled(call.input))
-                    runtime.choosePhoto(handle, image.path, call.prompt.toByteArray(Charsets.UTF_8), cancel).also { onToken() }
+                val photoChoice = com.framer.sense.feature.camera.vlm.agent.PhotoReferenceDecisionPolicy.enabled(call.input)
+                val raw = (if (photoChoice)
+                    runtime.choosePhoto(handle, image.path, call.prompt.toByteArray(Charsets.UTF_8), cancel)
                 else runtime.infer(handle, image.path, call.prompt.toByteArray(Charsets.UTF_8), cancel, onToken)).toString(Charsets.UTF_8)
+                if (cancel.get()) throw CancellationException()
+                if (photoChoice && raw.trim().toIntOrNull()?.let { it in 1..6 } == true) {
+                    val key = OfflineSceneDescriptionCache.Key(call.input.scene.id, image.path, image.length(),
+                        image.lastModified(), "${loadedPath}:$handle")
+                    sceneObservation = sceneDescriptions.get(key)
+                    if (sceneObservation != null) {
+                        Log.i(LOG_TAG, "环境描述缓存命中 request=${call.requestId.take(8)} image=${call.input.scene.id.take(8)}")
+                    } else {
+                        val descriptionStart = System.nanoTime()
+                        Log.i(LOG_TAG, "选中单图环境描述开始 request=${call.requestId.take(8)} image=${call.input.scene.id.take(8)} choice=${raw.trim()}")
+                        try {
+                            // 编号决策没有自由文本 token；此处首 token 前仍不启用停滞超时。
+                            val descriptionRaw = runtime.describeScene(handle, image.path,
+                                OfflineSceneDescription.PROMPT.toByteArray(Charsets.UTF_8), cancel, onToken).toString(Charsets.UTF_8)
+                            if (cancel.get()) throw CancellationException()
+                            sceneObservation = OfflineSceneDescription.parse(descriptionRaw, call.input.scene.id)
+                            sceneObservation?.let { sceneDescriptions.put(key, it) }
+                            Log.i(LOG_TAG, "选中单图环境描述结束 request=${call.requestId.take(8)} image=${call.input.scene.id.take(8)} valid=${sceneObservation != null} elapsedMs=${(System.nanoTime()-descriptionStart)/1_000_000} outputChars=${descriptionRaw.length}")
+                            if (BuildConfig.DEBUG) Log.d(LOG_TAG, "环境描述原始输出 request=${call.requestId.take(8)} raw=${VlmJson.encodeToString(descriptionRaw)}")
+                        } catch (cancelled: CancellationException) { throw cancelled }
+                        catch (failure: Exception) {
+                            if (cancel.get()) throw CancellationException()
+                            // 描述是附加观察；失败不丢弃已完成的合法摄影组合，也不伪造说明。
+                            Log.w(LOG_TAG, "环境描述生成失败，保留摄影组合 request=${call.requestId.take(8)}", failure)
+                        }
+                    }
+                }
+                raw
             } finally {
                 nativeInferenceRunning.set(false)
             }
@@ -215,7 +256,7 @@ class MnnProvider(
                     Log.d(LOG_TAG, "模型原始输出 request=${call.requestId.take(8)} part=${index + 1}/${parts.size} raw=$part")
                 }
             }
-            StepReply(store.modelName(), output, elapsedMs = elapsedMs)
+            StepReply(store.modelName(), output, elapsedMs = elapsedMs, sceneObservation = sceneObservation)
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (error: Throwable) {
@@ -317,6 +358,7 @@ class MnnProvider(
         try {
         checkAbi()
         if (handle != 0L) runtime.release(handle)
+        sceneDescriptions.clear()
         handle = 0L
         loadedPath = null
         val config = File(dir, "config.json")

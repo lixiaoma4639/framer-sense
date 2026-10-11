@@ -117,7 +117,8 @@ val VlmJson = Json { encodeDefaults = true; explicitNulls = true }
     @kotlinx.serialization.Transient val viewBinding: PhotoViewBinding? = null,
     @kotlinx.serialization.Transient val backgroundKeepRegions: List<CropRect> = emptyList(),
     @kotlinx.serialization.Transient val localCombination: Int? = null,
-    @kotlinx.serialization.Transient val localAlternative: Boolean = false
+    @kotlinx.serialization.Transient val localAlternative: Boolean = false,
+    @kotlinx.serialization.Transient val sceneDescription: String? = null
 )
 /** 模型仅表达摄影意图；坐标、裁剪和倍率由客户端映射并校验。 */
 @Serializable data class CompositionIntent(
@@ -182,8 +183,10 @@ val VlmJson = Json { encodeDefaults = true; explicitNulls = true }
     val raw: String,
     val decision: DirectorDecision? = null,
     val elapsedMs: Long = 0,
-    @kotlinx.serialization.Transient val photoProtocol: Boolean = false
+    @kotlinx.serialization.Transient val photoProtocol: Boolean = false,
+    @kotlinx.serialization.Transient val sceneObservation: SceneObservation? = null
 )
+data class SceneObservation(val imageId: String, val text: String)
 @Serializable data class GatewayCapability(
     val provider: ProviderId,
     val model: String,

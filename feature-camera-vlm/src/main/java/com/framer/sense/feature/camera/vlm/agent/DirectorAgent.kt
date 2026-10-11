@@ -129,6 +129,9 @@ class DirectorAgent(
                 val answer = reply ?: throw (lastError ?: ModelFailure("UNAVAILABLE", "没有可用模型，请导入离线模型或配置网关", false))
                 lastRaw = answer.raw
                 outputs += answer.raw
+                answer.sceneObservation?.takeIf { it.imageId == input.scene.id }?.let {
+                    observations += ToolObservation("describe_selected_background", listOf(it.text))
+                }
                 onProgress(DirectorProgress.ValidatingResponse(turn + 1))
                 val localReply = traces.last().provider == ProviderId.LOCAL
                 val photoProtocol = PhotoReferenceDecisionPolicy.enabled(input) && (localReply || answer.photoProtocol)
@@ -218,7 +221,7 @@ class DirectorAgent(
                     return@repeat
                 }
                 if (decision.action == ActionKind.FINAL || localReply) {
-                    val revised = resolved.map { plan ->
+                    val revised = OfflineSceneDescription.attach(resolved, input, answer.sceneObservation).map { plan ->
                         val old = input.existing.find { it.id == plan.id }
                         if (plan.id == input.selectedId && old != null) plan.withRevision(old.revision + 1) else plan
                     }

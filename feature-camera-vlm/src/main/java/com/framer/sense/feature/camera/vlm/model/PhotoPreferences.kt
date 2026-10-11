@@ -28,9 +28,26 @@ data class PhotoPreferences(
 object CameraZoomPolicy {
     fun clamp(value: Float, min: Float, max: Float): Float =
         if (!value.isFinite()) min else value.coerceIn(min, max.coerceAtLeast(min))
-    fun presets(min: Float, max: Float): List<Float> =
-        (if (min < 1f) listOf(min) else emptyList()).plus(listOf(1f, 2f, 3f, 5f))
-            .filter { it in min..max }.distinct().sorted().ifEmpty { listOf(min) }
+    /** 镜头视角推算档位只在当前相机可执行范围内展示；缺失信息时提供 1×／2×。 */
+    fun presets(min: Float, max: Float, lensRatios: List<Float> = emptyList()): List<Float> {
+        val lenses = lensRatios.filter { it.isFinite() && it > 0f && kotlin.math.abs(it - 1f) > .04f }
+            .map { kotlin.math.round(it * 10f) / 10f }.filter { it in min..max }
+        val candidates = if (lenses.isEmpty()) listOf(1f, 2f) else listOf(1f) + lenses
+        return ((if (min < 1f) listOf(min) else emptyList()) + candidates)
+            .filter { it in min..max }.sorted().fold(mutableListOf<Float>()) { values, ratio ->
+                if (values.none { kotlin.math.abs(it - ratio) < .04f }) values.add(ratio)
+                values
+            }.ifEmpty { listOf(min) }
+    }
+
+    fun lensRatio(focalLength: Float, sensorWidth: Float, sensorHeight: Float,
+        referenceFocal: Float, referenceWidth: Float, referenceHeight: Float): Float? {
+        val values = listOf(focalLength, sensorWidth, sensorHeight, referenceFocal, referenceWidth, referenceHeight)
+        if (values.any { !it.isFinite() || it <= 0f }) return null
+        val ratio = (focalLength / kotlin.math.hypot(sensorWidth, sensorHeight)) /
+            (referenceFocal / kotlin.math.hypot(referenceWidth, referenceHeight))
+        return ratio.takeIf { it.isFinite() && it > 0f }
+    }
 }
 
 /** 多指触摸结束后不能变成对焦、拖动或落点点击。 */
@@ -59,4 +76,10 @@ fun fitCaptureViewport(width: Float, height: Float, ratio: Float): CaptureViewpo
     require(width >= 0f && height >= 0f && ratio.isFinite() && ratio > 0f)
     return if (height * ratio <= width) CaptureViewportSize(height * ratio, height)
         else CaptureViewportSize(width, width / ratio)
+}
+
+/** 取景按宽度铺满，高度由比例决定，不因底部操作区缩窄。 */
+fun widthCaptureViewport(width: Float, ratio: Float): CaptureViewportSize {
+    require(width.isFinite() && width >= 0f && ratio.isFinite() && ratio > 0f)
+    return CaptureViewportSize(width, width / ratio)
 }

@@ -36,6 +36,11 @@ import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.withStyle
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.tooling.preview.Preview
@@ -49,6 +54,7 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil3.compose.AsyncImage
 import com.framer.sense.feature.camera.vlm.R
+import com.framer.sense.feature.camera.vlm.agent.SceneDescriptionFormatting
 import com.framer.sense.feature.camera.vlm.agent.DirectorProgress
 import com.framer.sense.feature.camera.vlm.agent.CompositionIntentMapper
 import com.framer.sense.feature.camera.vlm.data.ModelDownloadService
@@ -170,16 +176,17 @@ fun VlmCameraScreen(
     CameraBackHandler(state, onEvent, exitCamera)
     val safeInsets = WindowInsets.displayCutout
         .union(WindowInsets.mandatorySystemGestures).asPaddingValues()
-    Box(modifier.fillMaxSize().background(Color.Black).testTag("vlm_camera_screen")) {
+    BoxWithConstraints(modifier.fillMaxSize().background(Color.Black).testTag("vlm_camera_screen").padding(safeInsets)) {
+        val controlsMaxHeight = (maxHeight - 48.dp).coerceAtLeast(0.dp)
         CameraPane(state, controller, permission, { permissionLauncher.launch(Manifest.permission.CAMERA) },
-            onEvent, Modifier.fillMaxSize().padding(safeInsets).padding(top = 48.dp, bottom = 84.dp))
-        CameraTopBar(state, onEvent, Modifier.align(Alignment.TopCenter).padding(safeInsets), onExit = exitCamera)
+            onEvent, Modifier.fillMaxSize().padding(top = 48.dp, bottom = 84.dp))
+        CameraTopBar(state, onEvent, Modifier.align(Alignment.TopCenter), onExit = exitCamera)
         CameraBottomBar(state, onEvent, { latestCapture() }, permission,
-            Modifier.align(Alignment.BottomCenter).padding(safeInsets))
+            Modifier.align(Alignment.BottomCenter).heightIn(max = controlsMaxHeight))
         ArSupportControl(controller, state, permission, onEvent)
     }
     if (state.photoSettingsVisible) PhotoSettingsDialog(state, onEvent, { imageLauncher.launch("image/*") })
-    if (state.compositionDetailsVisible) CompositionDetailsDialog(state, onEvent)
+    if (state.compositionDetailsVisible && state.stage == VlmStage.SCAN_REVIEW) CompositionDetailsDialog(state, onEvent)
     if (state.settingsVisible) ModelSettingsDialog(state, onEvent, { modelLauncher.launch(arrayOf("application/zip", "application/octet-stream", "application/x-zip-compressed")) }, { directoryLauncher.launch(null) })
     state.photoSample?.let { PhotoSampleDialog(it, onEvent) }
 }
@@ -258,8 +265,8 @@ private fun CameraPane(state: VlmUiState, controller: VlmCameraController, permi
     val lastBounds = remember { arrayOfNulls<String>(1) }
     Box(modifier.background(Color.Black), contentAlignment = Alignment.TopCenter) {
         BoxWithConstraints(Modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
-            val fitted = fitCaptureViewport(maxWidth.value, maxHeight.value, ratio)
-            Box(Modifier.size(fitted.width.dp, fitted.height.dp).clipToBounds().onGloballyPositioned { coordinates ->
+            val fitted = widthCaptureViewport(maxWidth.value, ratio)
+            Box(Modifier.wrapContentSize(Alignment.TopCenter, unbounded = true).size(fitted.width.dp, fitted.height.dp).clipToBounds().onGloballyPositioned { coordinates ->
                 val rect = coordinates.boundsInWindow()
                 val bounds = "x=${rect.left.toInt()} y=${rect.top.toInt()} size=${rect.width.toInt()}x${rect.height.toInt()}"
                 if (lastBounds[0] != bounds) { lastBounds[0] = bounds; Log.i("VlmCameraUi", "预览布局 $bounds ratio=$ratio source=${state.ar.source} topAligned=true") }
@@ -298,7 +305,7 @@ private fun CameraPane(state: VlmUiState, controller: VlmCameraController, permi
                                     } while (event.changes.any { it.pressed })
                                 }
                             }, contentScale = ContentScale.Fit)
-                    } else FrozenSceneImage(scene, state.scene == null, Modifier.fillMaxSize())
+                    } else FrozenSceneImage(scene, Modifier.fillMaxSize())
                 }
                 if (state.stage in listOf(VlmStage.FREEZING, VlmStage.GENERATING, VlmStage.MODIFYING)) {
                     VlmLoadingOverlay(state.stage, state.directorProgress, { onEvent(VlmIntent.Cancel) }, Modifier.align(Alignment.Center))
@@ -308,15 +315,11 @@ private fun CameraPane(state: VlmUiState, controller: VlmCameraController, permi
     }
 }
 
-/** 尚未选景时也显示已保存的扫描画面，并明确其预览身份。 */
+/** 尚未选景时保留已保存的扫描画面；选景状态由流程状态管理。 */
 @Composable
-internal fun FrozenSceneImage(scene: SceneSnapshot, provisional: Boolean, modifier: Modifier = Modifier) {
-    Box(modifier) {
-        AsyncImage(File(scene.imagePath), stringResource(R.string.vlm_scan_frame),
-            Modifier.fillMaxSize().testTag("vlm_frozen_scene"), contentScale = ContentScale.Fit)
-        if (provisional) Text(stringResource(R.string.vlm_scan_preview_unselected), color = Color.White,
-            modifier = Modifier.align(Alignment.BottomCenter).background(Color.Black.copy(alpha = .65f)).padding(8.dp).testTag("vlm_scan_preview_unselected"))
-    }
+internal fun FrozenSceneImage(scene: SceneSnapshot, modifier: Modifier = Modifier) {
+    AsyncImage(File(scene.imagePath), stringResource(R.string.vlm_scan_frame),
+        modifier.fillMaxSize().testTag("vlm_frozen_scene"), contentScale = ContentScale.Fit)
 }
 
 /** 展示冻结或导演执行时的当前步骤；不保留已经完成的历史步骤。 */
@@ -421,10 +424,10 @@ private fun CameraSurface(controller: VlmCameraController, state: VlmUiState, on
  */
 /** 展示当前选中方案的 VLM 依据与实际采用的人像构图。 */
 @Composable
-internal fun CompositionDescriptions(result: CompositionResult, selectedId: String?) {
+internal fun CompositionDescriptions(result: CompositionResult, selectedId: String?, sceneObservation: String? = null) {
     val index = result.plans.indexOfFirst { it.id == selectedId }
     val plan = result.plans.getOrNull(index) ?: return
-    Text(stringResource(R.string.vlm_composition_recommendations), style = MaterialTheme.typography.titleSmall)
+    Text(stringResource(R.string.vlm_composition_recommendations), style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold, color = Color(0xFF111111))
     val fallback = plan.title.isBlank() || plan.localCombination != null || plan.uncertainties.contains(CompositionIntentMapper.SCENE_FALLBACK_MARKER)
     val title = if (fallback) stringResource(R.string.vlm_composition_plan_number, index + 1) else plan.title
     val actual = stringResource(
@@ -435,25 +438,47 @@ internal fun CompositionDescriptions(result: CompositionResult, selectedId: Stri
         Modifier.fillMaxWidth().border(1.dp, MaterialTheme.colorScheme.outlineVariant, MaterialTheme.shapes.small).padding(8.dp),
         verticalArrangement = Arrangement.spacedBy(2.dp)
     ) {
-        if (fallback) Text(title, style = MaterialTheme.typography.labelLarge)
-        else Text(stringResource(R.string.vlm_composition_plan_title, index + 1, title), style = MaterialTheme.typography.labelLarge)
-        Text(stringResource(R.string.vlm_actual_composition, actual), style = MaterialTheme.typography.labelSmall)
+        Text(if (fallback) title else stringResource(R.string.vlm_composition_plan_title, index + 1, title),
+            style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold, color = Color(0xFF111111))
+        val observation = plan.sceneDescription?.takeIf { it.isNotBlank() }
+            ?: sceneObservation?.takeIf { it.isNotBlank() } ?: plan.reason.takeIf { it.isNotBlank() }
+        if (plan.reason.isNotBlank() && plan.reason != observation)
+            CompositionDescriptionText(listOf(stringResource(R.string.vlm_description_reason) to plan.reason))
+        CompositionDescriptionText(listOf(stringResource(R.string.vlm_description_actual) to actual),
+            style = MaterialTheme.typography.labelSmall)
         val guidance = CompositionGuidance.from(plan)
         val directive = guidance.directive
-        Text(
-            stringResource(
-                R.string.vlm_composition_pose_detail,
-                bodyLabel(directive.body), resolvedArmLabel(guidance), headLabel(directive.head),
-                stanceLabel(directive.stance), expressionLabel(guidance.expression), distanceLabel(guidance.distance)
-            ),
-            style = MaterialTheme.typography.labelSmall
-        )
-        Text(stringResource(R.string.vlm_composition_guidance, compositionGuidanceText(plan)), style = MaterialTheme.typography.bodySmall, modifier = Modifier.testTag("vlm_resolved_guidance"))
-        Text(stringResource(R.string.vlm_guidance_size, guidance.heightPercent, guidance.horizontalPercent), style = MaterialTheme.typography.labelSmall)
-        // 原文只作为可追溯分析来源，不能与实际动作指令混在同一区域。
-        if (fallback && plan.guidance.isNotBlank()) Text(stringResource(R.string.vlm_model_scene_observation, plan.guidance), style = MaterialTheme.typography.bodySmall)
-        else if (!fallback && plan.reason.isNotBlank()) Text(stringResource(R.string.vlm_model_scene_observation, plan.reason), style = MaterialTheme.typography.bodySmall)
+        CompositionDescriptionText(listOf(
+            stringResource(R.string.vlm_description_body) to bodyLabel(directive.body),
+            stringResource(R.string.vlm_description_arms) to resolvedArmLabel(guidance),
+            stringResource(R.string.vlm_description_head) to headLabel(directive.head),
+            stringResource(R.string.vlm_description_stance) to stanceLabel(directive.stance),
+            stringResource(R.string.vlm_description_expression) to expressionLabel(guidance.expression),
+            stringResource(R.string.vlm_description_distance) to distanceLabel(guidance.distance)
+        ), style = MaterialTheme.typography.labelSmall, modifier = Modifier.testTag("vlm_pose_description"))
+        CompositionDescriptionText(listOf(stringResource(R.string.vlm_description_guidance) to compositionGuidanceText(plan)),
+            modifier = Modifier.testTag("vlm_resolved_guidance"))
+        Text(stringResource(R.string.vlm_guidance_size, guidance.heightPercent, guidance.horizontalPercent),
+            style = MaterialTheme.typography.labelSmall, color = Color(0xFF444444))
+        observation?.let {
+            CompositionDescriptionText(listOf(stringResource(R.string.vlm_description_environment) to
+                SceneDescriptionFormatting.format(it)), modifier = Modifier.testTag("vlm_scene_description"))
+        }
     }
+}
+
+/** 标题用深黑粗体，内容用较浅黑色；各项统一以分号分隔。 */
+@Composable
+private fun CompositionDescriptionText(fields: List<Pair<String, String>>,
+    modifier: Modifier = Modifier, style: TextStyle = MaterialTheme.typography.bodySmall) {
+    val separator = stringResource(R.string.vlm_description_separator)
+    Text(buildAnnotatedString {
+        fields.forEachIndexed { index, (label, content) ->
+            if (index > 0) append(separator)
+            withStyle(SpanStyle(color = Color(0xFF111111), fontWeight = FontWeight.Bold)) { append(label) }
+            withStyle(SpanStyle(color = Color(0xFF444444), fontWeight = FontWeight.Normal)) { append(content) }
+        }
+    }, modifier = modifier, style = style)
 }
 
 /** 文字由最终布局和渲染动作派生，拖动、缩放或去重后自动跟随。 */
@@ -467,9 +492,10 @@ internal fun compositionGuidanceText(plan: CompositionPlan): String {
     val pose = stringResource(R.string.vlm_guidance_pose, facingLabel(plan.avatar.yaw), bodyLabel(guide.directive.body), resolvedArmLabel(guide), headLabel(guide.directive.head), stanceLabel(guide.directive.stance), expressionLabel(guide.expression))
     val steps = plan.resolvedSpec?.action?.stepResources.orEmpty().map { stringResource(it) }
     // 完整姿态含动作自身的朝向；avatar.yaw 是追加布局旋转，不能冒充最终身体朝向。
-    return if (steps.isNotEmpty()) (listOf(camera, placement) + steps +
-        stringResource(R.string.vlm_photo_pose_expression, expressionLabel(guide.expression))).joinToString("\n")
-    else listOf(camera, placement, pose).joinToString("\n")
+    val parts = if (steps.isNotEmpty()) listOf(camera, placement) + steps +
+        stringResource(R.string.vlm_photo_pose_expression, expressionLabel(guide.expression))
+    else listOf(camera, placement, pose)
+    return parts.joinToString("\n") { it.replace(Regex("""[;；]\s*|\s+[·•]\s+"""), "\n") }
 }
 
 @Composable

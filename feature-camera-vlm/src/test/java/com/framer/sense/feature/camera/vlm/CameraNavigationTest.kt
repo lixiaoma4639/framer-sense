@@ -22,8 +22,13 @@ class CameraNavigationTest {
         val busy = VlmUiState(stage = VlmStage.GENERATING)
         assertEquals(CameraBackAction.NONE, cameraBackAction(busy.copy(settingsVisible = true), true))
         assertEquals(CameraBackAction.NONE, cameraBackAction(busy.copy(photoSettingsVisible = true), true))
-        assertEquals(CameraBackAction.NONE, cameraBackAction(busy.copy(compositionDetailsVisible = true), true))
+        assertEquals(CameraBackAction.CANCEL, cameraBackAction(busy.copy(compositionDetailsVisible = true), true))
         assertEquals(CameraBackAction.NONE, cameraBackAction(busy.copy(photoSample = PhotoSampleState("sample")), true))
         assertEquals(CameraBackAction.BLOCKED, cameraBackAction(VlmUiState(saving = true), true))
+        val result = com.framer.sense.feature.camera.vlm.model.CompositionResult(emptyList(), emptyList(), emptyList(), emptyList())
+        assertEquals(CameraBackAction.COLLAPSE, cameraBackAction(VlmUiState(stage = VlmStage.READY,
+            result = result, compositionDetailsVisible = true), true))
+        assertEquals(CameraBackAction.NONE, cameraBackAction(VlmUiState(stage = VlmStage.SCAN_REVIEW,
+            compositionDetailsVisible = true), true))
     }
 }

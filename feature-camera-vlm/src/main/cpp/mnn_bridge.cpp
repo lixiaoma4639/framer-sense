@@ -18,6 +18,7 @@
 using MNN::Transformer::Llm;
 // 离线协议只需要一句场景观察；较小预算避免低端 CPU 在模型忽略停止指令时长时间续写。
 static constexpr int kMaxOutputTokens = 96;
+static constexpr int kMaxSceneDescriptionTokens = 192;
 // 不覆盖模型包的 sampler 配置。Qwen3-VL-2B 的导出配置使用 mixed sampler；
 // 强制 greedy 会在部分 ARM CPU 上重复同一 token，直到触发输出上限。
 static constexpr char kCpuConfig[] = R"({"backend_type":"cpu","thread_num":4,"max_all_tokens":16384,"max_new_tokens":96,"reuse_kv":false,"use_template":true,"timeout_ms":120000})";
@@ -184,7 +185,7 @@ Java_com_framer_sense_feature_camera_vlm_data_MnnNative_load(JNIEnv* env, jobjec
  * @param progress 每次实际输出 token 时通知 Kotlin，加载和首 token 不设超时。
  * @return UTF-8 输出；取消返回空输出并由 Kotlin 丢弃。
  */
-static jbyteArray inferImages(JNIEnv* env, jlong handle, const std::vector<std::string>& paths, jbyteArray promptBytes, jobject cancelled, jobject progress) {
+static jbyteArray inferImages(JNIEnv* env, jlong handle, const std::vector<std::string>& paths, jbyteArray promptBytes, jobject cancelled, jobject progress, int maxOutputTokens = kMaxOutputTokens) {
     std::unique_ptr<NativeCancelScope> cancellation;
     try {
         auto* llm = reinterpret_cast<Llm*>(handle);
@@ -202,14 +203,14 @@ static jbyteArray inferImages(JNIEnv* env, jlong handle, const std::vector<std::
         llm->reset();
         // MNN Omni::tokenizer_encode 实际解析 img 标签并运行视觉编码器。
         const std::string visualPrompt = localVisualPrompt(paths, prompt);
-        __android_log_print(ANDROID_LOG_INFO, "VlmOffline", "MNN 开始视觉预填充 images=%zu promptBytes=%zu", paths.size(), visualPrompt.size());
+        __android_log_print(ANDROID_LOG_INFO, "VlmOffline", "MNN 开始视觉预填充 images=%zu promptBytes=%zu maxOutputTokens=%d", paths.size(), visualPrompt.size(), maxOutputTokens);
         const auto prefillStarted = std::chrono::steady_clock::now();
         // response(..., 1) 同时完成预填充、采样并输出第一个真实 token。不能用 0：
         // 普通 Llm 的预填充不会设置 current_token，手动解码 -1 会使后续解码退化为重复符号。
         if (!cancellation->cancelled()) llm->response(visualPrompt, &output, "", 1);
         if (cancellation->cancelled()) return cancellation->cancelledResult();
         __android_log_print(ANDROID_LOG_INFO, "VlmOffline", "MNN 视觉预填充结束 elapsedMs=%lld", static_cast<long long>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - prefillStarted).count()));
-        for (int i = 1; i < kMaxOutputTokens && !llm->stoped() && !buffer.completeJson(); ++i) {
+        for (int i = 1; i < maxOutputTokens && !llm->stoped() && !buffer.completeJson(); ++i) {
             if (cancellation->cancelled()) break;
             llm->generate(1);
         }
@@ -321,6 +322,13 @@ static jbyteArray chooseView(JNIEnv* env, jlong handle, const std::vector<std::s
 extern "C" JNIEXPORT jbyteArray JNICALL
 Java_com_framer_sense_feature_camera_vlm_data_MnnNative_infer(JNIEnv* env, jobject, jlong handle, jstring path, jbyteArray prompt, jobject cancelled, jobject progress) {
     try { return inferImages(env, handle, {pathString(env, path)}, prompt, cancelled, progress); }
+    catch (const std::exception& error) { fail(env, error.what()); return nullptr; }
+}
+
+/** 单图环境描述，单独扩大输出长度；其他协议继续使用原有输出上限。 */
+extern "C" JNIEXPORT jbyteArray JNICALL
+Java_com_framer_sense_feature_camera_vlm_data_MnnNative_describeScene(JNIEnv* env, jobject, jlong handle, jstring path, jbyteArray prompt, jobject cancelled, jobject progress) {
+    try { return inferImages(env, handle, {pathString(env, path)}, prompt, cancelled, progress, kMaxSceneDescriptionTokens); }
     catch (const std::exception& error) { fail(env, error.what()); return nullptr; }
 }
 

@@ -54,7 +54,10 @@ class PreviewStore(private val renderer: AvatarRenderer) : PreviewInspector {
     suspend fun preview(scene: SceneSnapshot, plan: CompositionPlan): PlanPreview = mutex.withLock {
         val resolved = renderer.resolve(plan)
         val key = key(scene.id, resolved)
-        cache[key]?.let { return@withLock it }
+        cache[key]?.let {
+            // 描述不影响渲染缓存，但必须跟随本次方案，不能被旧缓存方案覆盖。
+            return@withLock it.copy(appliedPlan = it.appliedPlan.copy(sceneDescription = resolved.sceneDescription))
+        }
         val background = withContext(Dispatchers.IO) {
             val options = BitmapFactory.Options().apply { inSampleSize = 1 }
             val info = BitmapFactory.Options().apply { inJustDecodeBounds = true }

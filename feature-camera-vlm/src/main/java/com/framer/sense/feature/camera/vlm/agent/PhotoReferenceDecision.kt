@@ -54,7 +54,11 @@ object PhotoReferenceDecisionPolicy {
             shot 仅 ENVIRONMENT/FULL/HALF/CLOSE_UP，zone 仅 LEFT/CENTER/RIGHT。
             actionId 只能从以上目录选择。expression 仅 NEUTRAL/SMILE/HAPPY，强度0到1。
             yaw 是在动作基础上额外旋转，范围-35到35度，不是关节角度。
-            reason/title 使用简体中文，理由引用可见背景。backgroundKeepRegions 为归一化矩形 left/top/right/bottom。
+            reason/title 使用简体中文。reason 根据当前照片给出环境与摄影依据，自行决定内容长度、段落和表达，不限制条数、字数或每条换行，不套固定栏目或通用话术。
+            reason 以人像摄影分析为重点：依据可见光线明暗解释曝光或背景干扰，依据色彩冷暖、饱和度及色彩对比解释人物分离和协调，依据空间层次、留白及引导线解释构图选择。物体描述只作为分析依据，不写成物体清单或风景介绍。
+            文案使用正常中文标点和完整句子，分句使用逗号、冒号或分号，句末必须有句号；禁止用空格代替标点或串联关键词，输出前自行检查标点。
+            不推测具体地点、天气、精确色温、曝光参数或未入镜人物的脸部光照。字符串内换行必须遵循 JSON 转义，不插入空白行或重复总结。
+            backgroundKeepRegions 为归一化矩形 left/top/right/bottom。
             相机倍率能力=${VlmJson.encodeToString(input.camera)}；空间模式=${input.arMode}。空间模式固定后置原始倍率，仅允许画面裁切，不切镜头，不指定精确距离或世界坐标；禁止宣称已确认真实地面或真人姿势。
             修改仅输出 id=${input.selectedId ?: "p1/p2/p3"}，不修改其他已有方案。
         """.trimIndent()

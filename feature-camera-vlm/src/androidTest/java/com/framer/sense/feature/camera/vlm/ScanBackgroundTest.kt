@@ -33,16 +33,16 @@ class ScanBackgroundTest {
         }
         return bitmap
     }
-    @Test fun unselectedScanImageIsShownWithProvisionalLabel() {
+    @Test fun unselectedScanImageIsShownWithoutProvisionalLabel() {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         val file = File(context.cacheDir, "scan-preview-${UUID.randomUUID()}.jpg")
         val bitmap = fixture(12)
         try {
             file.outputStream().use { assertTrue(bitmap.compress(Bitmap.CompressFormat.JPEG, 85, it)) }
             val scene = SceneSnapshot("frame", 640, 480, 1f, file.path, file.path)
-            compose.setContent { MaterialTheme { FrozenSceneImage(scene, true) } }
+            compose.setContent { MaterialTheme { FrozenSceneImage(scene) } }
             compose.onNodeWithTag("vlm_frozen_scene").assertExists()
-            compose.onNodeWithTag("vlm_scan_preview_unselected").assertTextEquals(context.getString(R.string.vlm_scan_preview_unselected))
+            compose.onNodeWithTag("vlm_scan_preview_unselected").assertDoesNotExist()
         } finally { bitmap.recycle(); file.delete() }
     }
     @Test fun identicalBackgroundMatchesButWrongSceneAndDisplacementDoNotAlign() {
