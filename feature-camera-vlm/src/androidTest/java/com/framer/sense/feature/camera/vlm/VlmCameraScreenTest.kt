@@ -17,6 +17,13 @@ import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsSelected
+import androidx.compose.ui.test.assertIsNotSelected
+import androidx.compose.ui.test.performSemanticsAction
+import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.text.TextLayoutResult
+import androidx.compose.ui.unit.sp
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.performScrollToNode
 import com.framer.sense.feature.camera.vlm.agent.DirectorProgress
@@ -124,12 +131,47 @@ class VlmCameraScreenTest {
             scene = SceneSnapshot("scene",640,480,1f,"/scene","/input")))
         val events = mutableListOf<VlmIntent>()
         composeRule.setContent { MaterialTheme { Controls(state.value,{ events += it },{},Modifier.fillMaxWidth()) } }
+        val tags = listOf("vlm_generate", "vlm_scan_restart_active", "vlm_cancel")
+        val bounds = tags.map { composeRule.onNodeWithTag(it).getUnclippedBoundsInRoot() }
+        bounds.zipWithNext().forEach { (left, right) ->
+            assertEquals(left.top, right.top)
+            org.junit.Assert.assertTrue(left.right <= right.left)
+        }
+        composeRule.onNodeWithTag("vlm_generate").assertTextContains("重新生成")
         composeRule.onNodeWithTag("vlm_generate").assertIsEnabled().performClick()
         composeRule.onNodeWithTag("vlm_scan_restart_active").assertIsEnabled().performClick()
-        assertEquals(listOf(VlmIntent.Generate,VlmIntent.StartScan), events)
+        composeRule.onNodeWithTag("vlm_cancel").performScrollTo().performClick()
+        assertEquals(listOf(VlmIntent.Generate,VlmIntent.StartScan,VlmIntent.Cancel), events)
         composeRule.runOnIdle { state.value = state.value.copy(modelBusy = true) }
         composeRule.onNodeWithTag("vlm_generate").assertIsNotEnabled()
         composeRule.onNodeWithTag("vlm_scan_restart_active").assertIsNotEnabled()
+    }
+
+    @Test fun zoomDefaultsToOneAndHighlightsActualSelectedRatioWithLargerText() {
+        val state = mutableStateOf(VlmUiState(cameraReady = true,
+            camera = CameraCapabilities(.6f, 4f, listOf(.6f, 1f, 2f))))
+        val events = mutableListOf<VlmIntent>()
+        composeRule.setContent { MaterialTheme {
+            CameraBottomBar(state.value, events::add, {}, true)
+        } }
+        fun assertZoomStyle(ratio: Float, selected: Boolean) {
+            val node = composeRule.onNodeWithTag("vlm_zoom_$ratio")
+            if (selected) node.assertIsSelected() else node.assertIsNotSelected()
+            val layouts = mutableListOf<TextLayoutResult>()
+            node.performSemanticsAction(SemanticsActions.GetTextLayoutResult) { it(layouts) }
+            assertEquals(if (selected) 16.sp else 14.sp, layouts.single().layoutInput.style.fontSize)
+            assertEquals(if (selected) Color(0xFFFFD66A) else Color.White, layouts.single().layoutInput.style.color)
+        }
+        assertEquals(1f, state.value.zoom, 0f)
+        assertEquals(1f, state.value.actualZoom, 0f)
+        assertZoomStyle(1f, true)
+        assertZoomStyle(.6f, false)
+        assertZoomStyle(2f, false)
+        composeRule.onNodeWithTag("vlm_zoom_2.0").performClick()
+        assertEquals(listOf(VlmIntent.ZoomChanged(2f)), events)
+        composeRule.runOnIdle { state.value = state.value.copy(zoom = 2f, actualZoom = 2f) }
+        assertZoomStyle(1f, false)
+        assertZoomStyle(2f, true)
     }
 
     @Test fun compositionSelectionCollapsesTogetherAndDetailsFollowSelectedPlan() {
@@ -166,6 +208,47 @@ class VlmCameraScreenTest {
         composeRule.onNodeWithTag("vlm_details").performClick()
         composeRule.onNodeWithTag("vlm_composition_p3").assertIsDisplayed()
         composeRule.onNodeWithText("测试标题3", substring = true).assertExists()
+    }
+
+    @Test fun generatedAndAppliedCompositionActionsKeepOrderAndShareCancelEvent() {
+        val plans = (1..3).map { CompositionPlan("p$it", "测试标题$it", ShotType.FULL, CropRect(), 1f,
+            AvatarPlacement(), "指导", "背景") }
+        val state = mutableStateOf(VlmUiState(stage = VlmStage.READY, selectedId = "p1", cameraReady = true,
+            scene = SceneSnapshot("scene", 640, 480, 1f, "/scene", "/input"),
+            result = CompositionResult(plans, emptyList(), emptyList(), emptyList())))
+        val events = mutableListOf<VlmIntent>()
+        composeRule.setContent { MaterialTheme {
+            Controls(state.value, events::add, {}, Modifier.fillMaxWidth())
+        } }
+
+        fun assertActionOrder(tags: List<String>) {
+            val bounds = tags.map { composeRule.onNodeWithTag(it).getUnclippedBoundsInRoot() }
+            bounds.zipWithNext().forEach { (left, right) ->
+                assertEquals(left.top, right.top)
+                org.junit.Assert.assertTrue(left.right <= right.left)
+            }
+        }
+
+        val generatedTags = listOf("vlm_scan_restart_active", "vlm_generate", "vlm_details", "vlm_resume")
+        assertActionOrder(generatedTags)
+        composeRule.onNodeWithTag("vlm_generate").assertTextContains("重新生成")
+        composeRule.onNodeWithTag("vlm_resume").assertTextContains("取消")
+        generatedTags.forEach { composeRule.onNodeWithTag(it).performScrollTo().performClick() }
+        assertEquals(listOf(VlmIntent.StartScan, VlmIntent.Generate,
+            VlmIntent.CompositionDetailsVisible(true), VlmIntent.ResumeCamera), events)
+
+        composeRule.runOnIdle {
+            events.clear()
+            state.value = state.value.copy(stage = VlmStage.LIVE, referencePlan = plans.first())
+        }
+        assertActionOrder(listOf("vlm_scan_start", "vlm_start", "vlm_details", "vlm_resume"))
+        composeRule.onNodeWithTag("vlm_scan_start").assertTextContains("重新扫描")
+        composeRule.onNodeWithTag("vlm_resume").assertTextContains("取消").performScrollTo().performClick()
+        assertEquals(listOf(VlmIntent.ResumeCamera), events)
+
+        composeRule.runOnIdle { state.value = VlmUiState(cameraReady = true) }
+        composeRule.onNodeWithTag("vlm_resume").assertDoesNotExist()
+        composeRule.onNodeWithTag("vlm_scan_start").assertTextContains("开始扫描")
     }
 
     @Test fun sampleDialogUsesDedicatedEventsAndDisablesExpressionWhileRendering() {

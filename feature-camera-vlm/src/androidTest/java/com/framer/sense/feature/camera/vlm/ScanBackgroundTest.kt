@@ -73,10 +73,15 @@ class ScanBackgroundTest {
         } }
         compose.onNodeWithTag("vlm_scan_start").assertDoesNotExist()
         compose.onNodeWithTag("vlm_start").assertDoesNotExist()
-        compose.onNodeWithTag("vlm_scan_prefer").performClick()
-        compose.onNodeWithTag("vlm_scan_stop").performClick()
-        compose.onNodeWithTag("vlm_scan_cancel").performClick()
-        assertEquals(listOf(VlmIntent.PreferScanView, VlmIntent.StopScan, VlmIntent.CancelScan), events)
+        val tags = listOf("vlm_scan_restart_active", "vlm_scan_prefer", "vlm_scan_stop", "vlm_scan_cancel")
+        val bounds = tags.map { compose.onNodeWithTag(it).getUnclippedBoundsInRoot() }
+        bounds.zipWithNext().forEach { (left, right) ->
+            assertEquals(left.top, right.top)
+            assertTrue(left.right <= right.left)
+        }
+        compose.onNodeWithTag("vlm_scan_stop").assertTextContains("完成扫描")
+        tags.forEach { compose.onNodeWithTag(it).performScrollTo().performClick() }
+        assertEquals(listOf(VlmIntent.StartScan, VlmIntent.PreferScanView, VlmIntent.StopScan, VlmIntent.CancelScan), events)
     }
     @Test fun resourcePauseDisablesPreferenceButStillAllowsExplicitEnd() {
         compose.setContent { MaterialTheme {

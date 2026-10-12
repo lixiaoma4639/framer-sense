@@ -307,7 +307,8 @@ class VlmCameraViewModel @Inject constructor(
             VlmIntent.Generate -> compose(false)
             VlmIntent.Revise -> compose(true)
             VlmIntent.Cancel -> { if (_state.value.stage == VlmStage.SCANNING || _state.value.stage == VlmStage.SCAN_PROCESSING) { cancelScan(); return }; if (busy() && _state.value.modelBusy) return; cancelWork(); _state.update { it.copy(stage = if (it.scanSnapshot != null && it.scene == null) VlmStage.SCAN_REVIEW else if (it.scene == null) VlmStage.LIVE else if (it.result == null) VlmStage.FROZEN else VlmStage.READY, error = null, directorProgress = null) } }
-            VlmIntent.ResumeCamera -> { if (_state.value.scanSnapshot != null) { cancelScan(); return }; cancelWork(); _state.update { it.copy(stage = VlmStage.LIVE, reference = null, referencePlan = null, error = null, cameraReady = if (it.ar.source == com.framer.sense.feature.camera.vlm.ar.ArSource.SHARED_CAMERA) it.cameraReady else false, directorProgress = null) } }
+            // 相机是否就绪由绑定生命周期更新；退出构图不能把仍在运行的相机标记为未就绪。
+            VlmIntent.ResumeCamera -> { if (_state.value.scanSnapshot != null) { cancelScan(); return }; cancelWork(); _state.update { it.copy(stage = VlmStage.LIVE, reference = null, referencePlan = null, error = null, directorProgress = null) } }
             is VlmIntent.Select -> if (!busy() && _state.value.result?.plans?.any { it.id == intent.id } == true) {
                 _state.update { it.copy(selectedId = intent.id, facePreview = null,
                     stage = if (it.stage == VlmStage.LIVE) VlmStage.READY else it.stage,
@@ -536,7 +537,7 @@ class VlmCameraViewModel @Inject constructor(
         _state.update { it.copy(stage = VlmStage.LIVE, scanSession = null, scanSnapshot = null, scene = null,
             scanProgress = ScanProgress(), viewCandidates = emptyList(), selectedFrameId = null, comparedFrames = 0, manualScanSelectionVisible = false,
             result = null, diagnostics = null, previews = emptyMap(), reference = null, referencePlan = null,
-            background = BackgroundGuidance(), facePreview = null, cameraReady = if (it.ar.source == com.framer.sense.feature.camera.vlm.ar.ArSource.SHARED_CAMERA) it.cameraReady else false, error = null, notice = null) }
+            background = BackgroundGuidance(), facePreview = null, error = null, notice = null) }
     }
 
     private fun analyzeScan() {
@@ -853,7 +854,7 @@ class VlmCameraViewModel @Inject constructor(
                 val appliedPlans = result.plans.map { if (it.id == applied.id) applied else it }
                 check(PlanValidator().validate(appliedPlans, inputFor(s, result.plans, s.selectedId)).isEmpty()) { models.message(R.string.vlm_avatar_invalid_resolution) }
                 if (token == requestToken) Log.i("VlmAr", "应用参考 source=${s.ar.source} plan=${applied.id} revision=${applied.revision} frame=${applied.viewBinding?.frameId} requiresBackgroundConfirmation=${applied.viewBinding != null}")
-                if (token == requestToken) _state.update { it.copy(stage = VlmStage.LIVE, result = result.copy(plans = appliedPlans), reference = currentPreview, referencePlan = applied, background = BackgroundGuidance(), zoom = if (s.cameraMode == CameraMode.AR) 1f else applied.zoom, cameraReady = if (s.ar.source == com.framer.sense.feature.camera.vlm.ar.ArSource.SHARED_CAMERA) s.cameraReady else false, notice = if (applied.needsRetake || s.fromImportedImage) models.message(R.string.vlm_reference_retake) else models.message(R.string.vlm_reference_applied)) }
+                if (token == requestToken) _state.update { it.copy(stage = VlmStage.LIVE, result = result.copy(plans = appliedPlans), reference = currentPreview, referencePlan = applied, background = BackgroundGuidance(), zoom = if (s.cameraMode == CameraMode.AR) 1f else applied.zoom, notice = if (applied.needsRetake || s.fromImportedImage) models.message(R.string.vlm_reference_retake) else models.message(R.string.vlm_reference_applied)) }
                 if (token == requestToken) requestFace()
             } catch (cancel: CancellationException) { throw cancel }
             catch (e: Exception) { if (token == requestToken) _state.update { it.copy(stage = VlmStage.READY, error = if ((e as? ModelFailure)?.code == "LOCAL_PHOTO_INVALID_OUTPUT") models.message(R.string.vlm_photo_model_invalid) else e.message) } }

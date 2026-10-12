@@ -32,8 +32,10 @@ import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.window.Dialog
 import com.framer.sense.feature.camera.vlm.BuildConfig
 import com.framer.sense.feature.camera.vlm.R
@@ -102,9 +104,12 @@ internal fun CameraBottomBar(state: VlmUiState, onEvent: (VlmIntent) -> Unit, ca
         if (state.stage == VlmStage.LIVE || state.stage == VlmStage.SCANNING) {
             Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically) {
                 state.camera.zoomOptions.forEach { ratio ->
+                    val selected = kotlin.math.abs(state.actualZoom - ratio) < .04f
                     TextButton(onClick = { onEvent(VlmIntent.ZoomChanged(ratio)) }, enabled = state.canZoom,
-                        modifier = Modifier.testTag("vlm_zoom_$ratio")) {
-                        Text(stringResource(R.string.vlm_zoom_value, ratio), color = if (kotlin.math.abs(state.actualZoom - ratio) < .04f) Color(0xFFFFD66A) else Color.White)
+                        modifier = Modifier.testTag("vlm_zoom_$ratio").semantics { this.selected = selected }) {
+                        Text(stringResource(R.string.vlm_zoom_value, ratio),
+                            color = if (selected) Color(0xFFFFD66A) else Color.White,
+                            fontSize = if (selected) 16.sp else 14.sp)
                     }
                 }
             }
@@ -184,13 +189,17 @@ internal fun Controls(state: VlmUiState, onEvent: (VlmIntent) -> Unit, importIma
             horizontalArrangement = Arrangement.Center) {
             when (state.stage) {
                 VlmStage.LIVE -> {
-                    CameraAction(R.string.vlm_scan_start, "vlm_scan_start", state.cameraReady && !busy) { onEvent(VlmIntent.StartScan) }
+                    CameraAction(if (state.referencePlan != null) R.string.vlm_scan_restart_active else R.string.vlm_scan_start,
+                        "vlm_scan_start", state.cameraReady && !busy) { onEvent(VlmIntent.StartScan) }
                     CameraAction(R.string.vlm_scan_single, "vlm_start", state.cameraReady && !busy) { onEvent(VlmIntent.StartComposition) }
                     if (state.result != null) CompositionSelectionToggle(state, onEvent)
+                    if (state.referencePlan != null) CameraAction(R.string.vlm_back_camera, "vlm_resume", !busy) { onEvent(VlmIntent.ResumeCamera) }
                 }
                 VlmStage.SCANNING -> {
-                    CameraAction(R.string.vlm_scan_stop, "vlm_scan_stop", state.scanSession != null) { onEvent(VlmIntent.StopScan) }
+                    CameraAction(R.string.vlm_scan_restart_active, "vlm_scan_restart_active", state.canRestartScan) { onEvent(VlmIntent.StartScan) }
                     CameraAction(R.string.vlm_scan_prefer, "vlm_scan_prefer", !state.scanProgress.paused && state.scanProgress.preferred < ScanLimits.MAX_PREFERRED) { onEvent(VlmIntent.PreferScanView) }
+                    CameraAction(R.string.vlm_scan_stop, "vlm_scan_stop", state.scanSession != null) { onEvent(VlmIntent.StopScan) }
+                    CameraAction(R.string.vlm_scan_cancel, "vlm_scan_cancel", true) { onEvent(VlmIntent.CancelScan) }
                 }
                 VlmStage.SCAN_REVIEW -> {
                     CameraAction(R.string.vlm_scan_analyze, "vlm_scan_analyze", state.scanSnapshot?.frames?.isNotEmpty() == true && !busy) { onEvent(VlmIntent.AnalyzeScan) }
@@ -198,6 +207,7 @@ internal fun Controls(state: VlmUiState, onEvent: (VlmIntent) -> Unit, importIma
                 }
                 VlmStage.SCAN_PROCESSING, VlmStage.VIEW_SELECTING -> Unit
                 else -> {
+                    if (!interruptible) CameraAction(R.string.vlm_scan_restart_active, "vlm_scan_restart_active", state.canRestartScan) { onEvent(VlmIntent.StartScan) }
                     CameraAction(if (state.result == null && state.stage != VlmStage.GENERATING) R.string.vlm_flow_generate else R.string.vlm_flow_regenerate,
                         "vlm_generate", state.canGenerate) { onEvent(VlmIntent.Generate) }
                     if (state.result != null && !busy) {
@@ -206,14 +216,12 @@ internal fun Controls(state: VlmUiState, onEvent: (VlmIntent) -> Unit, importIma
                     if (!busy) CameraAction(R.string.vlm_back_camera, "vlm_resume", true) { onEvent(VlmIntent.ResumeCamera) }
                 }
             }
-            if (state.stage != VlmStage.LIVE && !interruptible)
+            if (state.stage == VlmStage.SCAN_REVIEW)
                 CameraAction(R.string.vlm_scan_restart_active, "vlm_scan_restart_active", state.canRestartScan) { onEvent(VlmIntent.StartScan) }
-        }
-        if (interruptible) Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
-            CameraAction(R.string.vlm_action_cancel, if (state.stage == VlmStage.SCANNING) "vlm_scan_cancel" else "vlm_cancel", true) {
-                onEvent(if (state.stage == VlmStage.SCANNING) VlmIntent.CancelScan else VlmIntent.Cancel)
+            if (interruptible && state.stage != VlmStage.SCANNING) {
+                CameraAction(R.string.vlm_scan_restart_active, "vlm_scan_restart_active", state.canRestartScan) { onEvent(VlmIntent.StartScan) }
+                CameraAction(R.string.vlm_action_cancel, "vlm_cancel", true) { onEvent(VlmIntent.Cancel) }
             }
-            CameraAction(R.string.vlm_scan_restart_active, "vlm_scan_restart_active", state.canRestartScan) { onEvent(VlmIntent.StartScan) }
         }
     }
 }
@@ -308,11 +316,11 @@ private fun CompositionDetailsContent(state: VlmUiState, onEvent: (VlmIntent) ->
             state.viewCandidates.firstOrNull { it.frameId == binding.frameId }
         }
         val sceneObservation = background?.let { listOf(it.subject, it.reason).filter(String::isNotBlank).joinToString("\n") }
+        if (plan != null) PhotoActionControls(state, plan, state.operationBusy, onEvent)
         state.result?.let { CompositionDescriptions(it, state.selectedId, sceneObservation) }
         if (plan != null) {
             Button(onClick = { onEvent(VlmIntent.Apply) }, enabled = !state.operationBusy,
                 modifier = Modifier.testTag("vlm_apply")) { Text(stringResource(R.string.vlm_apply_plan)) }
-            PhotoActionControls(state, plan, state.operationBusy, onEvent)
             Text(stringResource(R.string.vlm_avatar_size), style = MaterialTheme.typography.labelLarge)
             var height by remember(plan.id, plan.revision) { mutableFloatStateOf(plan.avatar.height.coerceIn(.08f, 4f)) }
             Slider(height, { height = it }, valueRange = .08f..4f,

@@ -22,6 +22,35 @@ import java.util.UUID
 
 /** 验证相机事件门控，不调用摄像头、网络、GPU 或原生模型。 */
 class VlmSessionTest {
+    @Test fun cancellingSingleCompositionPreservesReadyCameraAndAllowsAnotherFreeze() = runBlocking {
+        withContext(Dispatchers.Main) {
+            val vm = viewModel()
+            val events = mutableListOf<VlmEffect>()
+            val listener = launch(start = CoroutineStart.UNDISPATCHED) { vm.effects.collect { events += it } }
+            try {
+                vm.onIntent(VlmIntent.CameraReady(CameraCapabilities(.6f, 4f)))
+                assertEquals(1f, vm.state.value.zoom, 0f)
+                vm.onIntent(VlmIntent.StartComposition)
+                yield()
+                assertEquals(VlmStage.FREEZING, vm.state.value.stage)
+                vm.onIntent(VlmIntent.ResumeCamera)
+                assertEquals(VlmStage.LIVE, vm.state.value.stage)
+                assertTrue(vm.state.value.cameraReady)
+                assertTrue(vm.state.value.canRestartScan)
+                assertTrue(vm.state.value.canCapture)
+                vm.onIntent(VlmIntent.StartComposition)
+                yield()
+                assertEquals(VlmStage.FREEZING, vm.state.value.stage)
+                assertEquals(2, events.filterIsInstance<VlmEffect.Freeze>().size)
+                vm.onIntent(VlmIntent.Cancel)
+                vm.onIntent(VlmIntent.CameraBindingStopped(vm.state.value.cameraEpoch))
+                vm.onIntent(VlmIntent.ResumeCamera)
+                assertFalse(vm.state.value.cameraReady)
+                assertFalse(vm.state.value.canRestartScan)
+            } finally { listener.cancel(); vm.onLeave() }
+        }
+    }
+
     @Test fun framingModeAndLateCallbacksAreIsolatedFromCurrentCamera() = runBlocking {
         withContext(Dispatchers.Main) {
             val vm = viewModel()
@@ -497,6 +526,15 @@ class VlmSessionTest {
                     session.id, 1, android.os.SystemClock.elapsedRealtimeNanos(), config, null, 64, 48, ByteArray(64 * 48 * 3 / 2))))
                 yield(); assertEquals(VlmStage.LIVE, vm.state.value.stage)
                 assertNull(vm.state.value.scanSnapshot); assertTrue(events.isEmpty())
+                assertTrue(vm.state.value.cameraReady)
+                assertTrue(vm.state.value.canRestartScan)
+                vm.onIntent(VlmIntent.StartScan)
+                withTimeout(5000) { vm.state.first { it.scanSession != null } }
+                vm.onIntent(VlmIntent.CancelScan)
+                vm.onIntent(VlmIntent.StartComposition)
+                yield()
+                assertEquals(VlmStage.FREEZING, vm.state.value.stage)
+                assertEquals(1, events.filterIsInstance<VlmEffect.Freeze>().size)
             } finally { listener.cancel(); vm.onLeave() }
         }
     }

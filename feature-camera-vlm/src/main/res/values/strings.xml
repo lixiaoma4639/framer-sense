@@ -177,7 +177,7 @@
     <string name="vlm_flow_generate">生成方案</string>
     <string name="vlm_flow_regenerate">重新生成</string>
     <string name="vlm_flow_restart_single">重新取景生成</string>
-    <string name="vlm_scan_stop">结束扫描</string>
+    <string name="vlm_scan_stop">完成扫描</string>
     <string name="vlm_scan_single">单张构图</string>
     <string name="vlm_scan_cancel">取消</string>
     <string name="vlm_scan_prefer">喜欢这个画面</string>
@@ -186,7 +186,7 @@
     <string name="vlm_scan_turn">累计转动约 %1$.0f°（不是视场覆盖率）</string>
     <string name="vlm_scan_preferred">已标记喜欢</string>
     <string name="vlm_scan_prefer_unavailable">暂时无法标记，请缓慢扫描；最多保留三个偏爱画面。</string>
-    <string name="vlm_scan_limit">已达到扫描资源上限，请点击结束扫描。</string>
+    <string name="vlm_scan_limit">已达到扫描资源上限，请点击完成扫描。</string>
     <string name="vlm_scan_empty">没有记录到可用画面，请重新扫描。</string>
     <string name="vlm_scan_failed">扫描处理失败，请重新扫描或使用单张构图。</string>
     <string name="vlm_scan_interrupted">扫描已中断，保留了有效画面。请继续分析或返回重新扫描。</string>
@@ -298,7 +298,7 @@
     <string name="vlm_zoom_value">%1$.1f×</string>
     <string name="vlm_take_photo">拍摄照片</string>
     <string name="vlm_apply_plan">应用构图</string>
-    <string name="vlm_back_camera">返回相机</string>
+    <string name="vlm_back_camera">取消</string>
     <string name="vlm_composition_details">构图选择</string>
     <string name="vlm_composition_expand">展开构图选择</string>
     <string name="vlm_composition_collapse">收起构图选择</string>
