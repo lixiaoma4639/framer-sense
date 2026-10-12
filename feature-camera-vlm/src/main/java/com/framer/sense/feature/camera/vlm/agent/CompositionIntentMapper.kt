@@ -214,7 +214,8 @@ object CompositionIntentMapper {
 
     internal fun toPlan(intent: CompositionIntent, input: DirectorInput): CompositionPlan {
         val directive = intent.poseDirective ?: AvatarPoseDirective.fromLegacy(intent.pose)
-        val (height, footY, span) = placement(intent.shot, intent.subjectDistance)
+        // 此处只保存摄影意图；预览层根据空间证据或估算生成非零人像投影。
+        val height = 0f; val footY = .5f; val span = 1f
         val preferredCenter = when (intent.zone) {
             CompositionZone.LEFT -> .32f
             CompositionZone.CENTER -> .5f
@@ -252,31 +253,6 @@ object CompositionIntentMapper {
             uncertainties = intent.uncertainties,
             viewBinding = input.viewBinding
         )
-    }
-
-    /**
-     * 高度是裁剪后预览画面中的归一化人体高度。先按景别，再按模型的远中近摄影语义
-     * 收敛到保守范围；环境构图绝不使用会遮住场景的大人像。
-     */
-    private fun placement(shot: ShotType, distance: SubjectDistance): Triple<Float, Float, Float> {
-        val visibleHeight = when (shot) {
-            ShotType.ENVIRONMENT -> when (distance) { SubjectDistance.FAR -> .18f; SubjectDistance.MID -> .23f; SubjectDistance.NEAR -> .28f }
-            ShotType.FULL -> when (distance) { SubjectDistance.FAR -> .36f; SubjectDistance.MID -> .46f; SubjectDistance.NEAR -> .56f }
-            ShotType.HALF -> when (distance) { SubjectDistance.FAR -> .50f; SubjectDistance.MID -> .60f; SubjectDistance.NEAR -> .70f }
-            ShotType.CLOSE_UP -> when (distance) { SubjectDistance.FAR -> .64f; SubjectDistance.MID -> .74f; SubjectDistance.NEAR -> .82f }
-        }
-        // 半身/特写的 height 仍表示完整人体高度，脚底在画面之外。
-        // 先确定可见比例，再反推完整高度和脚底，避免安全映射自身违反景别校验。
-        val cutRatio = when (shot) { ShotType.HALF -> .40f; ShotType.CLOSE_UP -> .68f; else -> 0f }
-        val height = visibleHeight / (1f - cutRatio)
-        val footY = if (cutRatio > 0f) 1f + height * cutRatio else if (shot == ShotType.ENVIRONMENT) .92f else .93f
-        val span = when (shot) {
-            ShotType.ENVIRONMENT -> 1f
-            ShotType.FULL -> .76f
-            ShotType.HALF -> .58f
-            ShotType.CLOSE_UP -> .42f
-        }
-        return Triple(height, footY, span)
     }
 
     private fun zoneFor(x: Float) = when {

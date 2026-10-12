@@ -92,9 +92,15 @@ data class ResolvedPhotoSpec(
     val action: ResolvedPhotoAction,
     val guidance: CompositionGuidance,
     val viewBinding: PhotoViewBinding? = null,
-    val backgroundKeepRegions: List<CropRect> = emptyList()
+    val backgroundKeepRegions: List<CropRect> = emptyList(),
+    val subjectHeightMeters: Float = AvatarHeightPolicy.defaultCm(avatar.avatarId) / 100f,
+    val spatialPlacement: ResolvedSpatialPlacement? = null,
+    val scaleEstimate: PhotoScaleEstimate? = null,
+    val photography: PhotographyLayout? = null
 ) {
     fun matches(plan: CompositionPlan): Boolean = planId == plan.id && revision == plan.revision && viewBinding == plan.viewBinding && backgroundKeepRegions == plan.backgroundKeepRegions &&
+        subjectHeightMeters == plan.subjectHeightMeters && spatialPlacement == plan.spatialPlacement && scaleEstimate == plan.scaleEstimate && photography == plan.photography &&
+        (spatialPlacement == null || spatialPlacement.matches(plan)) &&
         shot == plan.shot && crop == plan.crop && zoom == plan.zoom && avatar == plan.avatar && needsRetake == plan.needsRetake &&
         action.ethnicity == avatar.ethnicity &&
         (action.source !is PhotoPoseSource.Controlled ||
@@ -110,7 +116,8 @@ data class ResolvedPhotoSpec(
     fun rebase(plan: CompositionPlan): ResolvedPhotoSpec {
         return copy(planId = plan.id, revision = plan.revision, shot = plan.shot, crop = plan.crop,
             zoom = plan.zoom, avatar = plan.avatar, needsRetake = plan.needsRetake,
-            guidance = expectedGuidance(plan), viewBinding = plan.viewBinding, backgroundKeepRegions = plan.backgroundKeepRegions)
+            guidance = expectedGuidance(plan), viewBinding = plan.viewBinding, backgroundKeepRegions = plan.backgroundKeepRegions,
+            subjectHeightMeters = plan.subjectHeightMeters, spatialPlacement = plan.spatialPlacement, scaleEstimate = plan.scaleEstimate, photography=plan.photography)
     }
 }
 

@@ -41,20 +41,24 @@ class GatewayProvider(
      * @return 网关解析后的供应商结果。
      */
     override suspend fun step(call: ModelCall): StepReply = withContext(Dispatchers.IO) {
-        val photoV2 = if (com.framer.sense.feature.camera.vlm.agent.PhotoReferenceDecisionPolicy.enabled(call.input)) {
-            try {
-                VlmJson.decodeFromString<MultiImageCapabilities>(execute("/v2/capabilities", null)).providers
-                    .any { it.provider == provider && it.configured && it.model.isNotBlank() && it.directorV2 }
-            } catch (failure: ModelFailure) { if (failure.code == "HTTP_404") false else throw failure }
-        } else false
+        val capabilities = if(call.input.photographyEnabled || com.framer.sense.feature.camera.vlm.agent.PhotoReferenceDecisionPolicy.enabled(call.input)) {
+            try { VlmJson.decodeFromString<MultiImageCapabilities>(execute(if(call.input.photographyEnabled) "/v2/capabilities?photography=3" else "/v2/capabilities",null)) }
+            catch(failure: ModelFailure) { if(failure.code == "HTTP_404") null else throw failure }
+        } else null
+        val capability=capabilities?.providers?.firstOrNull { it.provider == provider && it.configured && it.model.isNotBlank() }
+        val version=when {
+            call.input.photographyEnabled && capability?.directorV3 == true -> 3
+            com.framer.sense.feature.camera.vlm.agent.PhotoReferenceDecisionPolicy.enabled(call.input) && capability?.directorV2 == true -> 2
+            else -> 1
+        }
         val bytes = File(call.input.scene.modelImagePath).readBytes()
         try { call.input.sessionBudget?.consume(bytes.size.toLong()) }
         catch (_: IllegalStateException) { throw ModelFailure("SESSION_BUDGET_EXHAUSTED", "", false) }
-        val body = GatewayRequest(provider, call.requestId, Base64.encodeToString(bytes, Base64.NO_WRAP),
-            if (photoV2) call.prompt else call.legacyPrompt ?: call.prompt, call.input.scene.id, if (photoV2) 2 else 1)
-        val text = execute(if (photoV2) "/v2/director/step" else "/v1/director/step", VlmJson.encodeToString(body))
-        try { VlmJson.decodeFromString<StepReply>(text).copy(photoProtocol = photoV2) }
-        catch (e: IllegalArgumentException) { throw ModelFailure("INVALID_OUTPUT", "网关响应不符合协议", true) }
+        val prompt=when(version) { 3 -> call.prompt; 2 -> call.photoV2Prompt ?: call.prompt; else -> call.legacyPrompt ?: call.prompt }
+        val body=GatewayRequest(provider,call.requestId,Base64.encodeToString(bytes,Base64.NO_WRAP),prompt,call.input.scene.id,version)
+        val text=execute("/v$version/director/step",VlmJson.encodeToString(body))
+        try { VlmJson.decodeFromString<StepReply>(text).copy(photoProtocol=version == 2,photographyProtocol=version == 3) }
+        catch(e: IllegalArgumentException) { throw ModelFailure("INVALID_OUTPUT", "网关响应不符合协议", true) }
     }
 
     /** 查询网关实际配置的模型。

@@ -9,6 +9,10 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- AR 服务和 Play 商店的可见性由 ARCore SDK 声明，此项用于诊断系统 Google 服务。 -->
+    <queries>
+        <package android:name="com.google.android.gms" />
+    </queries>
     <application>
         <meta-data android:name="com.google.ar.core" android:value="optional" />
         <service android:name=".data.ModelDownloadService" android:exported="false" android:foregroundServiceType="dataSync" />

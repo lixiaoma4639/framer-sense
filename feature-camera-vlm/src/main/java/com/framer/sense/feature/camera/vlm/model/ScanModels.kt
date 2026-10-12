@@ -20,7 +20,8 @@ object ScanLimits {
 @Serializable data class ScanCameraConfig(val version: Int, val rotation: Int, val zoom: Float,
     val crop: CropRect, val realtimeTimestamp: Boolean,
     val arSessionId: String? = null, val cameraIntrinsics: List<Float> = emptyList(),
-    val arCameraPose: List<Float> = emptyList())
+    val arCameraPose: List<Float> = emptyList(),
+    @kotlinx.serialization.Transient val arScaleCamera: ArScaleSnapshot? = null)
 data class ScanSession(val id: String, val startedNs: Long, val endedNs: Long? = null)
 data class ScanFrame(val id: String, val scanId: String, val timestampNs: Long, val receivedNs: Long,
     val config: ScanCameraConfig, val pose: ScanPose?, val quality: Float, val scene: SceneSnapshot,
@@ -40,7 +41,8 @@ data class ScanProgress(val frames: Int = 0, val preferred: Int = 0, val elapsed
 @Serializable data class ViewSelectionReply(val model: String, val raw: String, val selection: ViewSelection? = null,
     val elapsedMs: Long = 0)
 @Serializable data class MultiImageCapability(val provider: ProviderId, val model: String,
-    val configured: Boolean, val multiImage: Boolean, val maxImages: Int, val directorV2: Boolean = false)
+    val configured: Boolean, val multiImage: Boolean, val maxImages: Int, val directorV2: Boolean = false,
+    val directorV3: Boolean = false)
 @Serializable data class MultiImageCapabilities(val providers: List<MultiImageCapability>, val version: Int = 2)
 
 enum class BackgroundStatus { SEARCHING, ALIGNED_AUTO, ALIGNED_MANUAL }

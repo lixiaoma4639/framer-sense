@@ -29,6 +29,24 @@ if(NOT patch_result EQUAL 0)
     message(FATAL_ERROR "MNN 3.6.1 取消补丁无法应用；未修改 third_party，请检查源码版本。${patch_output}${patch_error}")
 endif()
 
+# 摄影约束使用同一份构建副本和类布局；不修改官方 checkout。
+set(VLM_MNN_PHOTO_PATCH "${CMAKE_CURRENT_LIST_DIR}/../../../../patches/mnn-3.6.1-photography.patch")
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${VLM_MNN_PHOTO_PATCH}")
+execute_process(
+    COMMAND "${CMAKE_COMMAND}" -E env --unset=GIT_DIR --unset=GIT_WORK_TREE
+        "GIT_CEILING_DIRECTORIES=${CMAKE_CURRENT_BINARY_DIR}"
+        "${GIT_EXECUTABLE}" apply --unsafe-paths "--directory=${VLM_MNN_CANCEL_SOURCE}" "${VLM_MNN_PHOTO_PATCH}"
+    WORKING_DIRECTORY "${VLM_MNN_CANCEL_SOURCE}"
+    RESULT_VARIABLE photo_result ERROR_VARIABLE photo_error)
+if(NOT photo_result EQUAL 0)
+    message(FATAL_ERROR "MNN 摄影约束补丁无法应用：${photo_error}")
+endif()
+file(READ "${VLM_MNN_CANCEL_SOURCE}/transformers/llm/engine/include/llm/llm.hpp" photo_header)
+file(READ "${VLM_MNN_CANCEL_SOURCE}/transformers/llm/engine/src/llm.cpp" photo_impl)
+if(NOT photo_header MATCHES "setTokenConstraint" OR NOT photo_impl MATCHES "mTokenConstraint\\(logits, token_id\\)")
+    message(FATAL_ERROR "MNN 摄影约束补丁未生效")
+endif()
+
 # 不能仅信任退出码：四个补丁文件必须确实改变，且各自包含新增接口/实现。
 foreach(relative IN LISTS VLM_MNN_CANCEL_FILES)
     file(SHA256 "${MNN_SOURCE}/${relative}" original_sha)

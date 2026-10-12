@@ -12,6 +12,7 @@ import com.framer.sense.feature.camera.vlm.model.CropRect
 import com.framer.sense.feature.camera.vlm.model.*
 import kotlinx.serialization.json.*
 import com.framer.sense.feature.camera.vlm.R
+import com.framer.sense.feature.camera.vlm.ar.SpatialMatrices
 import com.google.android.filament.*
 import com.google.android.filament.gltfio.AssetLoader
 import com.google.android.filament.gltfio.FilamentAsset
@@ -35,6 +36,8 @@ import kotlin.math.max
  */
 class FilamentAvatarRenderer(context: Context, private val catalog: PhotoActionCatalog = PhotoActionCatalog()) : AvatarRenderer {
     private val appContext = context.applicationContext
+    private val scaleStore = AvatarScaleStore(context)
+    override suspend fun scaleMetadata(action: ResolvedPhotoAction) = scaleStore.find(action)
     private val thread = HandlerThread("vlm-filament").apply { start() }
     private val handler = Handler(thread.looper)
     private val dispatcher = handler.asCoroutineDispatcher()
@@ -271,6 +274,7 @@ class FilamentAvatarRenderer(context: Context, private val catalog: PhotoActionC
     private suspend fun renderResolved(
         plan: CompositionPlan, width: Int, height: Int, warmth: Float, brightness: Float, purpose: AvatarRenderPurpose
     ): AvatarPreview = mutex.withLock {
+        val screenMetadata=if(plan.photography != null) scaleStore.find(requireNotNull(plan.resolvedSpec).action) else null
         withContext(dispatcher) {
             require(width > 0 && height > 0)
             initialize()
@@ -289,6 +293,11 @@ class FilamentAvatarRenderer(context: Context, private val catalog: PhotoActionC
                 val aspect = width.toFloat() / height
                 camera.setProjection(Camera.Projection.ORTHO, -aspect / 2.0, aspect / 2.0, -.5, .5, .1, 20.0)
                 camera.lookAt(aspect / 2.0, .5, 6.0, aspect / 2.0, .5, 0.0, 0.0, 1.0, 0.0)
+                if (purpose == AvatarRenderPurpose.COMPOSITION) plan.spatialPlacement?.let { placement ->
+                    val projection = SpatialMatrices.cropProjection(placement.camera.projection, plan.crop)
+                    camera.setCustomProjection(projection.map(Float::toDouble).toDoubleArray(), .1, 40.0)
+                    camera.setModelMatrix(requireNotNull(SpatialMatrices.inverse(placement.camera.view)).toFloatArray())
+                }
                 camera.setExposure(16f, 1f / 125f, 100f)
                 view.scene = scene
                 view.camera = camera
@@ -321,7 +330,7 @@ class FilamentAvatarRenderer(context: Context, private val catalog: PhotoActionC
                 indirect = IndirectLight.Builder().irradiance(1, floatArrayOf(.8f, .8f, .8f)).intensity(24_000f).build(e)
                 scene.indirectLight = indirect
                 var renderedPlan = plan
-                var expectedBounds = applyPlan(loaded, renderedPlan, aspect)
+                var expectedBounds = applyPlan(loaded, renderedPlan, aspect,screenMetadata)
                 if (purpose == AvatarRenderPurpose.FACE) focusFace(loaded, renderedPlan, camera)
                 scene.addEntities(loaded.asset.entities)
                 val softenColors = requireNotNull(plan.resolvedSpec).action.softenColors
@@ -329,11 +338,11 @@ class FilamentAvatarRenderer(context: Context, private val catalog: PhotoActionC
                 var actualBounds = alphaCropRect(bitmap)
                 // 个别 GLB 导出会报告不准确包围盒。按真实透明像素高度只做一次向下校准，
                 // 正常资产不会触发；绝不为了填满画面而放大人像。
-                val shrink = if (purpose == AvatarRenderPurpose.FACE || plan.avatar.projectionCalibrated) 1f else calibrationShrink(expectedBounds, actualBounds)
+                val shrink = if (purpose == AvatarRenderPurpose.FACE || plan.spatialPlacement != null || plan.avatar.projectionCalibrated) 1f else calibrationShrink(expectedBounds, actualBounds)
                 if (shrink < .96f) {
                     val originalHeight = renderedPlan.avatar.height
                     renderedPlan = renderedPlan.shrinkProjection(shrink)
-                    expectedBounds = applyPlan(loaded, renderedPlan, aspect)
+                    expectedBounds = applyPlan(loaded, renderedPlan, aspect,screenMetadata)
                     bitmap.recycle()
                     bitmap = renderTransparent(e, renderer, view, swapChain, width, height, softenColors)
                     actualBounds = alphaCropRect(bitmap)
@@ -376,21 +385,24 @@ class FilamentAvatarRenderer(context: Context, private val catalog: PhotoActionC
         check(head != 0) { appContext.getString(R.string.vlm_photo_face_unavailable) }
         val transforms = engine!!.transformManager
         val world = transforms.getWorldTransform(transforms.getInstance(head), FloatArray(16))
-        val half = plan.avatar.height * .13
+        val displayHeight = plan.spatialPlacement?.heightMeters ?: plan.avatar.height
+        val half = displayHeight * .13
         camera.setProjection(Camera.Projection.ORTHO, -half, half, -half, half, .1, 20.0)
         val x = world[12].toDouble()
-        val y = world[13].toDouble() + plan.avatar.height * .02
+        val y = world[13].toDouble() + displayHeight * .02
         val z = world[14].toDouble()
         Log.i(LOG_TAG, "脸部示范定位 action=${plan.resolvedSpec.action.id} anchor=$anchor expression=${plan.avatar.expression}")
         camera.lookAt(x, y, z + 6.0, x, y, z, 0.0, 1.0, 0.0)
     }
 
     /** 把受限姿势、表情和方案坐标应用到 GLB，返回画面归一化投影边界。 */
-    private fun applyPlan(loaded: LoadedAvatar, plan: CompositionPlan, aspect: Float): CropRect {
+    private fun applyPlan(loaded: LoadedAvatar, plan: CompositionPlan, aspect: Float, screenMetadata: AvatarScaleMetadata? = null): CropRect {
         val transforms = engine!!.transformManager
         val avatar = plan.avatar
         val visibleHeight = avatar.height
-        val scale = visibleHeight / loaded.height
+        val spatial = plan.spatialPlacement
+        val scale = spatial?.let { it.heightMeters / it.metadata.referenceHeight }
+            ?: (visibleHeight / (screenMetadata?.referenceHeight ?: loaded.height))
         // 新方案使用细分动作；旧方案没有 poseDirective 时严格沿用 PoseId，避免历史卡片
         // 在升级后突然改变姿势。每次均从绑定姿势恢复，杜绝上一张方案的骨骼残留。
         for ((entity, base) in loaded.nodeBaseTransforms) transforms.setTransform(transforms.getInstance(entity), base)
@@ -427,11 +439,19 @@ class FilamentAvatarRenderer(context: Context, private val catalog: PhotoActionC
         }
         // 保持 GLB 原生实体层级不变，并在场景根节点同时缩放网格和骨骼。
         val root = FloatArray(16)
-        Matrix.setIdentityM(root, 0)
-        Matrix.translateM(root, 0, avatar.foot.x * aspect, 1f - avatar.foot.y, 0f)
-        Matrix.rotateM(root, 0, avatar.yaw, 0f, 1f, 0f)
-        Matrix.scaleM(root, 0, scale, scale, scale)
-        Matrix.translateM(root, 0, -loaded.centerX, -loaded.minY, -loaded.centerZ)
+        if (spatial != null) {
+            SpatialMatrices.model(spatial.position, spatial.yaw).toFloatArray().copyInto(root)
+            Matrix.scaleM(root, 0, scale, scale, scale)
+            val foot = spatial.metadata.foot
+            Matrix.translateM(root, 0, -foot.x, -foot.y, -foot.z)
+        } else {
+            Matrix.setIdentityM(root, 0)
+            Matrix.translateM(root, 0, avatar.foot.x * aspect, 1f - avatar.foot.y, 0f)
+            Matrix.rotateM(root, 0, avatar.yaw, 0f, 1f, 0f)
+            Matrix.scaleM(root, 0, scale, scale, scale)
+            val foot=screenMetadata?.foot
+            Matrix.translateM(root, 0, -(foot?.x ?: loaded.centerX), -(foot?.y ?: loaded.minY), -(foot?.z ?: loaded.centerZ))
+        }
         val finalRoot = FloatArray(16)
         Matrix.multiplyMM(finalRoot, 0, root, 0, loaded.rootBaseTransform, 0)
         transforms.setTransform(transforms.getInstance(loaded.asset.root), finalRoot)

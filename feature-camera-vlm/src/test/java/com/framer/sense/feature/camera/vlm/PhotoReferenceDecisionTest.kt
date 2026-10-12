@@ -80,4 +80,22 @@ class PhotoReferenceDecisionTest {
         ArGeometry.writeDepthVertex(vertex,3,100,70,2f,100f,100f,80f,60f)
         assertArrayEquals(floatArrayOf(.4f,-.2f,-2f),vertex.drop(3).toFloatArray(),.0001f)
     }
+    @Test fun offlineAlternativesFollowActualNativeModelRanking() {
+        val plans=PhotoReferenceDecisionPolicy.decode("RANK=4,6,2,5,1,3",input(),true)
+        assertEquals(listOf(4,6,2),plans.map { it.localCombination })
+        assertTrue(plans.all { it.localRanked })
+        assertTrue(plans.all { it.avatar.height == 0f && !it.hasMeasuredScale() })
+        assertFalse(plans.first().localAlternative)
+        assertTrue(plans.drop(1).all { it.localAlternative })
+        assertTrue(PlanValidator().validate(plans,input()).isEmpty())
+        for (raw in listOf("RANK=1,1,3,4,5,6","RANK=1,2,3","RANK=1,2,3,4,5,7","RANK=one"))
+            assertTrue(runCatching { PhotoReferenceDecisionPolicy.decode(raw,input(),true) }.isFailure)
+    }
+    @Test fun rankedRevisionKeepsUnselectedPlans() {
+        val existing=PhotoReferenceDecisionPolicy.decode("RANK=2,4,6,1,3,5",input(),true)
+        val changed=PhotoReferenceDecisionPolicy.decode("RANK=5,6,4,3,2,1",input().copy(existing=existing,selectedId="p2"),true)
+        assertEquals(existing[0],changed[0]); assertEquals(existing[2],changed[2])
+        assertEquals(5,changed[1].localCombination)
+    }
+
 }

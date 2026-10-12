@@ -26,6 +26,8 @@ import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.asExecutor
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import com.framer.sense.feature.camera.vlm.R
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 
@@ -40,13 +42,19 @@ class VlmCameraController(private val context: Context) {
         private set
     suspend fun releaseForAr() {
         val info = camera?.cameraInfo ?: closingCameraInfo
+        android.util.Log.i("VlmAr", "普通相机释放开始 state=${info?.cameraState?.value?.type} arPresent=${ar != null}")
         unbind()
         releaseForNormal()
         if (info == null) return
         kotlinx.coroutines.withTimeout(5_000) {
             suspendCancellableCoroutine<Unit> { continuation ->
                 val observer = object : androidx.lifecycle.Observer<CameraState> {
+                    private var lastType: CameraState.Type? = null
                     override fun onChanged(value: CameraState) {
+                        if (lastType != value.type) {
+                            lastType = value.type
+                            android.util.Log.i("VlmAr", "普通相机释放状态 state=${value.type} error=${value.error?.code}")
+                        }
                         if (value.type == CameraState.Type.CLOSED) {
                             info.cameraState.removeObserver(this)
                             if (continuation.isActive) continuation.resume(Unit)
@@ -309,8 +317,45 @@ class VlmCameraController(private val context: Context) {
     /** 保存真实照片，不合入人偶；无参数。
      * @return 系统相册 URI；Android 9 及以下由 UI 先取得写入权限。
      */
-    suspend fun capturePhoto(requestedZoom: Float? = null): Uri? {
+    suspend fun capturePhoto(requestedZoom: Float? = null, framingCrop: CropRect = CropRect()): Uri? {
         ar?.let { return it.capturePhoto() }
+        if(framingCrop != CropRect()) {
+            require(com.framer.sense.feature.camera.vlm.agent.PhotographyProtocol.validCrop(framingCrop))
+            val bitmap=freeze(requestedZoom).first
+            try {
+                return withContext(Dispatchers.IO) {
+                    var cropped: Bitmap? = null; var uri: Uri? = null
+                    try {
+                        val x=(framingCrop.left*bitmap.width).toInt().coerceIn(0,bitmap.width-1)
+                        val y=(framingCrop.top*bitmap.height).toInt().coerceIn(0,bitmap.height-1)
+                        val w=((framingCrop.right-framingCrop.left)*bitmap.width).toInt().coerceIn(1,bitmap.width-x)
+                        val h=((framingCrop.bottom-framingCrop.top)*bitmap.height).toInt().coerceIn(1,bitmap.height-y)
+                        cropped=Bitmap.createBitmap(bitmap,x,y,w,h)
+                        val values=ContentValues().apply {
+                            put(MediaStore.Images.Media.DISPLAY_NAME,"Framer_${System.currentTimeMillis()}.jpg")
+                            put(MediaStore.Images.Media.MIME_TYPE,"image/jpeg")
+                            if(Build.VERSION.SDK_INT >= 29) {
+                                put(MediaStore.Images.Media.RELATIVE_PATH,"Pictures/FramerSense")
+                                put(MediaStore.Images.Media.IS_PENDING,1)
+                            }
+                        }
+                        val outputUri=requireNotNull(context.contentResolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI,values))
+                        uri=outputUri
+                        context.contentResolver.openOutputStream(outputUri)?.use { stream ->
+                            check(requireNotNull(cropped).compress(Bitmap.CompressFormat.JPEG,95,stream))
+                        } ?: error(context.getString(R.string.vlm_photography_save_failed))
+                        if(Build.VERSION.SDK_INT >= 29) context.contentResolver.update(outputUri,ContentValues().apply {
+                            put(MediaStore.Images.Media.IS_PENDING,0)
+                        },null,null)
+                        outputUri
+                    } catch(failure: Throwable) {
+                        uri?.let { context.contentResolver.delete(it,null,null) }; throw failure
+                    } finally {
+                        if(cropped !== bitmap) cropped?.recycle()
+                    }
+                }
+            } finally { bitmap.recycle() }
+        }
         val active = capture ?: error("相机尚未准备完成")
         flushZoom(requestedZoom)
         awaitZoom()

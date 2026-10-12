@@ -9,8 +9,8 @@ import httpx
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
-from .models import PhotoStepRequest, PhotoReferenceDecision, Decision, Provider, StepReply, StepRequest, ViewRequest, ViewReply, ViewSelection
-from .providers import ProviderFailure, config_for, invoke, multi_image_limit
+from .models import PhotoStepRequest, PhotoReferenceDecision, Decision, Provider, StepReply, StepRequest, ViewRequest, ViewReply, ViewSelection, PhotographyStepRequest, PhotographyDecision
+from .providers import ProviderFailure, config_for, invoke, multi_image_limit, director_v3_enabled
 
 
 @asynccontextmanager
@@ -73,11 +73,16 @@ async def step(body: StepRequest, request: Request) -> StepReply:
 
 
 @app.get("/v2/capabilities", dependencies=[Depends(authorize)])
-async def multi_capabilities() -> dict:
-    return {"version": 2, "providers": [{"provider": p.value, "model": config_for(p).model,
+async def multi_capabilities(photography: int | None = None) -> dict:
+    providers = [{"provider": p.value, "model": config_for(p).model,
         "configured": bool(config_for(p).key and config_for(p).model),
         "multiImage": bool(config_for(p).key and config_for(p).model and multi_image_limit(p)),
-        "maxImages": multi_image_limit(p), "directorV2": bool(config_for(p).key and config_for(p).model)} for p in Provider]}
+        "maxImages": multi_image_limit(p), "directorV2": bool(config_for(p).key and config_for(p).model)} for p in Provider]
+    # Older Android clients reject unknown fields; only the new caller opts in.
+    if photography == 3:
+        for item in providers:
+            item["directorV3"] = director_v3_enabled(Provider(item["provider"]))
+    return {"version": 2, "providers": providers}
 
 
 @app.post("/v2/views/select", response_model=ViewReply, dependencies=[Depends(authorize)])
@@ -145,3 +150,28 @@ async def photo_step(body: PhotoStepRequest, request: Request) -> StepReply:
     except ValueError:
         pass
     return StepReply(model=model, raw=raw, decision=None, elapsedMs=int((time.monotonic() - started) * 1000))
+
+
+@app.post("/v3/director/step", response_model=StepReply, dependencies=[Depends(authorize)])
+async def photography_step(body: PhotographyStepRequest, request: Request) -> StepReply:
+    if not director_v3_enabled(body.provider):
+        raise HTTPException(400, detail={"code": "UNSUPPORTED_PHOTOGRAPHY", "message": "当前模型未声明新版摄影能力"})
+    try:
+        image = base64.b64decode(body.imageBase64, validate=True)
+        if not image.startswith(b"\xff\xd8\xff") or len(image) > 3*1024*1024:
+            raise ValueError()
+    except (ValueError, binascii.Error):
+        raise HTTPException(400, detail={"code": "BAD_REQUEST", "message": "图片必须为有效 JPEG"}) from None
+    started = time.monotonic()
+    try:
+        model, raw = await invoke(body, request.app.state.client)
+    except ProviderFailure as exc:
+        raise HTTPException(exc.status, detail={"code": exc.code, "message": exc.message}) from None
+    # 原文总是保留，由 App 在同一任务内最多纠正一次，不能伪造构图或猜测来源。
+    try:
+        decision = PhotographyDecision.model_validate_json(raw)
+        if decision.imageId != body.imageId:
+            raise ValueError("PHOTO_SOURCE_INVALID")
+    except ValueError:
+        pass
+    return StepReply(model=model, raw=raw, decision=None, elapsedMs=int((time.monotonic()-started)*1000))

@@ -118,7 +118,17 @@ val VlmJson = Json { encodeDefaults = true; explicitNulls = true }
     @kotlinx.serialization.Transient val backgroundKeepRegions: List<CropRect> = emptyList(),
     @kotlinx.serialization.Transient val localCombination: Int? = null,
     @kotlinx.serialization.Transient val localAlternative: Boolean = false,
-    @kotlinx.serialization.Transient val sceneDescription: String? = null
+    @kotlinx.serialization.Transient val sceneDescription: String? = null,
+    @kotlinx.serialization.Transient val subjectHeightMeters: Float = AvatarHeightPolicy.defaultCm(avatar.avatarId) / 100f,
+    @kotlinx.serialization.Transient val arCamera: ArScaleSnapshot? = null,
+    @kotlinx.serialization.Transient val spatialPlacement: ResolvedSpatialPlacement? = null,
+    @kotlinx.serialization.Transient val arDesiredAvatar: AvatarPlacement? = null,
+    @kotlinx.serialization.Transient val arGroundTarget: Point2? = null,
+    @kotlinx.serialization.Transient val localRanked: Boolean = false,
+    @kotlinx.serialization.Transient val scaleFailure: ScaleFailure? = ScaleFailure.UNMEASURED,
+    @kotlinx.serialization.Transient val arPersonRegions: List<CropRect> = emptyList(),
+    @kotlinx.serialization.Transient val scaleEstimate: PhotoScaleEstimate? = null,
+    @kotlinx.serialization.Transient val photography: PhotographyLayout? = null
 )
 /** 模型仅表达摄影意图；坐标、裁剪和倍率由客户端映射并校验。 */
 @Serializable data class CompositionIntent(
@@ -150,7 +160,8 @@ val VlmJson = Json { encodeDefaults = true; explicitNulls = true }
     val currentZoom: Float,
     val imagePath: String,
     val modelImagePath: String,
-    @kotlinx.serialization.Transient val arBinding: PhotoViewBinding? = null
+    @kotlinx.serialization.Transient val arBinding: PhotoViewBinding? = null,
+    @kotlinx.serialization.Transient val arCamera: ArScaleSnapshot? = null
 )
 @Serializable data class CameraCapabilities(
     val minZoom: Float = 1f,
@@ -184,7 +195,8 @@ val VlmJson = Json { encodeDefaults = true; explicitNulls = true }
     val decision: DirectorDecision? = null,
     val elapsedMs: Long = 0,
     @kotlinx.serialization.Transient val photoProtocol: Boolean = false,
-    @kotlinx.serialization.Transient val sceneObservation: SceneObservation? = null
+    @kotlinx.serialization.Transient val sceneObservation: SceneObservation? = null,
+    @kotlinx.serialization.Transient val photographyProtocol: Boolean = false
 )
 data class SceneObservation(val imageId: String, val text: String)
 @Serializable data class GatewayCapability(
@@ -217,15 +229,20 @@ data class DirectorInput(
     val sessionBudget: com.framer.sense.feature.camera.vlm.scan.PhotoSessionBudget? = null,
     val photoReferences: Boolean = false,
     val ethnicity: AvatarEthnicity = AvatarEthnicity.WHITE,
-    val arMode: Boolean = false
+    val arMode: Boolean = false,
+    val photographyEnabled: Boolean = false,
+    val subjectHeightMeters: Float = AvatarHeightPolicy.defaultCm(avatarId)/100f,
+    val photographyActions: List<PhotographyActionCapability>? = null
 )
-data class ModelCall(val input: DirectorInput, val prompt: String, val requestId: String, val legacyPrompt: String? = null)
+data class ModelCall(val input: DirectorInput, val prompt: String, val requestId: String, val legacyPrompt: String? = null,
+    val photoV2Prompt: String? = null)
 data class CallTrace(val provider: ProviderId, val model: String, val elapsedMs: Long, val detail: String)
 data class CompositionResult(
     val plans: List<CompositionPlan>,
     val traces: List<CallTrace>,
     val observations: List<ToolObservation>,
-    val rawOutputs: List<String>
+    val rawOutputs: List<String>,
+    val photographyProtocolVersion: Int = 1
 )
 
 /** 新建用于隔离异步请求、图片或会话的唯一编号；无参数。 */

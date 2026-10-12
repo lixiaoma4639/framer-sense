@@ -21,7 +21,7 @@ class PlanValidator {
                 val area = (region.right - region.left) * (region.bottom - region.top)
                 val visible = (minOf(c.right, region.right) - maxOf(c.left, region.left)).coerceAtLeast(0f) *
                     (minOf(c.bottom, region.bottom) - maxOf(c.top, region.top)).coerceAtLeast(0f)
-                if (area > 0f && visible / area < .5f) add("${p.id}: BACKGROUND_CROPPED")
+                if (area > 0f && visible / area < (if(p.photography != null) .90f-.0001f else .5f)) add("${p.id}: BACKGROUND_CROPPED")
             }
             val a = p.avatar
             if (p.resolvedSpec?.matches(p) == false) add("${p.id}: RESOLVED_SPEC_MISMATCH")
@@ -32,18 +32,24 @@ class PlanValidator {
             if (!(c.left >= 0f && c.top >= 0f && c.right <= 1f && c.bottom <= 1f && c.right > c.left && c.bottom > c.top)) add("${p.id}: 裁剪框越界或为空")
             if (abs((c.right - c.left) - (c.bottom - c.top)) > 0.015f) add("${p.id}: 首版裁剪必须保持原图画幅")
             if (p.zoom !in input.camera.minZoom..input.camera.maxZoom) add("${p.id}: 倍率超出设备范围")
-            if (!p.needsRetake && c.right > c.left) {
+            if (p.spatialPlacement != null && (!input.arMode || p.zoom != 1f)) add("${p.id}: AR_SCALE_CAMERA_MISMATCH")
+            if (p.photography != null) {
+                if (!PhotographyProtocol.validCrop(c)) add("${p.id}: PHOTO_CROP_INVALID")
+                if (minOf(c.right-c.left,c.bottom-c.top) < .85f && p.photography.cropReason.isBlank()) add("${p.id}: PHOTO_CROP_REASON_MISSING")
+                if (abs(p.zoom-input.scene.currentZoom) > .01f) add("${p.id}: PHOTO_CAMERA_ZOOM_CHANGED")
+            }
+            if (p.photography == null && !p.needsRetake && p.spatialPlacement == null && c.right > c.left) {
                 val expected = input.scene.currentZoom / (c.right - c.left)
                 if (abs(expected - p.zoom) > 0.06f * expected) add("${p.id}: 裁剪与倍率不一致")
                 if (abs((c.left + c.right) / 2f - 0.5f) > 0.02f || abs((c.top + c.bottom) / 2f - 0.5f) > 0.02f) add("${p.id}: 偏心取景需要标记重新取景")
             }
-            if (a.height !in 0.08f..4f || a.foot.x !in 0f..1f || a.foot.y !in 0f..4f) add("${p.id}: 人物布局不在允许范围")
+            if ((a.height != 0f && a.height !in 0.08f..4f) || a.foot.x !in 0f..1f || a.foot.y !in 0f..4f) add("${p.id}: 人物布局不在允许范围")
             if (a.yaw !in -180f..180f || a.expressionIntensity !in 0f..1f) add("${p.id}: 朝向或表情强度越界")
-            if (p.shot in listOf(ShotType.FULL, ShotType.ENVIRONMENT) && (a.foot.y > 1f || a.foot.y - a.height < 0f)) add("${p.id}: 全身/环境人像的头脚被裁掉")
+            if (a.height > 0f && p.shot in listOf(ShotType.FULL, ShotType.ENVIRONMENT) && (a.foot.y > 1f || a.foot.y - a.height < 0f)) add("${p.id}: 全身/环境人像的头脚被裁掉")
             val cutHeight = (a.foot.y - 1f) / a.height
-            if (p.shot == ShotType.HALF && (cutHeight !in 0.20f..0.58f || a.foot.y - a.height < -.02f)) add("${p.id}: 半身景别应在腰到大腿处裁切并保留头部")
-            if (p.shot == ShotType.CLOSE_UP && (cutHeight !in 0.58f..0.84f || a.foot.y - a.height < -.02f)) add("${p.id}: 特写应在胸口附近裁切并保留头部")
-            if (a.foot.y - a.height > 0.9f || a.foot.y < 0.1f) add("${p.id}: 人物几乎不可见")
+            if (a.height > 0f && p.shot == ShotType.HALF && (cutHeight !in 0.20f..0.58f || a.foot.y - a.height < -.02f)) add("${p.id}: 半身景别应在腰到大腿处裁切并保留头部")
+            if (a.height > 0f && p.shot == ShotType.CLOSE_UP && (cutHeight !in 0.58f..0.84f || a.foot.y - a.height < -.02f)) add("${p.id}: 特写应在胸口附近裁切并保留头部")
+            if (a.height > 0f && (a.foot.y - a.height > 0.9f || a.foot.y < 0.1f)) add("${p.id}: 人物几乎不可见")
         }
         if (input.selectedId != null) {
             if (plans.map { it.id }.toSet() != input.existing.map { it.id }.toSet()) add("修改必须保留原有三个方案编号")

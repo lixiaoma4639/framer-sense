@@ -1,6 +1,8 @@
 package com.framer.sense.feature.camera.vlm.avatar
 
 import android.graphics.Bitmap
+import android.util.Log
+import com.framer.sense.feature.camera.vlm.ar.PhotoScaleEstimator
 import android.graphics.BitmapFactory
 import android.graphics.Canvas
 import android.graphics.Paint
@@ -21,8 +23,25 @@ data class PlanPreview(val composite: Bitmap, val avatar: Bitmap, val bounds: Cr
 
 /** 缓存最近的离屏预览，Bitmap 交由持有它的界面与 GC 管理。 */
 class PreviewStore(private val renderer: AvatarRenderer) : PreviewInspector {
+    override suspend fun photographyActions(input: DirectorInput): List<PhotographyActionCapability> {
+        val usable=mutableListOf<PhotographyActionCapability>()
+        for(id in com.framer.sense.feature.camera.vlm.agent.PhotographyProtocol.actionIds(input.avatarId)) {
+            try {
+                val plan=CompositionPlan("capability","",ShotType.FULL,CropRect(),1f,
+                    AvatarPlacement(avatarId=input.avatarId,ethnicity=if(input.avatarId == AvatarId.ADULT_FEMALE) input.ethnicity else null),"","")
+                val resolved=renderer.resolve(plan,id)
+                val expressions=renderer.availableExpressions(resolved).filter { it in listOf(ExpressionId.NEUTRAL,ExpressionId.SMILE,ExpressionId.HAPPY) }
+                if(expressions.isNotEmpty()) usable += PhotographyActionCapability(id,expressions)
+            } catch(cancel: kotlinx.coroutines.CancellationException) { throw cancel }
+            catch(failure: Exception) { Log.w("VlmPhotography","摄影动作不可用 action=$id reason=${failure.message}") }
+        }
+        return usable
+    }
     private val mutex = Mutex()
     private val cache = LinkedHashMap<String, PlanPreview>()
+    suspend fun scaleMetadata(action: ResolvedPhotoAction) = renderer.scaleMetadata(action)
+    suspend fun resolve(plan: CompositionPlan) = renderer.resolve(plan)
+
     private val faces = LinkedHashMap<String, AvatarPreview>()
 
     suspend fun availableActions(role: AvatarId, shot: ShotType) = renderer.availableActions(role, shot)
@@ -39,8 +58,11 @@ class PreviewStore(private val renderer: AvatarRenderer) : PreviewInspector {
         val resolved = renderer.resolve(plan)
         val key = key("face", resolved, AvatarRenderPurpose.FACE)
         faces[key]?.let { return@withLock it }
-        renderer.renderFace(resolved, 384)?.also {
-            check(it.appliedSpec == null || it.appliedSpec.matches(resolved)) { "FACE_SPEC_MISMATCH" }
+        // 独立脸部示范只展示同一动作/表情，不投影到环境，也不回写空间尺度。
+        val faceOnly = if (resolved.hasRenderableScale()) resolved else resolved.withActualAvatar(
+            resolved.avatar.copy(height=1f,foot=Point2(.5f,.9f)))
+        renderer.renderFace(faceOnly, 384)?.also {
+            check(it.appliedSpec == null || it.appliedSpec.matches(faceOnly)) { "FACE_SPEC_MISMATCH" }
             faces[key] = it
             while (faces.size > 2) faces.remove(faces.keys.first())
         }
@@ -52,7 +74,10 @@ class PreviewStore(private val renderer: AvatarRenderer) : PreviewInspector {
      * @return 可直接展示的合成及透明人偶。
      */
     suspend fun preview(scene: SceneSnapshot, plan: CompositionPlan): PlanPreview = mutex.withLock {
-        val resolved = renderer.resolve(plan)
+        val sourced = plan.copy(arCamera = plan.arCamera ?: scene.arCamera)
+        val base = renderer.resolve(if (sourced.hasRenderableScale()) sourced else sourced.withSpatial(null))
+        val resolved = if (base.hasRenderableScale()) base else PhotoScaleEstimator.estimate(base,
+            base.resolvedSpec?.action?.let { renderer.scaleMetadata(it) })
         val key = key(scene.id, resolved)
         cache[key]?.let {
             // 描述不影响渲染缓存，但必须跟随本次方案，不能被旧缓存方案覆盖。
@@ -70,14 +95,18 @@ class PreviewStore(private val renderer: AvatarRenderer) : PreviewInspector {
             val w = (scene.width * ratio).roundToInt().coerceAtLeast(1)
             val h = (scene.height * ratio).roundToInt().coerceAtLeast(1)
             val colors = environment(background)
+            check(resolved.hasRenderableScale()) { "AVATAR_SCALE_ESTIMATE_INVALID" }
+            resolved.scaleEstimate?.let { estimate ->
+                Log.i("VlmArScale", "估算人像 plan=${resolved.id} method=${estimate.method} depth=${estimate.assumedOpticalDepthMeters} evidence=${estimate.evidenceCount} height=${resolved.avatar.height} foot=${resolved.avatar.foot} spatial=${resolved.spatialPlacement != null}")
+            }
             val human = renderer.render(resolved, w, h, colors.first, colors.second)
             val composite = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
-            val crop = plan.crop
+            val crop = resolved.crop
             val src = Rect((crop.left * background.width).roundToInt().coerceIn(0, background.width - 1), (crop.top * background.height).roundToInt().coerceIn(0, background.height - 1), (crop.right * background.width).roundToInt().coerceIn(1, background.width), (crop.bottom * background.height).roundToInt().coerceIn(1, background.height))
             check(src.width() > 0 && src.height() > 0) { "无效裁剪范围" }
             Canvas(composite).apply {
                 drawBitmap(background, src, Rect(0, 0, w, h), Paint(Paint.FILTER_BITMAP_FLAG))
-                drawContactShadow(human.bounds, w, h, colors.second)
+                if (resolved.hasMeasuredScale()) drawContactShadow(human.bounds, w, h, colors.second)
                 drawBitmap(human.bitmap, 0f, 0f, null)
             }
             val adopted = resolved.withActualAvatar(human.appliedAvatar ?: resolved.avatar)
@@ -102,13 +131,18 @@ class PreviewStore(private val renderer: AvatarRenderer) : PreviewInspector {
         val b = result.bounds
         val applied = result.appliedPlan
         val originalFoot = PlanCoordinates.toOriginal(applied.avatar.foot, applied.crop)
-        val errors = if (plan.shot in listOf(ShotType.ENVIRONMENT, ShotType.FULL) && (b.top < -.02f || b.bottom > 1.02f || b.left < -.02f || b.right > 1.02f)) listOf("全身/环境方案的实际人偶被画面裁掉，请缩小或移动人物") else emptyList()
-        return PreviewInspection(b, listOf("原图脚底锚点=(${originalFoot.x},${originalFoot.y})"), errors, applied.avatar, applied.resolvedSpec)
+        val errors = if (plan.hasMeasuredScale() && plan.shot in listOf(ShotType.ENVIRONMENT, ShotType.FULL) && (b.top < -.02f || b.bottom > 1.02f || b.left < -.02f || b.right > 1.02f)) listOf("全身/环境方案的实际人偶被画面裁掉，请缩小或移动人物") else emptyList()
+        val facts=(if (plan.hasMeasuredScale()) listOf("原图脚底锚点=(${originalFoot.x},${originalFoot.y})") else listOf("SCALE_ESTIMATED:${applied.scaleEstimate?.method}")) +
+            com.framer.sense.feature.camera.vlm.agent.PhotographyProtocol.referenceObservations(applied)
+        applied.photography?.let {
+            Log.i("VlmPhotography","投影采用 plan=${applied.id} revision=${applied.revision} crop=${applied.crop} cropReason=${it.cropReason} modelHead=${it.head} modelFoot=${it.foot} actualFoot=${applied.avatar.foot} actualHeight=${applied.avatar.height} method=${applied.scaleEstimate?.method} world=${applied.spatialPlacement != null} fallback=${it.layoutFallback} references=${facts.drop(1)}")
+        }
+        return PreviewInspection(b, facts, errors, applied.avatar, applied.resolvedSpec, applied)
     }
 
     private fun key(sceneId: String, plan: CompositionPlan, purpose: AvatarRenderPurpose = AvatarRenderPurpose.COMPOSITION): String =
         sceneId + VlmJson.encodeToString(plan) + ":" + plan.avatar.projectionCalibrated + ":" + purpose + ":" +
-            plan.resolvedSpec?.action?.cacheIdentity() + ":" + plan.viewBinding + ":" + AvatarDisplayColor.VERSION
+            plan.resolvedSpec?.action?.cacheIdentity() + ":" + plan.viewBinding + ":" + plan.localRanked + ":" + plan.localAlternative + ":" + plan.localCombination + ":" + plan.scaleFailure + ":" + plan.arPersonRegions + ":" + plan.subjectHeightMeters + ":" + plan.arCamera + ":" + plan.spatialPlacement + ":" + plan.scaleEstimate + ":" + plan.photography + ":" + AvatarDisplayColor.VERSION
 
     /** 从稀疏像素估计色温倾向与亮度。
      * @param bitmap 原始相机背景，不包含虚拟人偶。

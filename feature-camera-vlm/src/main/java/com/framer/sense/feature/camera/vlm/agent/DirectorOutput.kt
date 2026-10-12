@@ -59,4 +59,23 @@ object DirectorOutput {
         }
         return text
     }
+
+    /** 本地流式生成可在 JSON 闭合时停止，不要求模型再补 Markdown 结束围栏。 */
+    internal fun unwrapOfflineJson(raw: String): String {
+        var text = raw.trim().removePrefix("\uFEFF").trim()
+        if (text.startsWith("<think>")) {
+            val end = text.indexOf("</think>")
+            require(end >= 0) { "Unclosed think block" }
+            text = text.substring(end + "</think>".length).trim()
+        }
+        if (!text.startsWith("```")) return OfflineJsonSyntax.normalize(text)
+        val opening = Regex("^`{3,}[ \\t]*(?:json)?[ \\t]*(?:\\r?\\n|(?=[{\\[]))", RegexOption.IGNORE_CASE).find(text)
+        require(opening != null) { "Unsupported JSON code fence" }
+        val body = text.substring(opening.value.length).trim()
+        val closing = Regex("`{3,}\\s*$").find(body)
+        val json = OfflineJsonSyntax.normalize(if (closing != null) body.substring(0, closing.range.first).trimEnd() else body)
+        // 只宽容展示围栏缺失；JSON 本体必须完整，禁止补括号、补方案或丢弃尾部内容。
+        require(VlmJson.parseToJsonElement(json) is JsonObject) { "PHOTO_JSON_OBJECT_REQUIRED" }
+        return json
+    }
 }

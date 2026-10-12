@@ -94,4 +94,15 @@ class CameraFramingTest {
         assertFalse(normal.copy(photoSettingsVisible = true).canCapture)
         assertFalse(normal.copy(modelBusy = true).canCapture)
     }
+    @Test fun arSwitchIsAvailableOnIdleCompositionPagesButLockedDuringWork() {
+        listOf(VlmStage.LIVE,VlmStage.READY,VlmStage.FROZEN,VlmStage.SCAN_REVIEW).forEach {
+            assertTrue(VlmUiState(stage=it).canSwitchCameraMode)
+        }
+        listOf(VlmStage.SCANNING,VlmStage.SCAN_PROCESSING,VlmStage.VIEW_SELECTING,VlmStage.FREEZING,
+            VlmStage.GENERATING,VlmStage.MODIFYING).forEach {
+            assertFalse(VlmUiState(stage=it).canSwitchCameraMode)
+        }
+        assertFalse(VlmUiState(stage=VlmStage.READY,saving=true).canSwitchCameraMode)
+        assertFalse(VlmUiState(stage=VlmStage.READY,modelBusy=true).canSwitchCameraMode)
+    }
 }

@@ -12,7 +12,9 @@ data class PreviewInspection(
     val messages: List<String> = emptyList(),
     val errors: List<String> = emptyList(),
     val appliedAvatar: AvatarPlacement? = null,
-    val appliedSpec: ResolvedPhotoSpec? = null
+    val appliedSpec: ResolvedPhotoSpec? = null,
+    /** 实际渲染采用的完整方案，包含裁切、空间站位及尺度估算来源。 */
+    val appliedPlan: CompositionPlan? = null
 )
 
 /** 导演任务向界面报告的当前执行阶段；仅描述真实运行中的一步，不保存历史。 */
@@ -57,6 +59,7 @@ object NoOpDirectorLogger : DirectorLogger {
 
 /** 渲染工具契约，可在测试中注入不依赖 GPU 的实现。 */
 fun interface PreviewInspector {
+    suspend fun photographyActions(input: DirectorInput): List<PhotographyActionCapability>? = null
     /** 渲染并返回可观察的投影信息。
      * @param plan 已通过基础校验的候选。
      * @param scene 冻结图片信息。
@@ -84,6 +87,24 @@ class DirectorAgent(
         inspector: PreviewInspector,
         onProgress: (DirectorProgress) -> Unit = {}
     ): CompositionResult {
+        if (input.photographyEnabled && settings.mode == ModelMode.OFFLINE) {
+            try {
+                return withLocalPhotographyDeadline { runSession(input, settings, providerFactory, inspector, onProgress) }
+            } catch (failure: ModelFailure) {
+                if (failure.code == "LOCAL_PHOTOGRAPHY_DEADLINE") logger.warn("离线摄影整轮达到时限 limitMs=$LOCAL_PHOTOGRAPHY_DEADLINE_MS image=${input.scene.id.take(8)}")
+                throw failure
+            }
+        }
+        return runSession(input, settings, providerFactory, inspector, onProgress)
+    }
+
+    private suspend fun runSession(
+        input: DirectorInput,
+        settings: ModelSettings,
+        providerFactory: (ProviderId) -> VisionModelProvider,
+        inspector: PreviewInspector,
+        onProgress: (DirectorProgress) -> Unit
+    ): CompositionResult {
         logger.info("开始导演任务 image=${input.scene.id.take(8)} mode=${settings.mode} region=${settings.region} existing=${input.existing.size}")
         val traces = mutableListOf<CallTrace>()
         val observations = mutableListOf<ToolObservation>()
@@ -91,10 +112,24 @@ class DirectorAgent(
         val failedProviders = mutableSetOf<ProviderId>()
         var lastRaw: String? = null
         var localAttempted = false
+        var localPhotography = false
+        val sessionId = newVlmId().take(8)
+        var activeRequest = "none"
+        var diagnosticPhase = "CAPABILITIES"
+        var validationFailure: Throwable? = null
+        fun context() = "session=$sessionId image=${input.scene.id.take(8)} request=$activeRequest phase=$diagnosticPhase"
+        logger.info("PHOTO_DIAG ${context()} start mode=${settings.mode} photography=${input.photographyEnabled} role=${input.avatarId} expectedPlans=${if(input.selectedId == null) 3 else 1} scene=${input.scene.width}x${input.scene.height} zoom=${input.scene.currentZoom}")
         try {
+            val photographyInput = if(input.photographyEnabled) input.copy(photographyActions=inspector.photographyActions(input)) else input
+            logger.info("PHOTO_DIAG ${context()} availableActions=${PhotographyProtocol.actionIds(photographyInput)} capabilities=${photographyInput.photographyActions}")
             repeat(2) { turn ->
                 currentCoroutineContext().ensureActive()
-                if (localAttempted) throw ModelFailure("LOCAL_INVALID_OUTPUT", "", false)
+                if (localAttempted) {
+                    logger.warn("离线单次结果未通过校验，不启动第二次推理 image=${input.scene.id.take(8)} issues=${observations.lastOrNull()?.issues}")
+                    throw ModelFailure(if (localPhotography) "LOCAL_PHOTO_INVALID_OUTPUT" else "LOCAL_INVALID_OUTPUT", "", false).apply {
+                        validationFailure?.let { initCause(it) }
+                    }
+                }
                 onProgress(DirectorProgress.PreparingRequest)
                 var reply: StepReply? = null
                 var lastError: ModelFailure? = null
@@ -106,13 +141,27 @@ class DirectorAgent(
                     )
                     val start = System.nanoTime()
                     try {
-                        val prompt = DirectorPrompt.build(input, observations, lastRaw, turn == 1, offline = id == ProviderId.LOCAL)
+                        if (photographyInput.photographyEnabled && PhotographyProtocol.actionIds(photographyInput).isEmpty()) throw ModelFailure("PHOTO_ACTION_UNAVAILABLE", "", false)
+                        val prompt = DirectorPrompt.build(photographyInput, observations, lastRaw, turn == 1, offline = id == ProviderId.LOCAL)
+                        activeRequest = newVlmId()
+                        diagnosticPhase = "MODEL_INPUT"
+                        logger.info("PHOTO_DIAG ${context()} provider=$id turn=${turn+1} promptChars=${prompt.length} promptBytes=${prompt.toByteArray(Charsets.UTF_8).size}")
+                        if (id == ProviderId.LOCAL && input.photographyEnabled) logger.payload(context(), "PROMPT", prompt)
                         logger.info("调用模型 turn=${turn + 1} provider=$id fallback=$switchingProvider")
-                        if (id == ProviderId.LOCAL) localAttempted = true
-                        val answer = providerFactory(id).step(ModelCall(input, prompt, newVlmId(),
-                            if (PhotoReferenceDecisionPolicy.enabled(input)) DirectorPrompt.build(input.copy(photoReferences = false), observations, lastRaw, turn == 1, offline = id == ProviderId.LOCAL) else null))
+                        if (id == ProviderId.LOCAL) {
+                            localAttempted = true
+                            logger.info("离线构图单次调用 image=${input.scene.id.take(8)} maxCalls=1 deadlineMs=$LOCAL_PHOTOGRAPHY_DEADLINE_MS")
+                        }
+                        diagnosticPhase = "MODEL_INFERENCE"
+                        val answer = providerFactory(id).step(ModelCall(photographyInput, prompt, activeRequest,
+                            if (input.photographyEnabled || PhotoReferenceDecisionPolicy.enabled(input)) DirectorPrompt.build(input.copy(photoReferences = false,photographyEnabled=false), observations, lastRaw, turn == 1, offline = id == ProviderId.LOCAL) else null,
+                            if (input.photographyEnabled) DirectorPrompt.build(input.copy(photographyEnabled=false),observations,lastRaw,turn == 1) else null))
+                        validationFailure = null
                         traces += CallTrace(id, answer.model, (System.nanoTime() - start) / 1_000_000, "决策 ${turn + 1}")
                         logger.info("模型返回 turn=${turn + 1} provider=$id model=${answer.model} elapsedMs=${traces.last().elapsedMs} outputBytes=${answer.raw.toByteArray().size}")
+                        diagnosticPhase = "MODEL_OUTPUT"
+                        logger.info("PHOTO_DIAG ${context()} model=${answer.model} photographyProtocol=${answer.photographyProtocol} outputChars=${answer.raw.length} elapsedMs=${traces.last().elapsedMs}")
+                        if (id == ProviderId.LOCAL && input.photographyEnabled) logger.payload(context(), "RAW", answer.raw)
                         reply = answer
                         break
                     } catch (cancelled: CancellationException) {
@@ -134,8 +183,30 @@ class DirectorAgent(
                 }
                 onProgress(DirectorProgress.ValidatingResponse(turn + 1))
                 val localReply = traces.last().provider == ProviderId.LOCAL
+                localPhotography = localReply && answer.photographyProtocol
                 val photoProtocol = PhotoReferenceDecisionPolicy.enabled(input) && (localReply || answer.photoProtocol)
-                val decision = if (photoProtocol) {
+                val decision = if(answer.photographyProtocol) {
+                    val plans = try {
+                        val expanded = if (localReply) OfflinePhotographyProtocol.expand(answer.raw, photographyInput) { phase, detail ->
+                            diagnosticPhase = phase
+                            if (phase in listOf("NORMALIZED_JSON", "EXPANDED_V3")) logger.payload(context(), phase, detail)
+                            else logger.info("PHOTO_DIAG ${context()} $detail")
+                        } else answer.raw
+                        diagnosticPhase = "PHOTOGRAPHY_VALIDATE"
+                        PhotographyProtocol.decode(expanded, photographyInput, allowLayoutFallback=!localReply && turn == 1)
+                    }
+                    catch(failure: IllegalArgumentException) {
+                        validationFailure = failure
+                        logger.warn("PHOTO_DIAG ${context()} failureType=${failure::class.java.simpleName} reason=${VlmJson.encodeToString(failure.message.orEmpty().take(1000))}")
+                        logger.warn("摄影决策校验失败 turn=${turn+1} reason=${failure.message}")
+                        logger.diagnostic { "摄影格式诊断 turn=${turn+1} local=$localReply chars=${answer.raw.length} prefix=${VlmJson.encodeToString(answer.raw.take(160))} suffix=${VlmJson.encodeToString(answer.raw.takeLast(160))}" }
+                        observations += ToolObservation("validate_photography",listOf(failure.message.orEmpty()),
+                            listOf(ToolIssue("PHOTOGRAPHY_INVALID",failure.message.orEmpty())))
+                        return@repeat
+                    }
+                    logger.info("摄影决策接入 version=3 plans=${plans.joinToString { "${it.id}:crop=${it.crop},head=${it.photography?.head},foot=${it.photography?.foot},fallback=${it.photography?.layoutFallback}" }}")
+                    DirectorDecision(ActionKind.FINAL,plans,imageId=input.scene.id)
+                } else if (photoProtocol) {
                     val plans = try { PhotoReferenceDecisionPolicy.decode(answer.raw, input, localReply) }
                     catch (failure: IllegalArgumentException) {
                         observations += ToolObservation("validate_photo_reference", listOf(failure.message.orEmpty()),
@@ -188,35 +259,64 @@ class DirectorAgent(
                 // 人像身份只来自拍摄前的用户选择，映射器不会接受或推断模型指定的角色。
                 DirectorDecision(intentDecision.action, mapped.plans, intentDecision.version, intentDecision.imageId)
                 }
+                diagnosticPhase = "PLAN_VALIDATE"
                 val errors = validator.validate(decision.plans, input)
+                logger.info("PHOTO_DIAG ${context()} plans=${decision.plans.size} errors=${VlmJson.encodeToString(errors)}")
                 logger.info("校验模型输出 turn=${turn + 1} action=${decision.action} plans=${decision.plans.size} errors=${errors.size}")
                 if (errors.isNotEmpty()) logger.warn("模型输出校验详情 turn=${turn + 1} errors=${errors.joinToString("；")}")
                 observations += ToolObservation("validate_plan", errors.ifEmpty { listOf("基础协议和几何约束通过") }, errors.map { ToolIssue("INVALID_PLAN", it) })
                 if (errors.isNotEmpty()) return@repeat
                 val inspections = try {
                     decision.plans.mapIndexed { index, plan ->
+                        if (input.selectedId != null && plan.id != input.selectedId)
+                            return@mapIndexed plan.id to PreviewInspection(appliedPlan = plan)
                         onProgress(DirectorProgress.InspectingProjection(index + 1, decision.plans.size))
+                        diagnosticPhase = "RENDER_${plan.id}"
+                        logger.info("PHOTO_DIAG ${context()} start revision=${plan.revision} action=${plan.resolvedSpec?.action?.id} foot=${plan.avatar.foot} height=${plan.avatar.height}")
                         logger.debug("检查人偶投影 turn=${turn + 1} plan=${plan.id} index=${index + 1}/${decision.plans.size}")
-                        plan.id to inspector.inspect(plan, input.scene)
+                        plan.id to inspector.inspect(plan, input.scene).also {
+                            logger.info("PHOTO_DIAG ${context()} complete bounds=${it.bounds} errors=${VlmJson.encodeToString(it.errors)} actualFoot=${it.appliedPlan?.avatar?.foot ?: it.appliedAvatar?.foot} actualHeight=${it.appliedPlan?.avatar?.height ?: it.appliedAvatar?.height}")
+                        }
                     }.toMap()
                 } catch (cancel: CancellationException) { throw cancel }
                 catch (failure: Exception) { throw ModelFailure("RENDER_FAILED", "人偶预览失败：${failure.message.orEmpty().take(180)}", false) }
                 val issues = inspections.flatMap { (id, value) -> value.errors.map { ToolIssue("PROJECTION_OUT_OF_FRAME", it, id) } }
                 observations += ToolObservation("render_preview", inspections.flatMap { (id, value) -> value.messages.map { "$id: $it" } }, issues,
                     inspections.mapNotNull { (id, value) -> value.bounds?.let { id to it } }.toMap())
-                if (issues.isNotEmpty()) return@repeat
+                if (issues.isNotEmpty()) {
+                    logger.warn("人偶投影校验失败 turn=${turn + 1} issues=${issues.joinToString { "${it.planId}: ${it.message}" }}")
+                    return@repeat
+                }
+                val mismatchedPlans = decision.plans.filter { plan ->
+                    inspections[plan.id]?.appliedPlan?.let { actual ->
+                        actual.id != plan.id || actual.revision != plan.revision || actual.viewBinding != plan.viewBinding
+                    } == true
+                }
+                if (mismatchedPlans.isNotEmpty()) {
+                    val errors = mismatchedPlans.map { "${it.id}: RENDER_SOURCE_MISMATCH" }
+                    logger.warn("渲染来源校验失败 turn=${turn + 1} errors=${errors.joinToString("；")}")
+                    observations += ToolObservation("validate_rendered_plan", errors, errors.map { ToolIssue("INVALID_RENDERED_PLAN", it) })
+                    return@repeat
+                }
                 val resolved = decision.plans.map { plan ->
-                    plan.withActualAvatar(inspections[plan.id]?.appliedAvatar ?: plan.avatar).let {
-                        it.copy(resolvedSpec = inspections[plan.id]?.appliedSpec ?: it.resolvedSpec)
+                    // 修改仅影响选中方案；完整回传避免最终规格与尺度/裁切字段脱节。
+                    if (input.selectedId != null && plan.id != input.selectedId) return@map plan
+                    val inspection = inspections[plan.id]
+                    inspection?.appliedPlan ?: plan.withActualAvatar(inspection?.appliedAvatar ?: plan.avatar).let {
+                        it.copy(resolvedSpec = inspection?.appliedSpec ?: it.resolvedSpec)
                     }
                 }
                 // 渲染调整后仍须通过同一业务校验，修改任务仍只能改变选中方案。
+                diagnosticPhase = "RESOLVED_VALIDATE"
                 val resolvedErrors = validator.validate(resolved, input)
+                logger.info("PHOTO_DIAG ${context()} errors=${VlmJson.encodeToString(resolvedErrors)}")
                 if (resolved.any { it.avatar.avatarId != input.avatarId }) {
+                    logger.warn("渲染角色校验失败 turn=${turn + 1} expected=${input.avatarId}")
                     observations += ToolObservation("validate_rendered_plan", emptyList(), issues = listOf(ToolIssue("AVATAR_ID_CHANGED", "AVATAR_ID_CHANGED")))
                     return@repeat
                 }
                 if (resolvedErrors.isNotEmpty()) {
+                    logger.warn("渲染方案校验失败 turn=${turn + 1} errors=${resolvedErrors.joinToString("；")}")
                     observations += ToolObservation("validate_rendered_plan", resolvedErrors, resolvedErrors.map { ToolIssue("INVALID_RENDERED_PLAN", it) })
                     return@repeat
                 }
@@ -226,13 +326,19 @@ class DirectorAgent(
                         if (plan.id == input.selectedId && old != null) plan.withRevision(old.revision + 1) else plan
                     }
                     logger.info("导演任务完成 image=${input.scene.id.take(8)} turns=${turn + 1} plans=${revised.size}")
-                    return CompositionResult(revised, traces, observations, outputs)
+                    logger.info("PHOTO_DIAG ${context()} result=SUCCESS plans=${revised.size}")
+                    return CompositionResult(revised, traces, observations, outputs,
+                        photographyProtocolVersion=if(answer.photographyProtocol) 3 else if(photoProtocol) 2 else 1)
                 }
             }
-            if (localAttempted) throw ModelFailure("LOCAL_INVALID_OUTPUT", "", false)
+            if (localAttempted) throw ModelFailure(if(localPhotography) "LOCAL_PHOTO_INVALID_OUTPUT" else "LOCAL_INVALID_OUTPUT", "", false)
             throw ModelFailure("INVALID_OUTPUT", "导演在两轮内未提交有效最终方案，请修改要求或更换模型后重试", false)
         } catch (failure: ModelFailure) {
-            logger.error("导演任务失败 image=${input.scene.id.take(8)} code=${failure.code} retryable=${failure.retryable}", failure)
+            val failedCheck = if (failure.code.endsWith("INVALID_OUTPUT")) observations.lastOrNull { it.issues.isNotEmpty() } else null
+            val reasons = failedCheck?.issues?.joinToString("; ") { "${it.planId.orEmpty()}:${it.code}:${it.message}" }
+                ?: validationFailure?.message ?: failure.message.orEmpty()
+            logger.error("导演任务失败 ${context()} code=${failure.code} retryable=${failure.retryable} failedCheck=${failedCheck?.tool} reason=${VlmJson.encodeToString(reasons.take(1000))}", failure)
+            logger.payload(context(), "FAILURE_DETAILS", reasons)
             failure.diagnostics = CompositionResult(emptyList(), traces.toList(), observations.toList(), outputs.toList())
             throw failure
         }

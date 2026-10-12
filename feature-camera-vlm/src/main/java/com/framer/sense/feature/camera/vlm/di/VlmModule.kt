@@ -38,8 +38,12 @@ object VlmModule {
             override fun error(message: String, error: Throwable?) { Log.e("VlmDirector", message, error) }
             override fun diagnostic(message: () -> String) {
                 if (BuildConfig.DEBUG) {
-                    val parts = message().chunked(800)
-                    parts.forEachIndexed { index, part -> Log.d("VlmDirector", "解析诊断 part=${index + 1}/${parts.size} $part") }
+                    val full = message()
+                    val rawStart = full.indexOf(" raw=")
+                    val context = if (rawStart >= 0) full.substring(0, rawStart) else ""
+                    val body = if (rawStart >= 0) full.substring(rawStart + 5) else full
+                    val parts = body.chunked(600)
+                    parts.forEachIndexed { index, part -> Log.i("VlmPhotoDiag", "$context part=${index + 1}/${parts.size} raw=$part") }
                 }
             }
         })

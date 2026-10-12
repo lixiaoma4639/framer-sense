@@ -26,6 +26,22 @@ object PhotoReferenceDecisionPolicy {
         Combination(PhotoActionCatalog.LOOK_BACK_ID, ShotType.ENVIRONMENT, CompositionZone.RIGHT, ExpressionId.SMILE),
         Combination(PhotoActionCatalog.LOOK_BACK_ID, ShotType.HALF, CompositionZone.LEFT, ExpressionId.NEUTRAL)
     )
+    /** JNI 新版本返回全部合法编号排序；旧单编号保留明确标识的 App 备选。 */
+    fun ranking(raw: String): List<Int>? {
+        val text = DirectorOutput.unwrap(raw).trim()
+        if (!text.startsWith("RANK=")) return text.toIntOrNull()?.takeIf { it in 1..combinations.size }?.let(::listOf)
+        val parts = text.removePrefix("RANK=").split(',')
+        val order = parts.map { it.trim().toIntOrNull() ?: return null }
+        return order.takeIf { it.size == combinations.size && it.toSet() == (1..combinations.size).toSet() }
+    }
+    private fun legacyOrder(primary: Int): List<Int> {
+        val selected = combinations[primary-1]
+        return listOf(primary)+combinations.indices.filter { it != primary-1 }.sortedByDescending { i ->
+            val c=combinations[i]
+            (if (c.shot != selected.shot) 4 else 0)+(if (c.zone != selected.zone) 2 else 0)+
+                (if (c.actionId != selected.actionId) 1 else 0)
+        }.map { it+1 }
+    }
     fun enabled(input: DirectorInput) = input.photoReferences && input.avatarId == AvatarId.ADULT_FEMALE
 
     fun prompt(input: DirectorInput, offline: Boolean): String {
@@ -66,11 +82,11 @@ object PhotoReferenceDecisionPolicy {
 
     fun decode(raw: String, input: DirectorInput, offline: Boolean): List<CompositionPlan> {
         val decision = if (offline) {
-            val number = DirectorOutput.unwrap(raw).trim().toIntOrNull()
-            require(number != null && number in 1..combinations.size) { "PHOTO_COMBINATION_INVALID" }
-            val order = listOf(number - 1) + combinations.indices.filter { it != number - 1 }.take(2)
+            val ranked = ranking(raw)
+            require(ranked != null) { "PHOTO_COMBINATION_INVALID" }
+            val order = if (ranked.size == 1) legacyOrder(ranked.first()) else ranked
             PhotoReferenceDecision(imageId = input.scene.id, intents = order.take(if (input.selectedId == null) 3 else 1)
-                .mapIndexed { index, candidate -> combinations[candidate].let { c ->
+                .mapIndexed { index, candidate -> combinations[candidate-1].let { c ->
                     PhotoReferenceIntent(input.selectedId ?: "p${index + 1}", "", c.shot, c.zone, c.actionId,
                         c.expression, 1f, 0f, "", input.backgroundRegions, emptyList())
                 } })
@@ -97,7 +113,8 @@ object PhotoReferenceDecisionPolicy {
                 ethnicity = input.ethnicity, yaw = reference.yaw), viewBinding = input.viewBinding,
                 backgroundKeepRegions = (input.backgroundRegions + reference.backgroundKeepRegions).distinct(),
                 localCombination = if (offline) combinations.indexOfFirst { it.actionId == reference.actionId && it.shot == reference.shot && it.zone == reference.zone && it.expression == reference.expression } + 1 else null,
-                localAlternative = offline && index > 0)
+                localAlternative = offline && index > 0,
+                localRanked = offline && ranking(raw)?.size == combinations.size)
             // 保护区域被候选裁剪严重截断时保留完整背景，以景别的人物比例执行。
             val safe = if (base.backgroundKeepRegions.any { r ->
                 val area = (r.right-r.left)*(r.bottom-r.top)

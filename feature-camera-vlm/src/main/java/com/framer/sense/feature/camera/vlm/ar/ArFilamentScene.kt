@@ -36,6 +36,7 @@ internal class ArFilamentScene(private val context: Context, egl: ArEglContext, 
     private var asset: FilamentAsset? = null
     private var assetKey: String? = null
     private var planKey: String? = null
+    private var placement: ResolvedSpatialPlacement? = null
     private var base = emptyMap<Int, FloatArray>()
     private var rootBase = FloatArray(16)
     private var metadata: AvatarAssetMetadata? = null
@@ -43,6 +44,7 @@ internal class ArFilamentScene(private val context: Context, egl: ArEglContext, 
     private var center = FloatArray(3)
     private val backgroundUv: VertexBuffer
     private var backgroundUvValues: FloatArray? = null
+    private var backgroundCrop: CropRect? = null
     private var depthEntity: Int? = null
     private var depthVertices: VertexBuffer? = null
     private var depthIndices: IndexBuffer? = null
@@ -155,6 +157,7 @@ internal class ArFilamentScene(private val context: Context, egl: ArEglContext, 
         backgroundUvValues = null
     }
     fun load(plan: CompositionPlan) {
+        placement = plan.spatialPlacement
         val action = requireNotNull(plan.resolvedSpec).action
         val key = action.avatarAssetPath + ":" + action.avatarAssetVersion
         if (key != assetKey) {
@@ -219,20 +222,22 @@ internal class ArFilamentScene(private val context: Context, egl: ArEglContext, 
             Log.i("VlmArRender", "空间人像已隐藏 plan=$planKey")
         }
     }
-    fun render(frame: Frame, model: FloatArray?, depthEnabled: Boolean): Boolean {
+    fun render(frame: Frame, model: FloatArray?, depthEnabled: Boolean, crop: CropRect = CropRect()): Boolean {
         val started = SystemClock.elapsedRealtimeNanos()
         // UV 只随显示几何变化，不逐帧重复上传同一份顶点数据。
-        if (backgroundUvValues == null || frame.hasDisplayGeometryChanged()) {
+        if (backgroundUvValues == null || backgroundCrop != crop || frame.hasDisplayGeometryChanged()) {
             val coordinates = FloatArray(8)
             frame.transformCoordinates2d(Coordinates2d.OPENGL_NORMALIZED_DEVICE_COORDINATES,
-                floatArrayOf(-1f,-1f, 1f,-1f, -1f,1f, 1f,1f), Coordinates2d.TEXTURE_NORMALIZED, coordinates)
+                floatArrayOf(crop.left*2f-1f,1f-crop.bottom*2f, crop.right*2f-1f,1f-crop.bottom*2f,
+                    crop.left*2f-1f,1f-crop.top*2f, crop.right*2f-1f,1f-crop.top*2f), Coordinates2d.TEXTURE_NORMALIZED, coordinates)
             backgroundUv.setBufferAt(engine, 1, bytes(coordinates))
-            backgroundUvValues = coordinates
-            Log.i("VlmArRender", "相机纹理映射 size=${width}x$height uv=${coordinates.joinToString()} flipUV=false blend=OPAQUE")
+            backgroundUvValues = coordinates; backgroundCrop = crop
+            Log.i("VlmArRender", "相机纹理映射 size=${width}x$height crop=$crop uv=${coordinates.joinToString()} flipUV=false blend=OPAQUE")
         }
         val uv = requireNotNull(backgroundUvValues)
         val projection = FloatArray(16); frame.camera.getProjectionMatrix(projection, 0, ArGeometry.NEAR, ArGeometry.FAR)
-        camera.setCustomProjection(DoubleArray(16) { projection[it].toDouble() }, ArGeometry.NEAR.toDouble(), ArGeometry.FAR.toDouble())
+        val croppedProjection = SpatialMatrices.cropProjection(projection.toList(),crop)
+        camera.setCustomProjection(croppedProjection.map(Float::toDouble).toDoubleArray(), ArGeometry.NEAR.toDouble(), ArGeometry.FAR.toDouble())
         val cameraModel = FloatArray(16); frame.camera.displayOrientedPose.toMatrix(cameraModel, 0); camera.setModelMatrix(cameraModel)
         val light = frame.lightEstimate
         if (light.state == LightEstimate.State.VALID) {
@@ -247,14 +252,21 @@ internal class ArFilamentScene(private val context: Context, egl: ArEglContext, 
         val depthTime = SystemClock.elapsedRealtimeNanos()-depthStart
         if (!depthActive) depthEntity?.let(scene::removeEntity)
         if (model == null) hide() else asset?.let { loaded ->
-            val final = model.copyOf(); Matrix.scaleM(final, 0, ArGeometry.CHARACTER_HEIGHT / extent[1].coerceAtLeast(.1f), ArGeometry.CHARACTER_HEIGHT / extent[1].coerceAtLeast(.1f), ArGeometry.CHARACTER_HEIGHT / extent[1].coerceAtLeast(.1f))
-            Matrix.translateM(final, 0, -center[0], -(center[1] - extent[1] / 2f), -center[2])
+            val spatial = requireNotNull(placement) { "AR_SCALE_NOT_CALIBRATED" }
+            val scale = spatial.heightMeters / spatial.metadata.referenceHeight
+            val foot = spatial.metadata.foot
+            val final = model.copyOf(); Matrix.scaleM(final, 0, scale, scale, scale)
+            Matrix.translateM(final, 0, -foot.x, -foot.y, -foot.z)
             val root = FloatArray(16); Matrix.multiplyMM(root, 0, final, 0, rootBase, 0)
             val tm = engine.transformManager; tm.setTransform(tm.getInstance(loaded.root), root)
             loaded.instance.animator.updateBoneMatrices()
             val shadow = model.copyOf(); shadow[13] += .004f
             tm.setTransform(tm.getInstance(shadowEntity), shadow)
-            if (!shown) { scene.addEntities(loaded.entities); scene.addEntity(shadowEntity); shown = true }
+            if (!shown) {
+                scene.addEntities(loaded.entities)
+                if (placement?.estimated != true) scene.addEntity(shadowEntity)
+                shown = true
+            }
         }
         val submitStart = SystemClock.elapsedRealtimeNanos()
         var submitted = false

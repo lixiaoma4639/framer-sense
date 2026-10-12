@@ -45,6 +45,7 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.window.Dialog
 import androidx.core.content.ContextCompat
 import androidx.core.view.doOnLayout
@@ -161,7 +162,9 @@ fun VlmCameraScreen(
                 } catch (cancel: CancellationException) { throw cancel }
                 catch (e: Exception) { onEvent(VlmIntent.PlatformFailed(effect.token, e.message ?: "无法冻结画面")) }
                 is VlmEffect.Capture -> try {
-                    controller.capturePhoto(viewModel.state.value.zoom)
+                    val current=viewModel.state.value
+                    val crop=current.referencePlan?.photographyDisplayCrop(current.background.status != BackgroundStatus.SEARCHING) ?: CropRect()
+                    controller.capturePhoto(current.zoom,crop)
                     onEvent(VlmIntent.CaptureFinished(effect.token))
                 } catch (cancel: CancellationException) { throw cancel }
                 catch (e: Exception) { onEvent(VlmIntent.CaptureFinished(effect.token, e.message ?: "保存失败")) }
@@ -275,12 +278,24 @@ private fun CameraPane(state: VlmUiState, controller: VlmCameraController, permi
                 if (permission && state.cameraMode == CameraMode.AR && state.ar.source == com.framer.sense.feature.camera.vlm.ar.ArSource.SHARED_CAMERA)
                     key(state.cameraEpoch) { ArCameraSurface(controller, state, onEvent, Modifier.fillMaxSize()) }
                 if (live) {
-                    if (permission && state.cameraMode == CameraMode.NORMAL) CameraSurface(controller, state, onEvent, Modifier.fillMaxSize())
+                    if (permission && state.cameraMode == CameraMode.NORMAL) {
+                        val crop=state.referencePlan?.photographyDisplayCrop(state.background.status != BackgroundStatus.SEARCHING) ?: CropRect()
+                        CameraSurface(controller,state,onEvent,Modifier.fillMaxSize().graphicsLayer {
+                            scaleX=1f/(crop.right-crop.left); scaleY=1f/(crop.bottom-crop.top)
+                            translationX=(.5f-(crop.left+crop.right)/2f)*size.width*scaleX
+                            translationY=(.5f-(crop.top+crop.bottom)/2f)*size.height*scaleY
+                        })
+                    }
                     else if (!permission) Button(onClick = requestPermission, modifier = Modifier.align(Alignment.Center)) { Text(stringResource(R.string.vlm_camera_permission)) }
                     if (state.referencePlan?.viewBinding != null && state.background.status == BackgroundStatus.SEARCHING) {
                         BackgroundReference(state, Modifier.fillMaxSize())
                     }
                     LiveReferenceAvatar(state, Modifier.fillMaxSize())
+                } else if (state.needsGroundObservation) {
+                    Text(stringResource(R.string.vlm_scale_find_ground), color = Color.White,
+                        modifier = Modifier.align(Alignment.TopCenter).padding(12.dp)
+                            .background(Color.Black.copy(alpha = .65f)).padding(10.dp)
+                            .testTag("vlm_ground_observation_hint"))
                 } else if (scene != null) {
                     val preview = selected?.let { state.previews[it.id] }
                     if (preview != null) {
@@ -430,7 +445,7 @@ internal fun CompositionDescriptions(result: CompositionResult, selectedId: Stri
     Text(stringResource(R.string.vlm_composition_recommendations), style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold, color = Color(0xFF111111))
     val fallback = plan.title.isBlank() || plan.localCombination != null || plan.uncertainties.contains(CompositionIntentMapper.SCENE_FALLBACK_MARKER)
     val title = if (fallback) stringResource(R.string.vlm_composition_plan_number, index + 1) else plan.title
-    val actual = stringResource(
+    val actual = if (!plan.hasRenderableScale()) stringResource(R.string.vlm_scale_unavailable) else stringResource(
         R.string.vlm_composition_attributes,
         shotLabel(plan.shot), placementZoneLabel(plan.avatar.foot.x), planFacingLabel(plan)
     )
@@ -492,9 +507,13 @@ internal fun compositionGuidanceText(plan: CompositionPlan): String {
     val pose = stringResource(R.string.vlm_guidance_pose, facingLabel(plan.avatar.yaw), bodyLabel(guide.directive.body), resolvedArmLabel(guide), headLabel(guide.directive.head), stanceLabel(guide.directive.stance), expressionLabel(guide.expression))
     val steps = plan.resolvedSpec?.action?.stepResources.orEmpty().map { stringResource(it) }
     // 完整姿态含动作自身的朝向；avatar.yaw 是追加布局旋转，不能冒充最终身体朝向。
-    val parts = if (steps.isNotEmpty()) listOf(camera, placement) + steps +
+    val cameraSteps = (if (plan.hasRenderableScale()) listOf(camera,placement) else listOf(stringResource(R.string.vlm_scale_guidance_pending))) +
+        (if (plan.scaleEstimate != null) listOf(stringResource(R.string.vlm_scale_estimated_guidance)) else emptyList()) + if (plan.hasMeasuredScale()) listOf(stringResource(R.string.vlm_ar_scale_framing_guidance)) else emptyList()
+    val modelSteps=if(plan.photography?.guidanceCurrent == true && plan.photography.layoutFallback == false) listOf(plan.guidance) else emptyList()
+    val cropSteps=if(plan.photography != null && plan.crop != CropRect()) listOf(stringResource(R.string.vlm_photography_crop_guidance,plan.photography.cropReason)) else emptyList()
+    val parts = if (steps.isNotEmpty()) modelSteps + cropSteps + cameraSteps + steps +
         stringResource(R.string.vlm_photo_pose_expression, expressionLabel(guide.expression))
-    else listOf(camera, placement, pose)
+    else modelSteps + cropSteps + cameraSteps + pose
     return parts.joinToString("\n") { it.replace(Regex("""[;；]\s*|\s+[·•]\s+"""), "\n") }
 }
 
@@ -517,8 +536,8 @@ internal fun LiveReferenceAvatar(state: VlmUiState, modifier: Modifier) {
     Box(modifier) {
         Image(preview.avatar.asImageBitmap(), stringResource(R.string.vlm_reference_avatar),
             Modifier.fillMaxSize().testTag("vlm_live_reference_avatar"), contentScale = ContentScale.Fit, alpha = .65f)
-        if (state.ar.source == com.framer.sense.feature.camera.vlm.ar.ArSource.SHARED_CAMERA) {
-            Text(stringResource(R.string.vlm_screen_reference_short),
+        if (plan.scaleEstimate != null || state.ar.source == com.framer.sense.feature.camera.vlm.ar.ArSource.SHARED_CAMERA) {
+            Text(stringResource(if (plan.scaleEstimate != null) R.string.vlm_scale_estimated_short else R.string.vlm_screen_reference_short),
                 color = Color.White, style = MaterialTheme.typography.labelMedium,
                 modifier = Modifier.align(Alignment.TopCenter).background(Color.Black.copy(alpha = .65f))
                     .padding(6.dp).testTag("vlm_ar_screen_reference"))
@@ -534,7 +553,7 @@ private fun BackgroundReference(state: VlmUiState, modifier: Modifier) {
         value = withContext(Dispatchers.IO) {
             val options = BitmapFactory.Options().apply { inSampleSize = 2 }
             BitmapFactory.decodeFile(scene.imagePath, options)?.let { original ->
-                val r = plan.crop
+                val r = if(plan.photography != null && state.background.status == BackgroundStatus.SEARCHING) CropRect() else plan.crop
                 val x = (r.left * original.width).toInt(); val y = (r.top * original.height).toInt()
                 val clipped = Bitmap.createBitmap(original, x, y,
                     ((r.right - r.left) * original.width).toInt().coerceIn(1, original.width - x),

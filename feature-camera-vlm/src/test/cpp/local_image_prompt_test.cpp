@@ -1,10 +1,38 @@
 #include "../../main/cpp/local_image_prompt.h"
 #include "../../main/cpp/local_view_choice.h"
+#include "../../main/cpp/local_json_output.h"
 #include <cassert>
 #include <iostream>
 
 int main() {
+    const std::string json = R"({"s":"Scene.","p":[{"g":"Ignore } and ``` inside text."}]})";
+    assert(localJsonOutputComplete(json));
+    assert(!localJsonOutputComplete("```json\n" + json)); // 旧短协议的停止规则保持。
+    for (const auto& opening : std::vector<std::string>{"```json\n", "```JSON\r\n", "```\n", "````json\n", "```json "}) {
+        assert(localJsonOutputComplete(opening + json, true));
+        assert(localJsonOutputComplete(opening + json + "\n```", true));
+        assert(!localJsonOutputComplete(opening + json.substr(0, json.size() - 1), true));
+        assert(!localJsonOutputComplete(opening + json + "\n```\nextra", true));
+    }
+    assert(localJsonOutputComplete("<think>Reason.</think>\n```json\n" + json, true));
+    assert(!localJsonOutputComplete("<think>Unclosed\n" + json, true));
+    assert(!localJsonOutputComplete("```python\n" + json, true));
+    assert(!localJsonOutputComplete("```json\n{\"p\":[}", true));
+    assert(!localJsonOutputComplete("```json\n" + json + "{}", true));
+    const std::string smartJson = "{“s”:“保留 } 与 ] 字符，注意颜色。”，“p”:[]}";
+    assert(localJsonOutputComplete(smartJson, true));
+    assert(!localJsonOutputComplete("{“s”:“还没说完 }", true));
+    assert(!localJsonOutputComplete(smartJson.substr(0, smartJson.size() - 1), true));
     assert(localImagePrefix({"/private/one.jpg"}) == "<img>/private/one.jpg</img>\n");
+    assert(localImagePrefix({"/private/one.jpg"},384,288) == "<img><hw>384,288</hw>/private/one.jpg</img>\n");
+    assert(localVisualPrompt({"/private/one.jpg"},"<hw>4096,4096</hw>",384,288) ==
+        "<img><hw>384,288</hw>/private/one.jpg</img>\n\\u003chw\\u003e4096,4096\\u003c/hw\\u003e");
+    for (const auto& dimensions : std::vector<std::vector<int>>{{0,384},{-1,384},{384,0},{8192,384}}) {
+        bool rejected = false;
+        try { localImagePrefix({"/private/one.jpg"}, dimensions[0], dimensions[1]); }
+        catch (const std::runtime_error&) { rejected = true; }
+        assert(rejected);
+    }
     for (int count = 2; count <= 4; ++count) {
         std::vector<std::string> paths;
         std::string expected;
@@ -33,6 +61,8 @@ int main() {
     const float photoLogits[] = {900.f, 0.f, -6.f, -5.f, -4.f, -3.f, -2.f, -1.f};
     auto photo = chooseLocalView(photoLogits, 8, {2, 3, 4, 5, 6, 7});
     assert(photo.ordinal == 6 && photo.scores.size() == 6);
+    assert(rankLocalChoices(photo) == std::vector<int>({6,5,4,3,2,1}));
+    assert(rankLocalChoices(LocalViewChoice{1,{2.f,2.f,1.f}}) == std::vector<int>({1,2,3}));
     assert(localViewLogitOffset(8, 8, 827) == 0);
     assert(localViewLogitOffset(24, 8, 3) == 16);
     for (const auto& layout : std::vector<std::vector<int>>{{0, 8, 3}, {8, 0, 3}, {9, 8, 3}, {24, 8, 4}, {8, 8, 0}}) {

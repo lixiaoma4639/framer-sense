@@ -8,6 +8,8 @@ import androidx.test.platform.app.InstrumentationRegistry
 import com.framer.sense.feature.camera.vlm.agent.CompositionRepository
 import com.framer.sense.feature.camera.vlm.agent.DirectorProgress
 import com.framer.sense.feature.camera.vlm.avatar.*
+import com.framer.sense.feature.camera.vlm.ar.*
+import com.framer.sense.feature.camera.vlm.R
 import com.framer.sense.feature.camera.vlm.camera.SnapshotStore
 import com.framer.sense.feature.camera.vlm.data.*
 import com.framer.sense.feature.camera.vlm.model.*
@@ -49,6 +51,29 @@ class VlmSessionTest {
                 vm.onIntent(VlmIntent.AspectRatioSelected(CaptureAspectRatio.NINE_SIXTEEN))
                 assertEquals(CaptureAspectRatio.NINE_SIXTEEN, vm.state.value.photoPreferences.aspectRatio)
                 assertFalse(vm.state.value.cameraReady)
+            } finally { vm.onLeave() }
+        }
+    }
+
+    @Test fun arFailurePreservesReasonAndOldFailureCannotDisableRetry() = runBlocking {
+        withContext(Dispatchers.Main) {
+            val vm = viewModel()
+            try {
+                vm.onIntent(VlmIntent.CameraModeSelected(CameraMode.AR))
+                val failedEpoch = vm.state.value.cameraEpoch
+                val failure = ArUiState(ArSource.SCREEN, ArTrackingState.UNSUPPORTED,
+                    failure = ArFailure.SERVICE_OUTDATED, failurePhase = "INSTALL")
+                vm.onIntent(VlmIntent.ArUpdated(failure, failedEpoch))
+                assertEquals(CameraMode.NORMAL, vm.state.value.cameraMode)
+                assertEquals(failure, vm.state.value.ar)
+                assertEquals(InstrumentationRegistry.getInstrumentation().targetContext
+                    .getString(R.string.vlm_ar_service_outdated), vm.state.value.error)
+                vm.onIntent(VlmIntent.CameraModeSelected(CameraMode.AR))
+                val retryEpoch = vm.state.value.cameraEpoch
+                vm.onIntent(VlmIntent.ArUpdated(failure, failedEpoch))
+                assertEquals(CameraMode.AR, vm.state.value.cameraMode)
+                assertEquals(retryEpoch, vm.state.value.cameraEpoch)
+                assertNull(vm.state.value.ar.failure)
             } finally { vm.onLeave() }
         }
     }

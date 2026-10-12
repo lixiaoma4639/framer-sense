@@ -34,7 +34,9 @@ class ArSharedCameraController(private val context: Context,
     private val onState: (ArUiState) -> Unit,
     private val onConfigured: (Int) -> Unit,
     private val onReady: (CameraCapabilities) -> Unit,
-    private val onSample: (AnalysisSample) -> Unit) : AutoCloseable {
+    private val onSample: (AnalysisSample) -> Unit,
+    private val onGround: (ArGroundSnapshot) -> Unit = {},
+    private val onGroundPoint: (String, Int, ArGroundSnapshot, String, SpatialPoint) -> Unit = { _, _, _, _, _ -> }) : AutoCloseable {
     private val thread = HandlerThread("vlm-ar-shared").apply { start() }
     private val handler = Handler(thread.looper)
     private val main = Handler(Looper.getMainLooper())
@@ -62,17 +64,27 @@ class ArSharedCameraController(private val context: Context,
     private var disposed = false
     private var foreground = false
     private var fallback = false
+    private var startupFailure: ArUiState? = null
     private var sharedJpeg = true
     private var capturing = false
     private var depthSupported = false
     private var pendingPhoto: CancellableContinuation<ByteArray>? = null
     private var photoTimeout: Runnable? = null
     private var frame: Frame? = null
+    private var displayedCrop = CropRect()
     private var anchor: Anchor? = null
     private var heading = 0f
     private var manualAnchor = false
     private var planKey: String? = null
     private val placementRetry = ArPlacementRetry()
+    private val groundTracking = ArGroundTracking<Plane>()
+    private var groundSampleNs = 0L
+    private val groundDelivery = ArGroundDelivery()
+    private var groundDiagnostic: String? = null
+    private var lastTrackingProblem: String? = null
+    private var lastPointCloudFailure: String? = null
+    private var lastBackgroundRenderNs: Long? = null
+    private var lastRenderedDepth = false
     private var lastSampleNs = 0L
     private var sampleTarget: String? = null
     private var sampleBoundary = Long.MIN_VALUE
@@ -130,8 +142,19 @@ class ArSharedCameraController(private val context: Context,
         val current = frame ?: return@post
         val wanted = request
         val plan = wanted.plan ?: return@post
-        if (wanted.backgroundConfirmed && current.camera.trackingState == TrackingState.TRACKING)
-            place(current, x, y, true, plan)
+        if (wanted.backgroundConfirmed && current.camera.trackingState == TrackingState.TRACKING) {
+            val tap = PlanCoordinates.toOriginal(Point2(x/width.coerceAtLeast(1),y/height.coerceAtLeast(1)),displayedCrop)
+            val hit = current.hitTest(tap.x*width,tap.y*height).firstOrNull { value ->
+                val plane = value.trackable as? Plane
+                plane != null && plane.trackingState == TrackingState.TRACKING && plane.type == Plane.Type.HORIZONTAL_UPWARD_FACING &&
+                    plane.isPoseInPolygon(value.hitPose) && value.distance in ArScaleSolver.MIN_DISTANCE..ArScaleSolver.MAX_DISTANCE
+            } ?: return@post
+            val ground = groundSnapshot()
+            val plane = hit.trackable as Plane
+            val id = groundTracking.findId(plane) ?: return@post
+            val t = hit.hitPose.translation; val point = SpatialPoint(t[0],t[1],t[2])
+            main.post { if (!disposed && request.plan?.arReferenceKey() == plan.arReferenceKey()) onGroundPoint(plan.id,plan.revision,ground,id,point) }
+        }
     } }
     private fun configured() { configVersion = com.framer.sense.feature.camera.vlm.camera.CameraConfigVersions.next(); val v = configVersion; main.post { if (!disposed) onConfigured(v) } }
     private fun state(status: ArTrackingState, depth: Boolean = false) {
@@ -148,7 +171,9 @@ class ArSharedCameraController(private val context: Context,
         main.removeCallbacks(firstFrameWatch); main.postDelayed(firstFrameWatch, 5_000)
         phase("OPEN_BEGIN")
         try {
-            fallback = false; running = false; sessionId = newVlmId(); gate.session(sessionId); configured()
+            fallback = false; startupFailure = null; running = false; sessionId = newVlmId(); gate.session(sessionId)
+            groundTracking.reset(); groundDelivery.reset(); groundDiagnostic = null; lastTrackingProblem = null; lastPointCloudFailure = null; groundSampleNs = 0L; lastBackgroundRenderNs = null; lastRenderedDepth = false
+            configured()
             phase("EGL_BEGIN"); egl = ArEglContext(); phase("EGL_READY")
             Log.i("VlmAr", "设备 model=${Build.MANUFACTURER}/${Build.MODEL} api=${Build.VERSION.SDK_INT} GL=${GLES20.glGetString(GLES20.GL_VERSION)} renderer=${GLES20.glGetString(GLES20.GL_RENDERER)}")
             val names = IntArray(1); GLES20.glGenTextures(1, names, 0); textureId = names[0]
@@ -163,6 +188,7 @@ class ArSharedCameraController(private val context: Context,
             check(configs.isNotEmpty()) { "AR_CAMERA_CONFIG_UNAVAILABLE" }; ar.cameraConfig = configs.first()
             depthSupported = ar.isDepthModeSupported(Config.DepthMode.AUTOMATIC)
             val config = Config(ar).apply {
+                planeFindingMode = Config.PlaneFindingMode.HORIZONTAL_AND_VERTICAL
                 focusMode = Config.FocusMode.AUTO
                 lightEstimationMode = Config.LightEstimationMode.AMBIENT_INTENSITY
                 depthMode = if (depthSupported) Config.DepthMode.AUTOMATIC else Config.DepthMode.DISABLED
@@ -175,7 +201,7 @@ class ArSharedCameraController(private val context: Context,
                 depthSupported = false; config.depthMode = Config.DepthMode.DISABLED; ar.configure(config)
             }
             phase("AR_SESSION_READY")
-            Log.i("VlmAr", "相机配置 cameraId=${ar.cameraConfig.cameraId} cpu=${ar.cameraConfig.imageSize} gpu=${ar.cameraConfig.textureSize} depth=$depthSupported")
+            Log.i("VlmAr", "相机配置 cameraId=${ar.cameraConfig.cameraId} cpu=${ar.cameraConfig.imageSize} gpu=${ar.cameraConfig.textureSize} depth=$depthSupported planeFinding=${ar.config.planeFindingMode}")
             ar.setCameraTextureName(textureId); ar.setDisplayGeometry(rotation, width, height)
             shared = ar.sharedCamera
             val id = ar.cameraConfig.cameraId; val characteristics = manager.getCameraCharacteristics(id)
@@ -334,10 +360,17 @@ class ArSharedCameraController(private val context: Context,
                     val key = wanted.plan?.arReferenceKey()
                     if (key != planKey) { invalidateAnchor(); planKey = key; gate.plan(key) }
                     val tracking = current.camera.trackingState == TrackingState.TRACKING
-                    if (!tracking) { invalidateAnchor(); scene!!.hide(); state(ArTrackingState.LOST) }
-                    else {
+                    if (!tracking) {
+                        val reason = current.camera.trackingFailureReason.toString()
+                        if (reason != lastTrackingProblem) {
+                            lastTrackingProblem = reason
+                            Log.i("VlmArScale", "跟踪受阻 session=${sessionId.take(8)} reason=$reason state=${current.camera.trackingState}")
+                        }
+                        invalidateAnchor(); scene!!.hide(); groundDelivery.reset(); groundTracking.lost(); state(ArTrackingState.LOST)
+                    } else {
+                        lastTrackingProblem = null
                         val loadStart = SystemClock.elapsedRealtimeNanos()
-                        wanted.plan?.let { scene!!.load(it) }
+                        wanted.plan?.takeIf { it.spatialPlacement != null }?.let { scene!!.load(it) }
                         performance.time("poseLoad",SystemClock.elapsedRealtimeNanos()-loadStart)
                         if (!wanted.backgroundConfirmed) {
                             if (anchor != null) invalidateAnchor()
@@ -345,23 +378,39 @@ class ArSharedCameraController(private val context: Context,
                         } else if (wanted.plan != null) {
                             if (anchor?.trackingState == TrackingState.STOPPED) invalidateAnchor()
                             if (anchor == null && placementRetry.shouldAttempt(SystemClock.elapsedRealtimeNanos())) {
-                                val foot = ArGeometry.suggestedGround(wanted.plan)
-                                val placed = foot?.let { place(current, it.x * width, it.y * height, false, wanted.plan) } == true
-                                if (!placed && (placementRetry.attempts == 1 || placementRetry.attempts % 5 == 0))
-                                    Log.i("VlmAr", "等待地面落点 plan=$planKey attempt=${placementRetry.attempts} reason=${if (foot == null) "FOOT_OUTSIDE_VIEW" else "NO_VALID_GROUND"} screenReference=true")
+                                val placed = placeResolved(wanted.plan)
+                                if (!placed && placementRetry.attempts == 1)
+                                    Log.i("VlmArScale", "等待已校准地面站位 plan=${wanted.plan.id} revision=${wanted.plan.revision} screenReference=false")
                             }
                         }
                     }
                     val model = if (tracking && wanted.backgroundConfirmed && anchor?.trackingState == TrackingState.TRACKING)
                         FloatArray(16).also { matrix -> Matrix.setIdentityM(matrix, 0); val p = anchor!!.pose.translation
                             Matrix.translateM(matrix, 0, p[0], p[1], p[2]); Matrix.rotateM(matrix, 0, heading, 0f, 1f, 0f) } else null
-                    val depth = scene!!.render(current, if (wanted.render) model else null, tracking && depthSupported && wanted.render && model != null)
-                    val renderTiming = scene!!.lastRenderTiming
-                    performance.time("render",renderTiming.totalNs); performance.time("depth",renderTiming.depthNs)
-                    performance.time("submit",renderTiming.submitNs); performance.time("gpuWait",renderTiming.waitNs)
-                    performance.count(if (renderTiming.submitted) "submitted" else "skippedDraw")
-                    if (renderTiming.submitted) queueOutputProbe()
-                    if (tracking) state(if (model != null && scene!!.avatarPresented) ArTrackingState.PLACED else if (wanted.backgroundConfirmed && wanted.plan != null) ArTrackingState.NEEDS_GROUND else ArTrackingState.TRACKING, depth)
+                    // 找回背景和短暂丢失跟踪时仍保持同一取景；锚点只控制人像是否可见。
+                    displayedCrop = if(wanted.plan?.photography != null) {
+                        wanted.plan.photographyDisplayCrop(wanted.backgroundConfirmed)
+                    } else if (wanted.render) wanted.plan?.spatialPlacement?.takeIf {
+                        it.camera.sessionId == sessionId && it.camera.configVersion == configVersion
+                    }?.framingCrop ?: CropRect() else CropRect()
+                    val renderNow = SystemClock.elapsedRealtimeNanos()
+                    if (ArPreviewCadence.shouldRender(renderNow, lastBackgroundRenderNs, wanted.render)) {
+                        lastRenderedDepth = scene!!.render(current, if (wanted.render) model else null,
+                            tracking && depthSupported && wanted.render && model != null, displayedCrop)
+                        lastBackgroundRenderNs = renderNow
+                        val renderTiming = scene!!.lastRenderTiming
+                        performance.time("render",renderTiming.totalNs); performance.time("depth",renderTiming.depthNs)
+                        performance.time("submit",renderTiming.submitNs); performance.time("gpuWait",renderTiming.waitNs)
+                        performance.count(if (renderTiming.submitted) "submitted" else "skippedDraw")
+                        if (renderTiming.submitted) queueOutputProbe()
+                    }
+                    // 先回传会话/跟踪状态，再回传地面；恢复首帧不能被旧 LOST 状态拦截。
+                    if (tracking) {
+                        state(if (model != null && scene!!.avatarPresented) ArTrackingState.PLACED
+                            else if (wanted.backgroundConfirmed && wanted.plan != null) ArTrackingState.NEEDS_GROUND
+                            else ArTrackingState.TRACKING, lastRenderedDepth && wanted.render && model != null)
+                        publishGround(renderNow)
+                    }
                     val now = SystemClock.elapsedRealtimeNanos()
                     val analysisStart = SystemClock.elapsedRealtimeNanos()
                     if (wanted.sampling && wanted.targetId != null && now - lastSampleNs >= if (wanted.startedNs != null) ScanLimits.SAMPLE_INTERVAL_NS else BackgroundMatchPolicy.ANALYSIS_INTERVAL_NS) {
@@ -389,26 +438,62 @@ class ArSharedCameraController(private val context: Context,
             val workNs = SystemClock.elapsedRealtimeNanos()-tickStart
             performance.time("loop",workNs)
             performance.report("session=${sessionId.take(8)} viewport=${width}x$height running=$running render=${request.render} sampling=${request.sampling} plan=${request.plan?.id} phase=$startupStep")
-            val delay = ArPreviewCadence.delayMillis(workNs,request.render)
+            val delay = ArPreviewCadence.delayMillis(workNs,request.render, !groundTracking.stable)
             nextTickNs = SystemClock.elapsedRealtimeNanos()+delay*1_000_000L
             handler.postDelayed(this,delay)
         }
     }
-    private fun invalidateAnchor() { gate.invalidate(); anchor?.detach(); anchor = null; scene?.hide(); manualAnchor = false; placementRetry.reset() }
-    private fun place(current: Frame, x: Float, y: Float, manual: Boolean, plan: CompositionPlan): Boolean {
-        val key = planKey ?: return false
-        if (key != plan.arReferenceKey()) return false
-        val hit = current.hitTest(x, y).firstOrNull { value ->
-            val plane = value.trackable as? Plane
-            plane != null && plane.trackingState == TrackingState.TRACKING && plane.type == Plane.Type.HORIZONTAL_UPWARD_FACING &&
-                plane.isPoseInPolygon(value.hitPose) && value.distance in .4f..15f
+    private fun invalidateAnchor() { displayedCrop=CropRect(); gate.invalidate(); anchor?.detach(); anchor = null; scene?.hide(); manualAnchor = false; placementRetry.reset() }
+    private fun groundSnapshot(observe: Boolean = false): ArGroundSnapshot {
+        val all = session?.getAllTrackables(Plane::class.java).orEmpty()
+        val tracking = all.filter { it.trackingState == TrackingState.TRACKING }
+        val horizontal = tracking.filter { it.type == Plane.Type.HORIZONTAL_UPWARD_FACING && it.subsumedBy == null }
+        var invalidPolygons = 0
+        val planes = horizontal.sortedByDescending { it.extentX * it.extentZ }.take(8).mapNotNull { plane ->
+            val points = plane.polygon.duplicate(); points.rewind()
+            val count = points.remaining()/2
+            if (count !in 3..128) { invalidPolygons++; return@mapNotNull null }
+            val vertices = List(count) {
+                val p = plane.centerPose.transformPoint(floatArrayOf(points.get(),0f,points.get()))
+                SpatialPoint(p[0],p[1],p[2])
+            }
+            if (vertices.any { !it.finite() }) { invalidPolygons++; return@mapNotNull null }
+            val id = if (observe) groundTracking.observe(plane, vertices.first().y) else groundTracking.id(plane)
+            ArGroundPlane(id,vertices,groundTracking.count(id))
+        }
+        if (observe) {
+            groundTracking.retain(planes.map { it.id }.toSet())
+            val diagnostics = "all=${all.size} tracking=${tracking.size} upward=${horizontal.size} invalidPolygons=$invalidPolygons accepted=${planes.size} stable=${planes.count { it.stableObservations >= 3 }}"
+            if (diagnostics != groundDiagnostic) {
+                groundDiagnostic = diagnostics
+                Log.i("VlmArScale", "地面采集 session=${sessionId.take(8)} config=$configVersion $diagnostics trackingFailure=${frame?.camera?.trackingFailureReason}")
+            }
+        }
+        return ArGroundSnapshot(sessionId,configVersion,planes)
+    }
+    private fun publishGround(now: Long) {
+        if (now-groundSampleNs < 1_000_000_000L) return
+        groundSampleNs = now
+        val snapshot = groundSnapshot(true)
+        if (!groundDelivery.shouldPublish(snapshot.fingerprint(), now)) return
+        main.post { if (!disposed && sessionId == snapshot.sessionId && configVersion == snapshot.configVersion) onGround(snapshot) }
+    }
+    private fun placeResolved(plan: CompositionPlan): Boolean {
+        val placement = plan.spatialPlacement ?: return false
+        if (placement.camera.sessionId != sessionId || placement.camera.configVersion != configVersion || plan.arReferenceKey() != planKey) return false
+        val pose = Pose.makeTranslation(placement.position.x,placement.position.y,placement.position.z)
+        val next = if (placement.estimated) session?.createAnchor(pose) ?: return false else {
+            val ground = session?.getAllTrackables(Plane::class.java)?.firstOrNull { plane ->
+            plane.trackingState == TrackingState.TRACKING && plane.type == Plane.Type.HORIZONTAL_UPWARD_FACING && plane.subsumedBy == null &&
+                groundTracking.findId(plane) == placement.groundId && groundTracking.count(placement.groundId) >= 3 &&
+                kotlin.math.abs(plane.centerPose.ty()-placement.position.y) <= .05f &&
+                plane.isPoseInPolygon(Pose.makeTranslation(placement.position.x,placement.position.y,placement.position.z))
         } ?: return false
-        if (!gate.place(sessionId, key)) return false
-        val next = hit.createAnchor()
-        invalidateAnchor(); anchor = next; gate.place(sessionId, key); manualAnchor = manual
-        val camera = current.camera.pose.translation; val target = hit.hitPose.translation
-        heading = Math.toDegrees(atan2((camera[0] - target[0]).toDouble(), (camera[2] - target[2]).toDouble())).toFloat() + plan.avatar.yaw
-        Log.i("VlmAr", "地面落点 session=${sessionId.take(8)} plan=$planKey manual=$manual")
+            ground.createAnchor(Pose.makeTranslation(placement.position.x,placement.position.y,placement.position.z))
+        }
+        invalidateAnchor(); anchor = next; gate.plan(planKey); gate.place(sessionId,plan.arReferenceKey())
+        manualAnchor = placement.manual; heading = placement.yaw
+        Log.i("VlmArScale", "空间站位已放置 session=${sessionId.take(8)} plan=${plan.id} height=${placement.heightMeters} distance=${placement.distanceMeters} manual=$manualAnchor estimated=${placement.estimated}")
         return true
     }
     private fun config(current: Frame, image: Image): ScanCameraConfig {
@@ -419,7 +504,50 @@ class ArSharedCameraController(private val context: Context,
         val intrinsics = current.camera.imageIntrinsics
         return ScanCameraConfig(configVersion, (cameraRotation - rotation * 90 + 360) % 360, 1f, crop, realtime,
             sessionId, intrinsics.focalLength.toList() + intrinsics.principalPoint.toList() + intrinsics.imageDimensions.map(Int::toFloat),
-            if (current.camera.trackingState == TrackingState.TRACKING) current.camera.pose.translation.toList() + current.camera.pose.rotationQuaternion.toList() else emptyList())
+            if (current.camera.trackingState == TrackingState.TRACKING) current.camera.pose.translation.toList() + current.camera.pose.rotationQuaternion.toList() else emptyList(),
+            if (current.camera.trackingState == TrackingState.TRACKING) scaleCamera(current,image,crop) else null)
+    }
+    private fun scaleCamera(current: Frame, image: Image, crop: CropRect): ArScaleSnapshot {
+        val projection = FloatArray(16); val view = FloatArray(16)
+        current.camera.getProjectionMatrix(projection,0,ArGeometry.NEAR,ArGeometry.FAR)
+        current.camera.getViewMatrix(view,0)
+        val points = FloatArray(6)
+        current.transformCoordinates2d(Coordinates2d.VIEW_NORMALIZED,floatArrayOf(0f,0f,1f,0f,0f,1f),Coordinates2d.IMAGE_NORMALIZED,points)
+        val orientation = (cameraRotation-rotation*90+360)%360
+        val upright = List(3) { i ->
+            val x = (points[i*2]-crop.left)/(crop.right-crop.left)
+            val y = (points[i*2+1]-crop.top)/(crop.bottom-crop.top)
+            when (orientation) { 90 -> Point2(1f-y,x); 180 -> Point2(1f-x,1f-y); 270 -> Point2(y,1f-x); else -> Point2(x,y) }
+        }
+        val adjusted = SpatialMatrices.imageProjection(projection.toList(),upright)
+        val t = current.camera.pose.translation
+        val w = ((crop.right-crop.left)*image.width).toInt().coerceAtLeast(1)
+        val h = ((crop.bottom-crop.top)*image.height).toInt().coerceAtLeast(1)
+        val depth=if (depthSupported) ArDepthSampler.capture(current,crop,orientation) else ArDepthSampler.Result(emptyList(),"UNSUPPORTED")
+        val features = try {
+            current.acquirePointCloud().use { cloud ->
+                val values = cloud.points.duplicate()
+                val count = values.remaining()/4
+                val stride = maxOf(1,(count+127)/128)
+                (0 until count step stride).mapNotNull { index ->
+                    val base = values.position()+index*4
+                    val point = SpatialPoint(values.get(base),values.get(base+1),values.get(base+2))
+                    val confidence = values.get(base+3)
+                    if (point.finite() && confidence.isFinite() && confidence >= .5f)
+                        ArFeaturePoint(point,confidence) else null
+                }
+            }.also { lastPointCloudFailure = null }
+        } catch (failure: Exception) {
+            val name = failure.javaClass.simpleName
+            if (lastPointCloudFailure != name) {
+                lastPointCloudFailure = name
+                Log.w("VlmArScale", "空间特征点暂不可用，继续其他比例估算 reason=$name", failure)
+            }
+            emptyList()
+        }
+        return ArScaleSnapshot(sessionId,configVersion,current.timestamp,view.toList(),adjusted,SpatialPoint(t[0],t[1],t[2]),
+            if (orientation%180 == 0) w else h, if (orientation%180 == 0) h else w,
+            depth.points,depth.status,features)
     }
     private fun copy(image: Image, current: Frame, target: String, now: Long): AnalysisSample {
         val w = image.width; val h = image.height
@@ -464,10 +592,13 @@ class ArSharedCameraController(private val context: Context,
         val upright = Bitmap.createBitmap(decoded, 0, 0, decoded.width, decoded.height, matrix, true)
         // 保存开始后取景尺寸锁定，避免后台线程读取到下一次旋转的尺寸。
         val target = photoViewportRatio
-        val rect = centerCropToAspect(upright.width, upright.height, target)
+        val viewport = centerCropToAspect(upright.width, upright.height, target)
+        val rect = ArFraming.combine(viewport,photoFramingCrop)
         val w = ((rect.right - rect.left) * upright.width).toInt().coerceIn(1, upright.width)
         val h = ((rect.bottom - rect.top) * upright.height).toInt().coerceIn(1, upright.height)
-        val cropped = Bitmap.createBitmap(upright, (upright.width - w) / 2, (upright.height - h) / 2, w, h)
+        val x=(rect.left*upright.width).toInt().coerceIn(0,upright.width-w)
+        val y=(rect.top*upright.height).toInt().coerceIn(0,upright.height-h)
+        val cropped = Bitmap.createBitmap(upright,x,y,w,h)
         return try { java.io.ByteArrayOutputStream().use { out ->
             check(cropped.compress(Bitmap.CompressFormat.JPEG, 95, out)); out.toByteArray()
         } } finally {
@@ -477,12 +608,14 @@ class ArSharedCameraController(private val context: Context,
         }
     }
     @Volatile private var photoViewportRatio = 3f / 4f
+    @Volatile private var photoFramingCrop = CropRect()
     @Suppress("DEPRECATION")
     private fun beginPhoto(continuation: CancellableContinuation<ByteArray>) {
         if (!continuation.isActive) return
         if (capturing || closing || !running || jpeg == null) { continuation.resumeWithException(IllegalStateException("AR_PHOTO_UNAVAILABLE")); return }
         try {
             photoViewportRatio = width.toFloat() / height.coerceAtLeast(1)
+            photoFramingCrop = displayedCrop
             capturing = true; pendingPhoto = continuation; session?.pause(); running = false
             handler.removeCallbacks(tick); invalidateAnchor(); frame = null
             photoTimeout = Runnable { finishPhoto(null, IllegalStateException("AR_PHOTO_TIMEOUT")) }.also { handler.postDelayed(it, 15_000) }
@@ -521,7 +654,12 @@ class ArSharedCameraController(private val context: Context,
         if (!closing && !disposed && foreground) { captureSession?.close(); captureSession = null; configured(); configureShared() }
         if (pending?.isActive == true) { if (bytes != null) pending.resume(bytes) else pending.resumeWithException(failure ?: IllegalStateException("AR_PHOTO_FAILED")) }
     }
-    private fun fail(failure: Exception) { Log.e("VlmAr", "AR 失败 generation=$generation session=${sessionId.take(8)}", failure); closeCamera(true) }
+    private fun fail(failure: Exception) {
+        val reason=ArFailure.from(failure)
+        startupFailure=ArUiState(ArSource.SCREEN,ArTrackingState.UNSUPPORTED,failure=reason,failurePhase=startupStep)
+        Log.e("VlmAr", "AR 失败 code=$reason phase=$startupStep generation=$generation session=${sessionId.take(8)}", failure)
+        closeCamera(true)
+    }
     private fun closeCamera(toScreen: Boolean) {
         Log.i("VlmAr", "关闭请求 toScreen=$toScreen phase=$startupStep running=$running cameraOpening=$deviceOpening")
         main.removeCallbacks(firstFrameWatch)
@@ -542,7 +680,10 @@ class ArSharedCameraController(private val context: Context,
         egl?.let { gl -> runCatching { gl.makeCurrent(); if (textureId != 0) GLES20.glDeleteTextures(1, intArrayOf(textureId), 0); gl.close() } }; egl = null; textureId = 0
         closing = false
         if (disposed) { closed.complete(Unit); thread.quitSafely(); return }
-        if (fallback) main.post { onState(ArUiState(ArSource.SCREEN, ArTrackingState.UNSUPPORTED)) }
+        if (fallback) {
+            val failure=startupFailure ?: ArUiState(ArSource.SCREEN,ArTrackingState.UNSUPPORTED,failure=ArFailure.SESSION_START)
+            main.post { onState(failure) }
+        }
         else if (foreground && surface?.isValid == true) open()
     }
     private val closed = kotlinx.coroutines.CompletableDeferred<Unit>()

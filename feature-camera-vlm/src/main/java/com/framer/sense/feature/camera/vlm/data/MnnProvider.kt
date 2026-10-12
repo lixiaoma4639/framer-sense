@@ -49,12 +49,15 @@ object MnnNative {
     /** 环境描述使用独立的 192-token 输出上限，复用现有算子边界取消。 */
     external fun describeScene(handle: Long, imagePath: String, prompt: ByteArray, cancelled: AtomicBoolean, progress: MnnTokenProgress): ByteArray
     external fun choosePhoto(handle: Long, imagePath: String, prompt: ByteArray, cancelled: AtomicBoolean): ByteArray
+    external fun photography(handle: Long, imagePath: String, prompt: ByteArray, cancelled: AtomicBoolean, progress: MnnTokenProgress, width: Int, height: Int): ByteArray
     /** 释放空闲句柄。@param handle 已结束所有推理的模型句柄。 */
     external fun release(handle: Long)
 }
 
 /** 原生运行时抽象，用于不加载真实权重的事务测试。 */
 interface MnnRuntime {
+    fun photography(handle: Long, image: String, prompt: ByteArray, cancel: AtomicBoolean, onToken: () -> Unit): ByteArray =
+        infer(handle,image,prompt,cancel,onToken)
     fun choosePhoto(handle: Long, image: String, prompt: ByteArray, cancel: AtomicBoolean): ByteArray =
         throw UnsupportedOperationException("LOCAL_PHOTO_CHOICE_UNSUPPORTED")
     /** 初始化本地库；无参数，失败抛出链接错误。 */
@@ -75,6 +78,13 @@ interface MnnRuntime {
 
 /** 默认真实 JNI 实现，不提供生产假响应。 */
 object NativeMnnRuntime : MnnRuntime {
+    override fun photography(handle: Long, image: String, prompt: ByteArray, cancel: AtomicBoolean, onToken: () -> Unit): ByteArray {
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        BitmapFactory.decodeFile(image, bounds)
+        val context = "input=${File(image).parentFile?.name?.take(8)}"
+        Log.i("VlmPhotoDiag", "$context phase=JNI_CALL width=${bounds.outWidth} height=${bounds.outHeight} promptBytes=${prompt.size} cancelled=${cancel.get()}")
+        return MnnNative.photography(handle, image, prompt, cancel, MnnTokenProgress(onToken, context), bounds.outWidth, bounds.outHeight)
+    }
     override fun choosePhoto(handle: Long, image: String, prompt: ByteArray, cancel: AtomicBoolean): ByteArray =
         MnnNative.choosePhoto(handle, image, prompt, cancel)
     /** 初始化 JNI 库；无参数。 */
@@ -188,8 +198,14 @@ class MnnProvider(
         // 原生计算只能在安全边界退出；超时后立即重试不能排在仍未退出的 JNI 后无限等待。
         if (nativeInferenceRunning.get()) throw ModelFailure("LOCAL_BUSY", store.message(R.string.vlm_model_inference_busy), true)
         return try {
-            withTokenInactivityWatchdog { onToken -> infer(call, onToken) }
+            if (call.input.photographyEnabled) withLocalPhotographyDeadline {
+                withTokenInactivityWatchdog { onToken -> infer(call, onToken) }
+            } else withTokenInactivityWatchdog { onToken -> infer(call, onToken) }
         } catch (failure: ModelFailure) {
+            if (failure.code == "LOCAL_PHOTOGRAPHY_DEADLINE") {
+                Log.w(LOG_TAG, "离线摄影等待截止 request=${call.requestId.take(8)} limitMs=$LOCAL_PHOTOGRAPHY_DEADLINE_MS cancelRequested=true")
+                throw ModelFailure(failure.code, store.message(R.string.vlm_model_photography_native_timeout), false)
+            }
             if (failure.code == "LOCAL_TIMEOUT") {
                 Log.w(LOG_TAG, "离线推理停滞 request=${call.requestId.take(8)} idleLimitMs=39000")
                 throw ModelFailure("LOCAL_TIMEOUT", store.message(R.string.vlm_model_inference_timeout), true)
@@ -203,7 +219,9 @@ class MnnProvider(
         Log.i(LOG_TAG, "离线推理开始 request=${call.requestId.take(8)} image=${call.input.scene.id.take(8)} imageExists=${image.isFile} imageBytes=${image.length()} promptBytes=${call.prompt.toByteArray(Charsets.UTF_8).size}")
         var loaded = false
         try {
+            val loadStarted = System.nanoTime()
             ensureLoaded()
+            if (call.input.photographyEnabled) Log.i("VlmPhotoDiag", "request=${call.requestId} image=${call.input.scene.id.take(8)} phase=MODEL_READY model=${store.modelName()} directory=${store.activeDirectory()?.name} loadWaitMs=${(System.nanoTime()-loadStarted)/1_000_000} nativeBusy=${nativeInferenceRunning.get()} debug=${BuildConfig.DEBUG}")
             loaded = true
             // load 不能中断；若等待期间已取消，加载返回后不得继续启动推理。
             if (cancel.get()) throw CancellationException()
@@ -211,12 +229,17 @@ class MnnProvider(
             nativeInferenceRunning.set(true)
             var sceneObservation: SceneObservation? = null
             val output = try {
-                val photoChoice = com.framer.sense.feature.camera.vlm.agent.PhotoReferenceDecisionPolicy.enabled(call.input)
-                val raw = (if (photoChoice)
+                val photoChoice = !call.input.photographyEnabled && com.framer.sense.feature.camera.vlm.agent.PhotoReferenceDecisionPolicy.enabled(call.input)
+                val raw = (if(call.input.photographyEnabled)
+                    photographyInput(image, cancel) { small ->
+                        Log.i("VlmPhotoDiag", "request=${call.requestId} image=${call.input.scene.id.take(8)} input=${small.parentFile?.name?.take(8)} phase=NATIVE_ENTER jpegBytes=${small.length()} cancelled=${cancel.get()}")
+                        runtime.photography(handle, small.path, call.prompt.toByteArray(Charsets.UTF_8), cancel, onToken)
+                    }
+                else if (photoChoice)
                     runtime.choosePhoto(handle, image.path, call.prompt.toByteArray(Charsets.UTF_8), cancel)
                 else runtime.infer(handle, image.path, call.prompt.toByteArray(Charsets.UTF_8), cancel, onToken)).toString(Charsets.UTF_8)
                 if (cancel.get()) throw CancellationException()
-                if (photoChoice && raw.trim().toIntOrNull()?.let { it in 1..6 } == true) {
+                if (photoChoice && com.framer.sense.feature.camera.vlm.agent.PhotoReferenceDecisionPolicy.ranking(raw) != null) {
                     val key = OfflineSceneDescriptionCache.Key(call.input.scene.id, image.path, image.length(),
                         image.lastModified(), "${loadedPath}:$handle")
                     sceneObservation = sceneDescriptions.get(key)
@@ -249,14 +272,15 @@ class MnnProvider(
             if (cancel.get()) throw CancellationException()
             val elapsedMs = (System.nanoTime() - start) / 1_000_000
             Log.i(LOG_TAG, "离线推理完成 request=${call.requestId.take(8)} model=${store.modelName()} elapsedMs=$elapsedMs outputBytes=${output.toByteArray().size}")
-            if (BuildConfig.DEBUG) {
+            if (BuildConfig.DEBUG && !call.input.photographyEnabled) {
                 // JSON 字符串转义保留换行、控制符和首尾空白；小段输出避免 Logcat 截断。
                 val parts = VlmJson.encodeToString(output).chunked(800)
                 parts.forEachIndexed { index, part ->
                     Log.d(LOG_TAG, "模型原始输出 request=${call.requestId.take(8)} part=${index + 1}/${parts.size} raw=$part")
                 }
             }
-            StepReply(store.modelName(), output, elapsedMs = elapsedMs, sceneObservation = sceneObservation)
+            StepReply(store.modelName(), output, elapsedMs = elapsedMs, sceneObservation = sceneObservation,
+                photographyProtocol=call.input.photographyEnabled)
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (error: Throwable) {
@@ -264,11 +288,43 @@ class MnnProvider(
             throw when {
                 error is ModelFailure -> error
                 error.message == "LOCAL_OUTPUT_LIMIT" -> ModelFailure("LOCAL_OUTPUT_LIMIT", store.message(R.string.vlm_local_output_limit), false)
-                error is TimeoutException -> ModelFailure("LOCAL_TIMEOUT", store.message(R.string.vlm_model_inference_timeout), true)
+                error is TimeoutException -> {
+                    Log.w(LOG_TAG, "离线推理达到原生总时限 request=${call.requestId.take(8)} photography=${call.input.photographyEnabled} nativeLimitMs=120000 tokenStall=false")
+                    ModelFailure("LOCAL_NATIVE_TIMEOUT", store.message(if (call.input.photographyEnabled)
+                        R.string.vlm_model_photography_native_timeout else R.string.vlm_model_native_timeout), true)
+                }
+                call.input.photographyEnabled && error.message?.startsWith("LOCAL_PHOTO_") == true ->
+                    ModelFailure("LOCAL_PHOTO_INVALID_OUTPUT", store.message(R.string.vlm_photography_failed), false).apply { initCause(error) }
                 loaded -> ModelFailure("LOCAL_INFERENCE_FAILED", store.message(R.string.vlm_model_inference_failed), true)
                 else -> ModelFailure("LOCAL_FAILED", if (error is ModelStorageException) store.errorMessage(error) else store.message(R.string.vlm_model_load_failed), true)
             }
         }
+    }
+
+    /** 仅缩小分析副本，保留原图坐标与画幅；文件在原生线程退出后删除。 */
+    private fun <T> photographyInput(source: File, cancel: AtomicBoolean, block: (File) -> T): T {
+        val dir = File(store.root.parentFile, "vlm-photo-inputs/${newVlmId()}").apply { mkdirs() }
+        try {
+            val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            BitmapFactory.decodeFile(source.path, bounds)
+            require(bounds.outWidth > 0 && bounds.outHeight > 0) { "LOCAL_PHOTO_INPUT" }
+            val decode = BitmapFactory.Options()
+            while (maxOf(bounds.outWidth, bounds.outHeight) / (decode.inSampleSize.coerceAtLeast(1) * 2) >= 384) {
+                decode.inSampleSize = decode.inSampleSize.coerceAtLeast(1) * 2
+            }
+            val bitmap = requireNotNull(BitmapFactory.decodeFile(source.path, decode)) { "LOCAL_PHOTO_INPUT" }
+            try {
+                if (cancel.get()) throw CancellationException()
+                val ratio = minOf(1f, 384f / maxOf(bitmap.width, bitmap.height))
+                val small = bitmap.scale(maxOf(1, (bitmap.width * ratio).toInt()), maxOf(1, (bitmap.height * ratio).toInt()))
+                val copy = File(dir, "scene.jpg")
+                try { copy.outputStream().use { check(small.compress(Bitmap.CompressFormat.JPEG, 88, it)) } }
+                finally { if (small !== bitmap) small.recycle() }
+                Log.i(LOG_TAG, "摄影分析输入优化 original=${bounds.outWidth}x${bounds.outHeight} analysisLongEdge=384 jpegBytes=${copy.length()} outputProtocol=compact")
+                if (cancel.get()) throw CancellationException()
+                return block(copy)
+            } finally { bitmap.recycle() }
+        } finally { dir.deleteRecursively() }
     }
 
     /** 单次多图选景；复制缩小输入隔离取消后的扫描缓存清理，不上传图片。 */
@@ -335,14 +391,19 @@ class MnnProvider(
     private fun viewFailure(failure: Throwable): ModelFailure {
         if (failure is ModelFailure && failure.code != "LOCAL_TIMEOUT") return failure
         val resource = when {
-            failure is TimeoutException || (failure as? ModelFailure)?.code == "LOCAL_TIMEOUT" -> R.string.vlm_model_inference_timeout
+            failure is TimeoutException -> R.string.vlm_model_native_timeout
+            (failure as? ModelFailure)?.code == "LOCAL_TIMEOUT" -> R.string.vlm_model_inference_timeout
             failure is ModelStorageException -> R.string.vlm_model_load_failed
             failure.message == "LOCAL_MULTIVIEW_UNSUPPORTED" -> R.string.vlm_scan_local_unsupported
             failure.message == "LOCAL_VIEW_CHOICE_UNSUPPORTED" -> R.string.vlm_scan_local_choice_unsupported
             failure.message == "LOCAL_VIEW_INPUT" -> R.string.vlm_scan_local_input_failed
             else -> R.string.vlm_scan_local_select_failed
         }
-        val code = failure.message?.takeIf { it in setOf("LOCAL_VIEW_CHOICE_INVALID", "LOCAL_VIEW_CHOICE_UNSUPPORTED") } ?: "LOCAL_VIEW_FAILED"
+        val code = when {
+            failure is TimeoutException -> "LOCAL_NATIVE_TIMEOUT"
+            (failure as? ModelFailure)?.code == "LOCAL_TIMEOUT" -> "LOCAL_TIMEOUT"
+            else -> failure.message?.takeIf { it in setOf("LOCAL_VIEW_CHOICE_INVALID", "LOCAL_VIEW_CHOICE_UNSUPPORTED") } ?: "LOCAL_VIEW_FAILED"
+        }
         return ModelFailure(code, store.message(resource), false)
     }
 

@@ -60,6 +60,21 @@ class TokenInactivityWatchdogTest {
         assertEquals(0L, currentTime)
     }
 
+    /** 持续输出后触发原生总时限，不能被误标为 39 秒停滞。 */
+    @Test fun preservesNativeDeadlineFailureAfterHealthyOutput() = runTest {
+        try {
+            withTokenInactivityWatchdog<Unit> { onToken ->
+                repeat(4) { onToken(); delay(30_000) }
+                throw ModelFailure("LOCAL_NATIVE_TIMEOUT", "native deadline", true)
+            }
+            fail("原生时限应传播")
+        } catch (failure: ModelFailure) {
+            assertEquals("LOCAL_NATIVE_TIMEOUT", failure.code)
+            assertEquals("native deadline", failure.message)
+        }
+        assertEquals(120_000L, currentTime)
+    }
+
     /** 用户取消保持取消语义，不能被内部定时器转换成超时错误。 */
     @Test fun preservesCallerCancellationAndStopsWatchdog() = runTest {
         val result = withTimeoutOrNull(1_000) {

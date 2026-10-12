@@ -119,7 +119,16 @@ class PhotoSessionController(context: Context, private val vision: OpenCvSceneTo
                 } finally { if (cropped !== original) cropped.recycle(); original.recycle() }
             }
             val bitmap = sample.bitmap()
-            val metrics = try { vision.match(referenceFeatures, vision.extract(bitmap)) } finally { bitmap.recycle() }
+            // AR 不切镜头：选中图和当前原图采用同一裁切后再匹配，避免裁切被误判成倍率不一致。
+            val r=if (plan.spatialPlacement != null) plan.crop else CropRect()
+            val x=(r.left*bitmap.width).toInt().coerceIn(0,bitmap.width-1)
+            val y=(r.top*bitmap.height).toInt().coerceIn(0,bitmap.height-1)
+            val matching=if (plan.spatialPlacement != null) Bitmap.createBitmap(bitmap,x,y,
+                ((r.right-r.left)*bitmap.width).toInt().coerceIn(1,bitmap.width-x),
+                ((r.bottom-r.top)*bitmap.height).toInt().coerceIn(1,bitmap.height-y)) else bitmap
+            val metrics = try { vision.match(referenceFeatures, vision.extract(matching)) } finally {
+                if (matching !== bitmap) matching.recycle(); bitmap.recycle()
+            }
             val aligned = stability.update(metrics?.let(BackgroundMatchPolicy::aligned) == true, sample.receivedNs)
             val sameBasis = targetPose != null && sample.pose != null && targetPose.basisId == sample.pose.basisId
             BackgroundGuidance(if (aligned) BackgroundStatus.ALIGNED_AUTO else BackgroundStatus.SEARCHING,

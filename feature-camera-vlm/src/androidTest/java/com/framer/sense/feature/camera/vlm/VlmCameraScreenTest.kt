@@ -93,6 +93,12 @@ class VlmCameraScreenTest {
         assertEquals(listOf(VlmIntent.PreferredEthnicity(AvatarEthnicity.ASIAN)), events)
         composeRule.onNodeWithText("AI 构图导演").assertDoesNotExist()
     }
+    @Test fun arSwitchCanBeEnabledAfterCompositionIsReady() {
+        val events=mutableListOf<VlmIntent>()
+        composeRule.setContent { MaterialTheme { PhotoSettingsDialog(VlmUiState(stage=VlmStage.READY),{ events+=it },{}) } }
+        composeRule.onNodeWithTag("vlm_ar_setting").performScrollTo().assertIsEnabled().performClick()
+        assertEquals(listOf(VlmIntent.CameraModeSelected(CameraMode.AR)),events)
+    }
 
     @Test fun modelSettingsRetainsItsOwnDialog() {
         composeRule.setContent { MaterialTheme { ModelSettingsDialog(VlmUiState(), {}, {}, {}) } }

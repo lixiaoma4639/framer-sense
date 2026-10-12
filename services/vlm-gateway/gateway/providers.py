@@ -4,7 +4,7 @@ import os
 from dataclasses import dataclass
 from urllib.parse import quote
 import httpx
-from .models import Decision, Provider, StepRequest, ViewRequest, ViewSelection, PhotoStepRequest, PhotoReferenceDecision
+from .models import Decision, Provider, StepRequest, ViewRequest, ViewSelection, PhotoStepRequest, PhotoReferenceDecision, PhotographyStepRequest, PhotographyDecision
 
 
 @dataclass(frozen=True)
@@ -38,7 +38,7 @@ def config_for(provider: Provider) -> ProviderConfig:
 def request_payload(provider: Provider, model: str, request: StepRequest | ViewRequest) -> tuple[str, dict]:
     """构造真实图像请求。参数 provider/model 指定供应商与模型，request 为统一图文输入；返回相对路径和请求体。"""
     multi = isinstance(request, ViewRequest)
-    schema = (ViewSelection if multi else PhotoReferenceDecision if isinstance(request, PhotoStepRequest) else Decision).model_json_schema()
+    schema = (ViewSelection if multi else PhotographyDecision if isinstance(request, PhotographyStepRequest) else PhotoReferenceDecision if isinstance(request, PhotoStepRequest) else Decision).model_json_schema()
     images = [(image.frameId, image.imageBase64) for image in request.images] if multi else [(request.imageId, request.imageBase64)]
     content = [{"type": "input_text" if provider == Provider.GPT else "text", "text": request.prompt}]
     parts = [{"text": request.prompt}]
@@ -138,3 +138,9 @@ def multi_image_limit(provider: Provider) -> int:
         return max(0, min(8, int(os.getenv(f"{provider.value}_MULTI_IMAGE_MAX_IMAGES", "0"))))
     except ValueError:
         return 0
+
+
+def director_v3_enabled(provider: Provider) -> bool:
+    """新版摄影能力必须显式绑定实际配置模型，换模型后不会继承声明。"""
+    config = config_for(provider)
+    return bool(config.key and config.model and os.getenv(f"{provider.value}_DIRECTOR_V3_MODEL", "") == config.model)

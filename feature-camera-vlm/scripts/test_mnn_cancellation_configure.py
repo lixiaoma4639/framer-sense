@@ -40,6 +40,20 @@ class CancellationConfigureTest(unittest.TestCase):
             patches.extend(difflib.unified_diff(original.splitlines(True), modified.splitlines(True),
                 fromfile="a/" + relative, tofile="b/" + relative))
         patch.write_text("".join(patches))
+        photo_patch = self.feature / "patches/mnn-3.6.1-photography.patch"
+        self.photo_sources = {}
+        photo_diffs = []
+        for relative, (_, cancelled) in self.sources.items():
+            if relative.endswith("/llm.hpp"):
+                modified = cancelled + "void setTokenConstraint();\n"
+            elif relative.endswith("/llm.cpp"):
+                modified = cancelled + "// mTokenConstraint(logits, token_id)\n"
+            else:
+                continue
+            self.photo_sources[relative] = modified
+            photo_diffs.extend(difflib.unified_diff(cancelled.splitlines(True), modified.splitlines(True),
+                fromfile="a/" + relative, tofile="b/" + relative))
+        photo_patch.write_text("".join(photo_diffs))
         self.project = self.feature / "src/main/cpp"
         (self.project / "CMakeLists.txt").write_text("""
 cmake_minimum_required(VERSION 3.22.1)
@@ -58,7 +72,7 @@ include("${CMAKE_CURRENT_LIST_DIR}/cmake/MnnCancellation.cmake")
     def assert_generated_sources(self):
         for relative, (original, modified) in self.sources.items():
             self.assertEqual(original, (self.vendor / relative).read_text())
-            self.assertEqual(modified, (self.build / "mnn-cancellation" / relative).read_text())
+            self.assertEqual(self.photo_sources.get(relative, modified), (self.build / "mnn-cancellation" / relative).read_text())
 
     def test_patch_applies_under_nested_repository_directory(self):
         result = self.configure()
@@ -78,7 +92,7 @@ include("${CMAKE_CURRENT_LIST_DIR}/cmake/MnnCancellation.cmake")
         fake_git.chmod(0o755)
         result = self.configure("-DGIT_EXECUTABLE=" + str(fake_git))
         self.assertNotEqual(0, result.returncode, result.stdout)
-        self.assertIn("取消补丁未生效", result.stdout)
+        self.assertIn("补丁未生效", result.stdout)
 
 
 if __name__ == "__main__":

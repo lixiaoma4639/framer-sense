@@ -16,7 +16,7 @@ class PhotoPreferencesTest {
         }
         val settings = SettingsStore(context)
         val expected = PhotoPreferences(CaptureAspectRatio.NINE_SIXTEEN, AvatarId.ADULT_MALE,
-            AvatarEthnicity.ASIAN, true, "保留建筑")
+            AvatarEthnicity.ASIAN, true, "保留建筑", heightsCm = mapOf(AvatarId.ADULT_MALE to 182, AvatarId.CHILD_BOY to 125))
         try {
             settings.savePhotoPreferences(expected)
             assertEquals(expected, SettingsStore(context).readPhotoPreferences())

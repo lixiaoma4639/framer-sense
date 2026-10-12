@@ -32,15 +32,23 @@ internal suspend fun <T> withTokenInactivityWatchdog(block: suspend (onToken: ()
 }
 
 /** JNI 仅在实际写出 token 时回调；方法名由 consumer-rules.pro 保留。 */
-class MnnTokenProgress(private val onProgress: () -> Unit) {
-    fun onToken() = onProgress()
+class MnnTokenProgress(private val onProgress: () -> Unit, private val diagnosticContext: String = "") {
+    private val started = System.nanoTime()
+    private var firstTokenReported = false
+    fun onToken() {
+        if (!firstTokenReported && diagnosticContext.isNotBlank()) {
+            firstTokenReported = true
+            Log.i("VlmPhotoDiag", "$diagnosticContext phase=FIRST_TOKEN elapsedMs=${(System.nanoTime()-started)/1_000_000}")
+        }
+        onProgress()
+    }
 
     /** 保留原生异常之前已经产生的文本，避免输出上限掩盖真正的生成问题。 */
     fun onIncompleteOutput(bytes: ByteArray) {
         if (!BuildConfig.DEBUG) return
         val parts = VlmJson.encodeToString(bytes.toString(Charsets.UTF_8)).chunked(800)
         parts.forEachIndexed { index, text ->
-            Log.d("VlmOffline", "未完成原始输出 part=${index + 1}/${parts.size} raw=$text")
+            Log.i("VlmPhotoDiag", "$diagnosticContext payload=INCOMPLETE_NATIVE_OUTPUT part=${index + 1}/${parts.size} raw=$text")
         }
     }
 }

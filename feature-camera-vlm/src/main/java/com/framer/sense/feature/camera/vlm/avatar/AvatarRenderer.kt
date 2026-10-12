@@ -13,6 +13,8 @@ data class AvatarPreview(
 )
 
 interface AvatarRenderer {
+    suspend fun scaleMetadata(action: ResolvedPhotoAction): AvatarScaleMetadata? = null
+
     suspend fun availableActions(role: AvatarId, shot: ShotType): List<PhotoActionDefinition> =
         PhotoActionCatalog().candidates(role, shot).filter { it.selectable }
 

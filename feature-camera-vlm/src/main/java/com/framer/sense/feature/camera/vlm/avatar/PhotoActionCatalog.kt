@@ -147,7 +147,7 @@ class PhotoActionResolver(val catalog: PhotoActionCatalog = PhotoActionCatalog()
         val base = CompositionGuidance.from(actual.copy(resolvedSpec = null))
         val guidance = action.authoredGuidance?.let { base.copy(directive = it, legacyHandNearFace = false) } ?: base
         val spec = ResolvedPhotoSpec(actual.id, actual.revision, actual.shot, actual.crop, actual.zoom, actual.avatar,
-            actual.needsRetake, action, guidance, actual.viewBinding, actual.backgroundKeepRegions)
+            actual.needsRetake, action, guidance, actual.viewBinding, actual.backgroundKeepRegions, actual.subjectHeightMeters, actual.spatialPlacement, actual.scaleEstimate, actual.photography)
         return actual.copy(resolvedSpec = spec)
     }
 }

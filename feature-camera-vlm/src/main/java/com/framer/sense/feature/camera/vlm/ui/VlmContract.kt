@@ -45,6 +45,8 @@ data class VlmUiState(
     val cameraMode: CameraMode = CameraMode.NORMAL,
     val cameraEpoch: Int = 0,
     val photoSettingsVisible: Boolean = false,
+    val spatialScaleStatus: SpatialScaleStatus = SpatialScaleStatus.UNMEASURED,
+    val hasReliableArGround: Boolean = false,
     val compositionDetailsVisible: Boolean = false,
     val instruction: String = "自然一些，保留环境主体",
     val result: CompositionResult? = null,
@@ -76,6 +78,9 @@ data class VlmUiState(
             VlmStage.GENERATING, VlmStage.MODIFYING, VlmStage.SCANNING, VlmStage.SCAN_PROCESSING, VlmStage.VIEW_SELECTING)
     val framingUnlocked: Boolean
         get() = stage == VlmStage.LIVE && !modelBusy && !saving && photoSample == null
+    /** 空闲的冻结/构图页也允许切换模式；切换后返回取景并重新扫描。 */
+    val canSwitchCameraMode: Boolean
+        get() = !operationBusy && stage in listOf(VlmStage.LIVE, VlmStage.FROZEN, VlmStage.READY, VlmStage.SCAN_REVIEW)
     val canCapture: Boolean
         get() = framingUnlocked && cameraReady && !settingsVisible && !photoSettingsVisible
     val canZoom: Boolean
@@ -88,9 +93,15 @@ data class VlmUiState(
         get() = !modelBusy && !saving && !settingsVisible && !photoSettingsVisible && photoSample == null && scene != null &&
             stage in listOf(VlmStage.FROZEN, VlmStage.READY, VlmStage.GENERATING, VlmStage.MODIFYING)
 
-    /** 实时画面不因离线模型加载而降帧；冻结分析时才降低后台绘制频率。 */
+    /** 等待地面时保持当前会话实时取景，冻结照片和构图输入不变。 */
+    val needsGroundObservation: Boolean
+        get() = cameraMode == CameraMode.AR && ar.source == com.framer.sense.feature.camera.vlm.ar.ArSource.SHARED_CAMERA &&
+            stage == VlmStage.READY && result != null && result.plans.none { it.hasRenderableScale() } && !hasReliableArGround &&
+            spatialScaleStatus == SpatialScaleStatus.WAITING_GROUND && photoSample == null
+
+    /** 实时取景和地面补采不降帧；冻结分析期间才降低后台绘制频率。 */
     val requiresLivePreview: Boolean
-        get() = photoSample == null && stage in listOf(VlmStage.LIVE, VlmStage.SCANNING, VlmStage.FREEZING)
+        get() = needsGroundObservation || photoSample == null && stage in listOf(VlmStage.LIVE, VlmStage.SCANNING, VlmStage.FREEZING)
 
     /** 仅显示扫描预览，不能作为已选背景、构图输入或应用参考。 */
     val displayScene: SceneSnapshot?
@@ -99,6 +110,10 @@ data class VlmUiState(
 }
 
 sealed interface VlmIntent {
+    data class AvatarHeightChanged(val centimeters: Int) : VlmIntent
+    data class ArGroundUpdated(val ground: ArGroundSnapshot, val epoch: Int) : VlmIntent
+    data class ArGroundSelected(val planId: String, val revision: Int, val ground: ArGroundSnapshot,
+        val planeId: String, val point: SpatialPoint, val epoch: Int) : VlmIntent
     data class ArUpdated(val state: com.framer.sense.feature.camera.vlm.ar.ArUiState, val epoch: Int? = null) : VlmIntent
     data object OpenPhotoSample : VlmIntent
     data object ClosePhotoSample : VlmIntent

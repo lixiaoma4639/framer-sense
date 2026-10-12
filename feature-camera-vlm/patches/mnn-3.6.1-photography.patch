@@ -1,0 +1,30 @@
+--- a/transformers/llm/engine/include/llm/llm.hpp
++++ b/transformers/llm/engine/include/llm/llm.hpp
+@@ -202,6 +202,8 @@
+     }
+     virtual void setWavformCallback(std::function<bool(const float*, size_t, bool)> callback) {}
+     virtual void generateWavform() {}
++    // Scoped output constraint; called only by the serial inference thread.
++    void setTokenConstraint(std::function<int(Express::VARP, int)> callback) { mTokenConstraint = std::move(callback); }
+ protected:
+     bool checkCancelled();
+     std::vector<Express::VARP> forwardCancelable(Express::Module* module, const std::vector<Express::VARP>& inputs);
+@@ -209,6 +211,7 @@
+     size_t mCancelOperatorChecks = 0;
+     bool mCancelGraphActive = false;
+     bool mCancelCallbacksInstalled = false;
++    std::function<int(Express::VARP, int)> mTokenConstraint;
+     void setChatTemplate();
+     void initRuntime();
+     void setRuntimeHint(std::shared_ptr<Express::Executor::RuntimeManager> &rtg, bool mllm = false);
+--- a/transformers/llm/engine/src/llm.cpp
++++ b/transformers/llm/engine/src/llm.cpp
+@@ -871,7 +871,7 @@
+         logits = _Const(logits->readMap<float>() + offset, {size}, NHWC, halide_type_of<float>());
+     }
+     auto token_id = mSampler->sample(logits);
+-    return token_id;
++    return mTokenConstraint ? mTokenConstraint(logits, token_id) : token_id;
+ }
+ 
+ void Llm::reset() {

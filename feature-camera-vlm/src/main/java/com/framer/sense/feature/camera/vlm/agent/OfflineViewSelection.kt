@@ -19,7 +19,7 @@ object OfflineViewSelectionProtocol {
         require(frames.size in 1..MAX_FRAMES)
         val preferences = frames.mapIndexedNotNull { i, f -> if (f.preferred) i + 1 else null }
         val allowed = (1..frames.size).joinToString("、")
-        return "给稍后入镜的人物选背景：人物尚未入镜，没有人是正常的，不能因无人而拒绝选景。" +
+        return PhotographyRubric.TEXT + "给稍后入镜的人物选背景：人物尚未入镜，没有人是正常的，不能因无人而拒绝选景。" +
             "逐张比较图片1到${frames.size}：人物空间充足、人物能与背景分离；人物入镜后仍能保留主体，杂物和高亮干扰少；" +
             "前中后景有层次，引导线和留白适合人物；可见曝光、色彩和清晰度良好。" +
             "综合选一张，不按图片序号或单独清晰度决定。偏爱图片编号=$preferences，摄影条件相近时优先。" +

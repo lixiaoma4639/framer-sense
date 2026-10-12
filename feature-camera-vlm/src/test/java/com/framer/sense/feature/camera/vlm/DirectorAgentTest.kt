@@ -1,6 +1,8 @@
 package com.framer.sense.feature.camera.vlm
 
 import com.framer.sense.feature.camera.vlm.agent.*
+import com.framer.sense.feature.camera.vlm.ar.PhotoScaleEstimator
+import com.framer.sense.feature.camera.vlm.ar.SpatialMatrices
 import com.framer.sense.feature.camera.vlm.data.*
 import com.framer.sense.feature.camera.vlm.model.*
 import kotlinx.coroutines.CompletableDeferred
@@ -313,6 +315,65 @@ class DirectorAgentTest {
         }
     }
 
+    /** 实际估算器会同时改变裁切与最终规格，不能只回写 avatar/spec。 */
+    @Test fun completeEstimatedRenderPlanIsAcceptedWithoutAnotherLocalCall() = runTest {
+        val near = .1f; val far = 40f
+        val camera = ArScaleSnapshot("world", 1, 10,
+            SpatialMatrices.identity().toMutableList().apply { this[13] = -1.3f },
+            listOf(2f,0f,0f,0f, 0f,1.5f,0f,0f, 0f,0f,-(far+near)/(far-near),-1f, 0f,0f,-2*far*near/(far-near),0f),
+            SpatialPoint(0f,1.3f,0f), 600, 800)
+        for (ar in listOf(false, true)) {
+            val source = input().copy(photoReferences = true, arMode = ar,
+                scene = input().scene.copy(arCamera = if (ar) camera else null),
+                viewBinding = if (ar) PhotoViewBinding("scan", "frame", 1, "world") else null)
+            var calls = 0
+            val rendered = mutableMapOf<String, CompositionPlan>()
+            val result = DirectorAgent().run(source, ModelSettings(mode = ModelMode.OFFLINE), { object : VisionModelProvider {
+                override suspend fun step(call: ModelCall): StepReply {
+                    calls++
+                    return StepReply("fake", "RANK=4,1,2,3,5,6")
+                }
+            } }, PreviewInspector { plan, scene ->
+                val base = plan.copy(arCamera = scene.arCamera).withSpatial(null)
+                val action = base.resolvedSpec!!.action
+                val metadata = AvatarScaleMetadata(action.avatarAssetPath, action.avatarAssetVersion, 1,
+                    SpatialPoint(0f,0f,0f), SpatialPoint(0f,1.6f,0f))
+                val actual = PhotoScaleEstimator.estimate(base, metadata)
+                assertTrue(actual.resolvedSpec!!.matches(actual))
+                // 复现旧链路：仅回写人物布局，会漏掉尺度及裁切，最终规格必然不匹配。
+                val partial = plan.withActualAvatar(actual.avatar).copy(resolvedSpec = actual.resolvedSpec)
+                assertFalse(partial.resolvedSpec!!.matches(partial))
+                rendered[plan.id] = actual
+                PreviewInspection(appliedAvatar = actual.avatar, appliedSpec = actual.resolvedSpec, appliedPlan = actual)
+            })
+            assertEquals(1, calls)
+            assertTrue(PlanValidator().validate(result.plans, source).isEmpty())
+            result.plans.forEach { plan ->
+                assertEquals(rendered.getValue(plan.id), plan)
+                assertTrue(plan.hasRenderableScale())
+                assertNotNull(plan.scaleEstimate)
+                assertTrue(plan.resolvedSpec!!.matches(plan))
+            }
+            if (ar) assertTrue(result.plans.any { it.spatialPlacement?.estimated == true && it.crop != CropRect() })
+        }
+    }
+
+    @Test fun completeRenderPlanFromDifferentSourceIsRejectedAndLogged() = runTest {
+        val warnings = mutableListOf<String>()
+        val logger = object : DirectorLogger by NoOpDirectorLogger {
+            override fun warn(message: String, error: Throwable?) { warnings += message }
+        }
+        try {
+            DirectorAgent(logger = logger).run(input(), ModelSettings(mode = ModelMode.OFFLINE), { object : VisionModelProvider {
+                override suspend fun step(call: ModelCall) = reply(DirectorDecision(ActionKind.FINAL, plans(), imageId = "frame"))
+            } }, PreviewInspector { plan, _ -> PreviewInspection(appliedPlan = plan.copy(id = "old-plan")) })
+            fail("不能采用其他请求的方案")
+        } catch (failure: ModelFailure) {
+            assertEquals("LOCAL_INVALID_OUTPUT", failure.code)
+            assertTrue(warnings.any { "RENDER_SOURCE_MISMATCH" in it })
+        }
+    }
+
     @Test fun invalidRenderedPlacementAndChangedAvatarAreRejectedWithoutLocalRetry() = runTest {
         for (changeIdentity in listOf(false, true)) {
             var calls = 0
@@ -343,7 +404,10 @@ class DirectorAgentTest {
         val intent = CompositionIntentMapper.sceneFallback("花园背景，人物侧身双手交叠微笑", editing).intents.first().copy(id = "p2")
         val result = DirectorAgent().run(editing, ModelSettings(mode = ModelMode.OFFLINE), { object : VisionModelProvider {
             override suspend fun step(call: ModelCall) = StepReply("fake", VlmJson.encodeToString(CompositionIntentDecision(ActionKind.FINAL, listOf(intent), imageId = "frame")))
-        } }, PreviewInspector { _, _ -> PreviewInspection() })
+        } }, PreviewInspector { plan, _ ->
+            assertEquals("p2", plan.id)
+            PreviewInspection(appliedPlan = plan)
+        })
         assertEquals(existing[0], result.plans[0])
         assertEquals(existing[2], result.plans[2])
         assertEquals(existing[1].revision + 1, result.plans[1].revision)

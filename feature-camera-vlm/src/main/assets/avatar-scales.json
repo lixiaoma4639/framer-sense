@@ -1,0 +1,156 @@
+[
+  {
+    "assetPath": "vlm_avatars/adult_female.glb",
+    "assetVersion": 1,
+    "version": 1,
+    "foot": {
+      "x": 1.315009310332016e-07,
+      "y": -0.004575564411454127,
+      "z": 0.0
+    },
+    "crown": {
+      "x": 1.315009310332016e-07,
+      "y": 1.7387711821779777,
+      "z": 0.0
+    },
+    "forward": {
+      "x": 0.0,
+      "y": 0.0,
+      "z": 1.0
+    },
+    "metersPerUnit": 1.0,
+    "source": "GLB reference skin; opaque head/body or Rain head/shoes; excludes separate hair/opacity meshes"
+  },
+  {
+    "assetPath": "vlm_avatars/adult_male.glb",
+    "assetVersion": 1,
+    "version": 1,
+    "foot": {
+      "x": -1.0103033620811885e-07,
+      "y": -0.0009262448290693997,
+      "z": 0.0
+    },
+    "crown": {
+      "x": -1.0103033620811885e-07,
+      "y": 1.8139690518330494,
+      "z": 0.0
+    },
+    "forward": {
+      "x": 0.0,
+      "y": 0.0,
+      "z": 1.0
+    },
+    "metersPerUnit": 1.0,
+    "source": "GLB reference skin; opaque head/body or Rain head/shoes; excludes separate hair/opacity meshes"
+  },
+  {
+    "assetPath": "vlm_avatars/girl.glb",
+    "assetVersion": 1,
+    "version": 1,
+    "foot": {
+      "x": 1.1291439463989583e-07,
+      "y": -0.0022254961881875467,
+      "z": 0.0
+    },
+    "crown": {
+      "x": 1.1291439463989583e-07,
+      "y": 1.4308021751907372,
+      "z": 0.0
+    },
+    "forward": {
+      "x": 0.0,
+      "y": 0.0,
+      "z": 1.0
+    },
+    "metersPerUnit": 1.0,
+    "source": "GLB reference skin; opaque head/body or Rain head/shoes; excludes separate hair/opacity meshes"
+  },
+  {
+    "assetPath": "vlm_avatars/boy.glb",
+    "assetVersion": 1,
+    "version": 1,
+    "foot": {
+      "x": 4.057705560445157e-09,
+      "y": 0.0014011033329911107,
+      "z": 0.0
+    },
+    "crown": {
+      "x": 4.057705560445157e-09,
+      "y": 1.4342039358119072,
+      "z": 0.0
+    },
+    "forward": {
+      "x": 0.0,
+      "y": 0.0,
+      "z": 1.0
+    },
+    "metersPerUnit": 1.0,
+    "source": "GLB reference skin; opaque head/body or Rain head/shoes; excludes separate hair/opacity meshes"
+  },
+  {
+    "assetPath": "photo_samples/rain-natural-v1/white.glb",
+    "assetVersion": 5,
+    "version": 1,
+    "foot": {
+      "x": 1.4909838086385463e-08,
+      "y": 0.001145910134169931,
+      "z": 0.0
+    },
+    "crown": {
+      "x": 1.4909838086385463e-08,
+      "y": 1.6235809193635782,
+      "z": 0.0
+    },
+    "forward": {
+      "x": 0.0,
+      "y": 0.0,
+      "z": 1.0
+    },
+    "metersPerUnit": 1.0,
+    "source": "GLB reference skin; opaque head/body or Rain head/shoes; excludes separate hair/opacity meshes"
+  },
+  {
+    "assetPath": "photo_samples/rain-natural-v1/asian.glb",
+    "assetVersion": 5,
+    "version": 1,
+    "foot": {
+      "x": 1.4909838086385463e-08,
+      "y": 0.001145910134169931,
+      "z": 0.0
+    },
+    "crown": {
+      "x": 1.4909838086385463e-08,
+      "y": 1.6235809193635782,
+      "z": 0.0
+    },
+    "forward": {
+      "x": 0.0,
+      "y": 0.0,
+      "z": 1.0
+    },
+    "metersPerUnit": 1.0,
+    "source": "GLB reference skin; opaque head/body or Rain head/shoes; excludes separate hair/opacity meshes"
+  },
+  {
+    "assetPath": "photo_samples/rain-natural-v1/black.glb",
+    "assetVersion": 4,
+    "version": 1,
+    "foot": {
+      "x": 1.4909838086385463e-08,
+      "y": 0.001145910134169931,
+      "z": 0.0
+    },
+    "crown": {
+      "x": 1.4909838086385463e-08,
+      "y": 1.6235809193635782,
+      "z": 0.0
+    },
+    "forward": {
+      "x": 0.0,
+      "y": 0.0,
+      "z": 1.0
+    },
+    "metersPerUnit": 1.0,
+    "source": "GLB reference skin; opaque head/body or Rain head/shoes; excludes separate hair/opacity meshes"
+  }
+]

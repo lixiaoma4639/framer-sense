@@ -158,6 +158,9 @@ internal fun Controls(state: VlmUiState, onEvent: (VlmIntent) -> Unit, importIma
             CompositionCards(state, onEvent)
         }
         if (state.stage == VlmStage.LIVE && state.referencePlan != null) {
+            if (state.referencePlan.scaleEstimate != null || !state.referencePlan.hasRenderableScale())
+                Text(stringResource(if (state.referencePlan.scaleEstimate != null) R.string.vlm_scale_estimated_short else scaleMessage(state.referencePlan, state)), color = Color.White, maxLines = 2,
+                    style = MaterialTheme.typography.labelSmall, modifier = Modifier.testTag("vlm_live_scale_status"))
             if (state.referencePlan.viewBinding != null) {
                 Text(stringResource(when (state.background.status) {
                     BackgroundStatus.SEARCHING -> R.string.vlm_background_searching
@@ -257,6 +260,10 @@ internal fun CompositionCards(state: VlmUiState, onEvent: (VlmIntent) -> Unit) {
                         Image(it.asImageBitmap(), stringResource(R.string.vlm_selected_composition),
                             Modifier.fillMaxSize(), contentScale = ContentScale.Fit)
                     }
+                    Text(stringResource(if (plan.scaleEstimate != null) R.string.vlm_scale_estimated_short
+                        else if (!plan.hasMeasuredScale()) R.string.vlm_scale_unavailable else R.string.vlm_scale_calibrated),
+                        color = Color.White, style = MaterialTheme.typography.labelSmall,
+                        modifier = Modifier.align(Alignment.TopCenter).background(Color.Black.copy(alpha = .65f)).padding(2.dp))
                     Text(stringResource(R.string.vlm_composition_plan_number, index + 1), color = Color.White,
                         modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth()
                             .background(Color.Black.copy(alpha = .55f)).padding(2.dp),
@@ -272,10 +279,18 @@ internal fun PhotoSettingsDialog(state: VlmUiState, onEvent: (VlmIntent) -> Unit
     CameraDialog(R.string.vlm_photo_settings_title, "vlm_photo_settings_dialog", { onEvent(VlmIntent.PhotoSettingsVisible(false)) }) {
         AvatarSelector(state, onEvent, state.operationBusy)
         AvatarEthnicitySelector(state.selectedEthnicity, !state.operationBusy, "vlm_preferred_ethnicity") { onEvent(VlmIntent.PreferredEthnicity(it)) }
+        val centimeters = state.photoPreferences.heightCm(state.selectedAvatar)
+        Text(stringResource(R.string.vlm_avatar_height, centimeters))
+        val heightRange = AvatarHeightPolicy.range(state.selectedAvatar)
+        Slider(value = centimeters.toFloat(), onValueChange = { onEvent(VlmIntent.AvatarHeightChanged(it.toInt())) },
+            valueRange = heightRange.first.toFloat()..heightRange.last.toFloat(), enabled = !state.operationBusy,
+            modifier = Modifier.testTag("vlm_avatar_height"))
+        Text(stringResource(R.string.vlm_avatar_height_next_generation), style = MaterialTheme.typography.bodySmall)
         OutlinedTextField(state.instruction, { onEvent(VlmIntent.InstructionChanged(it)) }, enabled = !state.operationBusy,
             label = { Text(stringResource(R.string.vlm_photo_requirement)) }, modifier = Modifier.fillMaxWidth(), maxLines = 3)
         SettingsSwitch(R.string.vlm_photo_show_face, state.faceVisible, !state.operationBusy, "vlm_face_setting") { onEvent(VlmIntent.FaceVisible(it)) }
-        SettingsSwitch(R.string.vlm_ar_mode_label, state.cameraMode == CameraMode.AR, state.framingUnlocked, "vlm_ar_setting") { onEvent(VlmIntent.CameraModeSelected(if (it) CameraMode.AR else CameraMode.NORMAL)) }
+        SettingsSwitch(R.string.vlm_ar_mode_label, state.cameraMode == CameraMode.AR, state.canSwitchCameraMode, "vlm_ar_setting") { onEvent(VlmIntent.CameraModeSelected(if (it) CameraMode.AR else CameraMode.NORMAL)) }
+        if (!state.canSwitchCameraMode) Text(stringResource(R.string.vlm_camera_mode_busy),style=MaterialTheme.typography.bodySmall)
         Text(stringResource(if (state.cameraMode == CameraMode.AR) R.string.vlm_ar_zoom_locked else R.string.vlm_normal_camera_hint), style = MaterialTheme.typography.bodySmall)
         if (state.cameraMode == CameraMode.AR) {
             Text(stringResource(when {
@@ -310,13 +325,16 @@ private fun CompositionDetailsContent(state: VlmUiState, onEvent: (VlmIntent) ->
         val sceneObservation = background?.let { listOf(it.subject, it.reason).filter(String::isNotBlank).joinToString("\n") }
         state.result?.let { CompositionDescriptions(it, state.selectedId, sceneObservation) }
         if (plan != null) {
+            Text(stringResource(scaleMessage(plan, state)), style = MaterialTheme.typography.bodySmall,
+                modifier = Modifier.testTag("vlm_scale_status"))
             Button(onClick = { onEvent(VlmIntent.Apply) }, enabled = !state.operationBusy,
                 modifier = Modifier.testTag("vlm_apply")) { Text(stringResource(R.string.vlm_apply_plan)) }
             PhotoActionControls(state, plan, state.operationBusy, onEvent)
-            Text(stringResource(R.string.vlm_avatar_size), style = MaterialTheme.typography.labelLarge)
-            var height by remember(plan.id, plan.revision) { mutableFloatStateOf(plan.avatar.height.coerceIn(.08f, 4f)) }
-            Slider(height, { height = it }, valueRange = .08f..4f,
-                onValueChangeFinished = { onEvent(VlmIntent.Resize(height)) }, enabled = !state.operationBusy)
+            if (plan.hasMeasuredScale()) Text(stringResource(R.string.vlm_ar_scale_physical_hint),style=MaterialTheme.typography.bodySmall)
+            plan.localCombination?.let { number ->
+                Text(stringResource(if (!plan.localAlternative) R.string.vlm_photo_local_choice else if (plan.localRanked)
+                    R.string.vlm_photo_local_ranked_alternative else R.string.vlm_photo_local_alternative,number),style=MaterialTheme.typography.bodySmall)
+            }
             plan.uncertainties.filterNot { it == com.framer.sense.feature.camera.vlm.agent.CompositionIntentMapper.SCENE_FALLBACK_MARKER }
                 .forEach { Text(it, style = MaterialTheme.typography.bodySmall) }
             OutlinedTextField(state.instruction, { onEvent(VlmIntent.InstructionChanged(it)) }, enabled = !state.operationBusy,
@@ -354,5 +372,21 @@ private fun CameraDialog(title: Int, tag: String, close: () -> Unit, content: @C
                 content()
             }
         }
+    }
+}
+
+/** 每个方案独立显示失败原因，不能让一张成功掩盖另外两张失败。 */
+private fun scaleMessage(plan: CompositionPlan, state: VlmUiState): Int = when {
+    plan.hasMeasuredScale() -> R.string.vlm_scale_calibrated
+    plan.scaleEstimate != null -> R.string.vlm_scale_estimated
+    state.cameraMode != CameraMode.AR -> R.string.vlm_scale_requires_ar
+    state.spatialScaleStatus == SpatialScaleStatus.SOLVING -> R.string.vlm_scale_solving
+    else -> when (plan.scaleFailure) {
+        ScaleFailure.CAMERA_REQUIRED -> R.string.vlm_scale_requires_ar
+        ScaleFailure.DEPTH_MISSING -> R.string.vlm_scale_depth_missing
+        ScaleFailure.ASSET_MISSING -> R.string.vlm_scale_asset_missing
+        ScaleFailure.SESSION_CHANGED -> R.string.vlm_scale_relocalize
+        ScaleFailure.NO_PLACEMENT -> R.string.vlm_scale_placement_unavailable
+        else -> R.string.vlm_scale_ground_unreliable
     }
 }

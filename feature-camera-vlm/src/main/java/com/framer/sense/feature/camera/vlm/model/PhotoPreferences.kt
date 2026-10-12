@@ -22,8 +22,11 @@ data class PhotoPreferences(
     val avatar: AvatarId = AvatarId.ADULT_FEMALE,
     val ethnicity: AvatarEthnicity = AvatarEthnicity.WHITE,
     val showFace: Boolean = false,
-    val instruction: String = ""
-)
+    val instruction: String = "",
+    val heightsCm: Map<AvatarId, Int> = emptyMap()
+) {
+    fun heightCm(role: AvatarId) = AvatarHeightPolicy.clamp(role, heightsCm[role] ?: AvatarHeightPolicy.defaultCm(role))
+}
 
 object CameraZoomPolicy {
     fun clamp(value: Float, min: Float, max: Float): Float =
