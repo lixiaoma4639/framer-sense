@@ -191,6 +191,10 @@ Android 在 Gradle 配置时读取 JSON 并生成 BuildConfig，由 `CloudModelC
 
 ### 模型使用日志（2026-10-13）
 
+云端选景对 1–8 张图使用同一完整 JSON 示例，明确所有必填字段、原始 scanId/frameId、空数组、非空背景主体/理由和归一化区域；尚未入镜的人物不作为必须存在的主体。协议检查支持完整 JSON 外层代码围栏，仍严格校验帧绑定及区域，不放宽非法坐标或补造缺失的选景结果。校验失败日志新增安全 `reason`（如 `MISSING_CANDIDATE_FIELD_uncertainties`、`EMPTY_VIEW_SUBJECT`、`INVALID_VIEW_FRAME`、`INVALID_VIEW_REGION`），下一轮提示使用具体原因修正，不再统一误称帧 ID 错误。现有日志无法确定历史失败属于哪种输出错误，也不存在“少于八帧不可用”的规则。
+
+同一扫描最多两次选景、六次云端调用及 12 MiB 上传是 App 自己的调用保护，与云端账号余额或 Token 额度无关。两次选景用完后的主动重试直接返回 `SELECTION_ATTEMPTS_EXHAUSTED`，界面明确解释 App 限制，且不再查询能力或上传图片；其他预算限制统一返回 `ModelFailure`，避免裸 `IllegalStateException`。重新扫描建立新预算，人工选帧/离线仍可继续，失败不退还或重置预算。已新增 1/6/8 帧协议、围栏兼容、具体校验原因和重试限制测试代码，未执行自动化测试或真实云端调用。
+
 在 Logcat 搜索 `模型使用`；标签 `VlmScan` 对应配置检查与选景，`VlmDirector` 对应构图调用及校验后的任务结果，`VlmCamera` 对应最终预览界面结果。统一字段 `source=云端/离线`、`provider=QWEN/SEED/GPT/GEMINI/LOCAL`、`access=官方直连/项目网关/本机`、`model` 和 `modelSource` 标明本次实际执行的模型。
 
 `result=开始/返回成功/成功/失败/取消/切换/转人工选景` 区分调用、任务和路由结果。`返回成功` 仅表示适配器返回，仍需校验；只有合法选景、导演完整校验通过或最终预览就绪时，对应任务/界面阶段记录 `成功`。配置检查只是文本请求，日志带 `visionVerified=false`，不代表视觉任务已验收。能力声明记录 `actualCallSucceeded=false`，不能当成云端调用成功。自动模式记录切换的来源和目标，最终结果记录最后实际成功的供应商；云端选景降级当前为人工选景，不伪称已调用离线模型。

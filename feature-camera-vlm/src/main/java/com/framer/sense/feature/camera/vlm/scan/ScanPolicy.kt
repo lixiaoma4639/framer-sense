@@ -96,11 +96,15 @@ class PhotoSessionBudget {
 
 object ViewSelectionValidator {
     fun validate(selection: ViewSelection, scanId: String, sentIds: Set<String>) {
-        require(selection.version == 2 && selection.scanId == scanId && selection.alternatives.size <= 2) { "INVALID_VIEW_SELECTION" }
+        require(selection.version == 2) { "INVALID_VIEW_VERSION" }
+        require(selection.scanId == scanId) { "INVALID_VIEW_SCAN_ID" }
+        require(selection.alternatives.size <= 2) { "INVALID_VIEW_ALTERNATIVES" }
         val views = listOf(selection.primary) + selection.alternatives
         require(views.map { it.frameId }.distinct().size == views.size && views.all { it.frameId in sentIds }) { "INVALID_VIEW_FRAME" }
         views.forEach { view ->
-            require(view.subject.isNotBlank() && view.reason.isNotBlank() && view.backgroundRegions.size <= 8 && view.subjectRegions.size <= 8)
+            require(view.subject.isNotBlank()) { "EMPTY_VIEW_SUBJECT" }
+            require(view.reason.isNotBlank()) { "EMPTY_VIEW_REASON" }
+            require(view.backgroundRegions.size <= 8 && view.subjectRegions.size <= 8) { "INVALID_VIEW_REGION_COUNT" }
             (view.backgroundRegions + view.subjectRegions).forEach { r ->
                 require(listOf(r.left, r.top, r.right, r.bottom).all { it.isFinite() } &&
                     r.left >= 0 && r.top >= 0 && r.right <= 1 && r.bottom <= 1 && r.right > r.left && r.bottom > r.top) { "INVALID_VIEW_REGION" }

@@ -73,7 +73,7 @@ class ScanViewAgentTest {
             assertEquals("f", result.selection!!.primary.frameId)
             assertEquals(2, requests.size); assertEquals(2, budget.calls); assertEquals(8L, budget.uploadedBytes)
             assertTrue(requests[0].prompt.contains("exactly ONE best frame"))
-            assertTrue(requests[0].prompt.contains("alternatives=[]"))
+            assertTrue(requests[0].prompt.contains("alternatives must be []"))
             assertEquals(requests[0].images, requests[1].images); assertTrue(requests[1].prompt.contains("Previous result"))
         }
     }
@@ -126,8 +126,18 @@ class ScanViewAgentTest {
         withScan { scan ->
             val budget = PhotoSessionBudget(); repeat(6) { budget.consume(0) }
             try { ScanViewAgent { "mock" }.select(scan, ModelSettings(mode = ModelMode.AUTO), "", budget) { gateway { error("不应请求") } }; fail() }
-            catch (failure: IllegalStateException) { assertEquals("SESSION_BUDGET_EXHAUSTED", failure.message) }
+            catch (failure: ModelFailure) { assertEquals("SESSION_BUDGET_EXHAUSTED", failure.code) }
             assertEquals(6, budget.calls)
+        }
+    }
+    @Test fun usedSelectionAttemptsAreAppLimitAndDoNotTriggerAnotherCapabilityOrModelRequest() = runBlocking {
+        withScan { scan ->
+            val budget = PhotoSessionBudget(); repeat(2) { budget.consume(0, selection = true) }
+            try {
+                ScanViewAgent { "mock" }.select(scan, ModelSettings(mode = ModelMode.CLOUD), "", budget) { error("不应再请求云端") }
+                fail()
+            } catch (failure: ModelFailure) { assertEquals("SELECTION_ATTEMPTS_EXHAUSTED", failure.code) }
+            assertEquals(2, budget.calls)
         }
     }
     @Test fun oldGateway404FallsBackWithoutUploading() = runBlocking {

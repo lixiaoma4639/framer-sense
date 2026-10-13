@@ -600,7 +600,8 @@ class VlmCameraViewModel @Inject constructor(
             catch (failure: Exception) {
                 Log.e("VlmScan", "选景流程失败 scan=${scan.session.id.take(8)} token=${token.take(8)} code=${(failure as? ModelFailure)?.code} http=${(failure as? ModelFailure)?.upstreamHttpStatus} upstream=${(failure as? ModelFailure)?.upstreamErrorCode} error=${failure::class.java.simpleName} stale=${token != requestToken}", failure)
                 if (token == requestToken) _state.update { it.copy(stage = VlmStage.SCAN_REVIEW,
-                    error = qwenFailureMessage(failure) ?: if (failure.message == "SESSION_BUDGET_EXHAUSTED" || (failure as? ModelFailure)?.code == "SESSION_BUDGET_EXHAUSTED")
+                    error = qwenFailureMessage(failure) ?: if ((failure as? ModelFailure)?.code == "SELECTION_ATTEMPTS_EXHAUSTED")
+                        models.message(R.string.vlm_scan_selection_attempts_exhausted) else if (failure.message == "SESSION_BUDGET_EXHAUSTED" || (failure as? ModelFailure)?.code == "SESSION_BUDGET_EXHAUSTED")
                         models.message(R.string.vlm_scan_budget_exhausted) else if ((failure as? ModelFailure)?.code == "LOCAL_VIEW_INVALID_OUTPUT") models.message(R.string.vlm_scan_local_invalid_output)
                     else if (s.settings.mode == ModelMode.OFFLINE) failure.message?.takeIf { it.isNotBlank() } ?: models.message(R.string.vlm_scan_local_select_failed)
                     else models.message(R.string.vlm_scan_select_failed)) }

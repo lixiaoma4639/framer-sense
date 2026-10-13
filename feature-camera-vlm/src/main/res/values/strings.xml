@@ -194,6 +194,7 @@
     <string name="vlm_scan_select_failed">选景未完成，扫描画面已保留。请检查网关与模型配置后重试。</string>
     <string name="vlm_scan_compared">已比较 %1$d 个扫描视角</string>
     <string name="vlm_scan_budget_exhausted">本次扫描的云端调用或上传预算已用完，可切换离线继续分析、保留已有方案手动拍摄或重新扫描。</string>
+    <string name="vlm_scan_selection_attempts_exhausted">本次扫描已达到 App 的两次云端选景调用上限，与云端账号余额和额度无关。可手动选择缓存画面、重新扫描或切换离线。</string>
     <string name="vlm_scan_finishing">正在整理扫描画面</string>
     <string name="vlm_scan_selecting">正在查询多图能力并比较扫描视角</string>
     <string name="vlm_scan_review">自动选景尚未完成</string>
