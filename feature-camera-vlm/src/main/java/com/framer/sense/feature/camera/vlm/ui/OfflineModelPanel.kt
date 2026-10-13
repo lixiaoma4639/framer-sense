@@ -5,6 +5,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
@@ -50,6 +51,7 @@ internal fun OfflineModelPanel(state: VlmUiState, onEvent: (VlmIntent) -> Unit, 
         }
     }
     download.error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+    HorizontalDivider(Modifier.fillMaxWidth().testTag("vlm_download_local_divider"))
     Text(stringResource(R.string.vlm_model_directory_hint), style = MaterialTheme.typography.labelSmall)
     Row {
         TextButton(onClick = importDirectory, enabled = !busy) { Text(stringResource(R.string.vlm_model_import_directory)) }

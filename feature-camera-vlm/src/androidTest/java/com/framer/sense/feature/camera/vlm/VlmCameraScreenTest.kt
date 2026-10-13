@@ -14,6 +14,7 @@ import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performTextReplacement
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsDisplayed
@@ -105,6 +106,70 @@ class VlmCameraScreenTest {
         composeRule.setContent { MaterialTheme { ModelSettingsDialog(VlmUiState(), {}, {}, {}) } }
         composeRule.onNodeWithTag("vlm_model_settings_dialog").assertIsDisplayed()
         composeRule.onNodeWithTag("vlm_photo_settings_dialog").assertDoesNotExist()
+    }
+
+    @Test fun modelSettingsShowsOnlySelectedModeConfigurationAndKeepsHiddenGatewayDraft() {
+        val initial = ModelSettings(gateway = "https://example.invalid/vlm", gatewayToken = "test-token")
+        val editedGateway = "https://example.invalid/edited"
+        val events = mutableListOf<VlmIntent>()
+        composeRule.setContent { MaterialTheme {
+            ModelSettingsDialog(VlmUiState(settings = initial), events::add, {}, {})
+        } }
+        composeRule.onNodeWithTag("vlm_model_mode_OFFLINE").assertIsSelected()
+        composeRule.onNodeWithTag("vlm_offline_configuration").assertExists()
+        composeRule.onNodeWithTag("vlm_download_local_divider").assertExists()
+        composeRule.onNodeWithTag("vlm_cloud_offline_divider").assertDoesNotExist()
+        composeRule.onNodeWithTag("vlm_cloud_configuration").assertDoesNotExist()
+        composeRule.onNodeWithText("网关地址").assertDoesNotExist()
+
+        composeRule.onNodeWithTag("vlm_model_mode_CLOUD").performScrollTo().performClick()
+        composeRule.onNodeWithTag("vlm_cloud_configuration").assertExists()
+        composeRule.onNodeWithTag("vlm_offline_configuration").assertDoesNotExist()
+        composeRule.onNodeWithTag("vlm_download_local_divider").assertDoesNotExist()
+        composeRule.onNodeWithText(initial.gateway).performScrollTo().performTextReplacement(editedGateway)
+
+        composeRule.onNodeWithTag("vlm_model_mode_AUTO").performScrollTo().performClick()
+        composeRule.onNodeWithTag("vlm_cloud_configuration").assertExists()
+        composeRule.onNodeWithTag("vlm_offline_configuration").assertExists()
+        composeRule.onNodeWithTag("vlm_cloud_offline_divider").assertExists()
+        composeRule.onNodeWithTag("vlm_download_local_divider").assertExists()
+        composeRule.onNodeWithTag("vlm_model_mode_OFFLINE").performScrollTo().performClick()
+        composeRule.onNodeWithTag("vlm_cloud_configuration").assertDoesNotExist()
+        composeRule.onNodeWithTag("vlm_offline_configuration").assertExists()
+        composeRule.onNodeWithText("保存").performClick()
+        assertEquals(listOf(VlmIntent.SaveSettings(initial.copy(gateway = editedGateway))), events)
+    }
+
+    @Test fun modelModeButtonsShareOneRowAndShowFullLabelsWithLargerSystemFont() {
+        composeRule.setContent {
+            val density = androidx.compose.ui.platform.LocalDensity.current
+            androidx.compose.runtime.CompositionLocalProvider(androidx.compose.ui.platform.LocalDensity provides
+                androidx.compose.ui.unit.Density(density.density, fontScale = 1.5f)) {
+                MaterialTheme { ModelSettingsDialog(VlmUiState(), {}, {}, {}) }
+            }
+        }
+        val bounds = ModelMode.entries.map { mode ->
+            val node = composeRule.onNodeWithTag("vlm_model_mode_${mode.name}")
+            val layouts = mutableListOf<TextLayoutResult>()
+            node.performSemanticsAction(SemanticsActions.GetTextLayoutResult) { it(layouts) }
+            org.junit.Assert.assertFalse(layouts.single().hasVisualOverflow)
+            node.getUnclippedBoundsInRoot()
+        }
+        bounds.zipWithNext().forEach { (left, right) ->
+            assertEquals(left.top, right.top)
+            assertEquals(left.bottom, right.bottom)
+            org.junit.Assert.assertTrue(kotlin.math.abs(left.width.value - right.width.value) <= 1f)
+            org.junit.Assert.assertTrue(left.right <= right.left)
+        }
+    }
+
+    @Test fun modelSettingsUsesPreviouslySavedModeWhenOpened() {
+        composeRule.setContent { MaterialTheme {
+            ModelSettingsDialog(VlmUiState(settings = ModelSettings(mode = ModelMode.CLOUD)), {}, {}, {})
+        } }
+        composeRule.onNodeWithTag("vlm_model_mode_CLOUD").assertIsSelected()
+        composeRule.onNodeWithTag("vlm_cloud_configuration").assertExists()
+        composeRule.onNodeWithTag("vlm_offline_configuration").assertDoesNotExist()
     }
 
     @Test fun ratioLabelFollowsLandscapeWithoutChangingPreference() {

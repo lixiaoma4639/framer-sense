@@ -316,11 +316,11 @@ private fun CompositionDetailsContent(state: VlmUiState, onEvent: (VlmIntent) ->
             state.viewCandidates.firstOrNull { it.frameId == binding.frameId }
         }
         val sceneObservation = background?.let { listOf(it.subject, it.reason).filter(String::isNotBlank).joinToString("\n") }
-        if (plan != null) PhotoActionControls(state, plan, state.operationBusy, onEvent)
         state.result?.let { CompositionDescriptions(it, state.selectedId, sceneObservation) }
         if (plan != null) {
             Button(onClick = { onEvent(VlmIntent.Apply) }, enabled = !state.operationBusy,
                 modifier = Modifier.testTag("vlm_apply")) { Text(stringResource(R.string.vlm_apply_plan)) }
+            PhotoActionControls(state, plan, state.operationBusy, onEvent)
             Text(stringResource(R.string.vlm_avatar_size), style = MaterialTheme.typography.labelLarge)
             var height by remember(plan.id, plan.revision) { mutableFloatStateOf(plan.avatar.height.coerceIn(.08f, 4f)) }
             Slider(height, { height = it }, valueRange = .08f..4f,

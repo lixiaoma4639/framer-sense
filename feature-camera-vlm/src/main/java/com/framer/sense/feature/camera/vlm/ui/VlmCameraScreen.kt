@@ -11,6 +11,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.camera.view.PreviewView
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.awaitEachGesture
@@ -24,6 +25,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -42,6 +44,9 @@ import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.viewinterop.AndroidView
@@ -591,7 +596,7 @@ internal fun PhotoActionControls(state: VlmUiState, plan: CompositionPlan, busy:
         Text(stringResource(R.string.vlm_photo_model_action), style = MaterialTheme.typography.bodySmall)
     }
     LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-        items(state.availableActions[plan.id].orEmpty(), key = { it.id }) { action ->
+        items(state.availableActions[plan.id].orEmpty().sortedBy { !PhotoActionCatalog.isRainAction(it.id) }, key = { it.id }) { action ->
             FilterChip(selected = plan.resolvedSpec?.action?.id == action.id,
                 onClick = { onEvent(VlmIntent.ActionSelected(action.id)) }, enabled = !busy,
                 label = { Text(action.labelResource?.let { stringResource(it) } ?: poseLabel(action.legacyLabel)) },
@@ -804,28 +809,65 @@ private fun facingLabel(yaw: Float): String = stringResource(when {
 @Composable
 internal fun ModelSettingsDialog(state: VlmUiState, onEvent: (VlmIntent) -> Unit, importModel: () -> Unit, importDirectory: () -> Unit) {
     var draft by remember(state.settings) { mutableStateOf(state.settings) }
+    val offlineState = rememberSaveableStateHolder()
     AlertDialog(onDismissRequest = { if (!state.modelBusy) onEvent(VlmIntent.SettingsVisible(false)) }, title = { Text(stringResource(R.string.vlm_model_settings_title)) }, modifier = Modifier.testTag("vlm_model_settings_dialog"),
         text = {
             Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Row {
-                    Region.entries.forEach { region -> TextButton(onClick = { draft = draft.copy(region = region, preferred = if (region == Region.CN) ProviderId.QWEN else ProviderId.GPT) }) { Text(if (draft.region == region) "✓ ${region.name}" else region.name) } }
+                Row(Modifier.fillMaxWidth().height(IntrinsicSize.Min), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    ModelMode.entries.forEach { mode ->
+                        val selected = draft.mode == mode
+                        OutlinedButton(onClick = { draft = draft.copy(mode = mode) },
+                            modifier = Modifier.weight(1f).fillMaxHeight().testTag("vlm_model_mode_${mode.name}")
+                                .semantics { this.selected = selected },
+                            shape = MaterialTheme.shapes.small,
+                            contentPadding = PaddingValues(horizontal = 4.dp, vertical = 8.dp),
+                            border = BorderStroke(1.dp, if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline),
+                            colors = ButtonDefaults.outlinedButtonColors(
+                                containerColor = if (selected) MaterialTheme.colorScheme.secondaryContainer else Color.Transparent,
+                                contentColor = if (selected) MaterialTheme.colorScheme.onSecondaryContainer else MaterialTheme.colorScheme.onSurface)) {
+                            Text(stringResource(when (mode) {
+                                ModelMode.OFFLINE -> R.string.vlm_model_mode_offline
+                                ModelMode.CLOUD -> R.string.vlm_model_mode_cloud
+                                ModelMode.AUTO -> R.string.vlm_model_mode_auto
+                            }), textAlign = TextAlign.Center)
+                        }
+                    }
                 }
-                ModelMode.entries.forEach { mode ->
-                    FilterChip(selected = draft.mode == mode, onClick = { draft = draft.copy(mode = mode) }, label = { Text(when (mode) { ModelMode.OFFLINE -> "强制离线"; ModelMode.CLOUD -> "指定云端"; ModelMode.AUTO -> "自动切换" }) })
+                HorizontalDivider()
+                if (draft.mode != ModelMode.OFFLINE) {
+                    Column(Modifier.testTag("vlm_cloud_configuration"), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Row {
+                            Region.entries.forEach { region ->
+                                val label = stringResource(if (region == Region.CN) R.string.vlm_model_region_cn else R.string.vlm_model_region_global)
+                                TextButton(onClick = { draft = draft.copy(region = region, preferred = if (region == Region.CN) ProviderId.QWEN else ProviderId.GPT) }) {
+                                    Text(if (draft.region == region) stringResource(R.string.vlm_model_selected_option, label) else label)
+                                }
+                            }
+                        }
+                        val providers = if (draft.region == Region.CN) listOf(ProviderId.QWEN, ProviderId.SEED) else listOf(ProviderId.GPT, ProviderId.GEMINI)
+                        Row { providers.forEach { p -> TextButton(onClick = { draft = draft.copy(preferred = p) }) {
+                            Text(if (draft.preferred == p) stringResource(R.string.vlm_model_selected_option, p.name) else p.name)
+                        } } }
+                        OutlinedTextField(draft.gateway, { draft = draft.copy(gateway = it) }, label = { Text(stringResource(R.string.vlm_model_gateway)) }, singleLine = true)
+                        OutlinedTextField(draft.gatewayToken, { draft = draft.copy(gatewayToken = it) }, label = { Text(stringResource(R.string.vlm_model_gateway_token)) }, visualTransformation = PasswordVisualTransformation(), singleLine = true)
+                        Text(stringResource(R.string.vlm_model_gateway_hint), style = MaterialTheme.typography.labelSmall)
+                        TextButton(onClick = { onEvent(VlmIntent.CheckGateway) }, enabled = !state.modelBusy) { Text(stringResource(R.string.vlm_model_check_gateway)) }
+                    }
                 }
-                val providers = if (draft.region == Region.CN) listOf(ProviderId.QWEN, ProviderId.SEED) else listOf(ProviderId.GPT, ProviderId.GEMINI)
-                Row { providers.forEach { p -> TextButton(onClick = { draft = draft.copy(preferred = p) }) { Text(if (draft.preferred == p) "✓ $p" else "$p") } } }
-                OutlinedTextField(draft.gateway, { draft = draft.copy(gateway = it) }, label = { Text("网关地址") }, singleLine = true)
-                OutlinedTextField(draft.gatewayToken, { draft = draft.copy(gatewayToken = it) }, label = { Text("独立网关令牌") }, visualTransformation = PasswordVisualTransformation(), singleLine = true)
-                Text("供应商 API 密钥仅配置在服务端。检查网关使用已保存的设置。", style = MaterialTheme.typography.labelSmall)
-                TextButton(onClick = { onEvent(VlmIntent.CheckGateway) }, enabled = !state.modelBusy) { Text("检查已保存网关") }
-                OfflineModelPanel(state, onEvent, importDirectory, importModel)
+                if (draft.mode == ModelMode.AUTO) HorizontalDivider(Modifier.testTag("vlm_cloud_offline_divider"))
+                if (draft.mode != ModelMode.CLOUD) {
+                    offlineState.SaveableStateProvider("offline_model") {
+                        Column(Modifier.testTag("vlm_offline_configuration"), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            OfflineModelPanel(state, onEvent, importDirectory, importModel)
+                        }
+                    }
+                }
                 state.error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
                 state.notice?.let { Text(it) }
             }
         },
-        confirmButton = { TextButton(onClick = { onEvent(VlmIntent.SaveSettings(draft)) }, enabled = !state.modelBusy) { Text("保存") } },
-        dismissButton = { TextButton(onClick = { onEvent(VlmIntent.SettingsVisible(false)) }, enabled = !state.modelBusy) { Text("关闭") } }
+        confirmButton = { TextButton(onClick = { onEvent(VlmIntent.SaveSettings(draft)) }, enabled = !state.modelBusy) { Text(stringResource(R.string.vlm_model_settings_save)) } },
+        dismissButton = { TextButton(onClick = { onEvent(VlmIntent.SettingsVisible(false)) }, enabled = !state.modelBusy) { Text(stringResource(R.string.vlm_model_settings_close)) } }
     )
 }
 

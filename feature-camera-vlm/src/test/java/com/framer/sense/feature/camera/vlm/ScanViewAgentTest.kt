@@ -28,7 +28,7 @@ class ScanViewAgentTest {
     @Test fun invalidSelectionGetsOneCorrectionWithSameSubmittedFrame() = runBlocking {
         withScan { scan ->
             val requests = mutableListOf<ViewSelectionRequest>(); val budget = PhotoSessionBudget()
-            val result = ScanViewAgent { "mock-base64" }.select(scan, ModelSettings(), "", budget) {
+            val result = ScanViewAgent { "mock-base64" }.select(scan, ModelSettings(mode = ModelMode.AUTO), "", budget) {
                 gateway { r -> requests += r; ViewSelectionReply("mock", "", if (requests.size == 1) valid().copy(scanId = "other") else valid()) }
             }
             assertEquals("f", result.selection!!.primary.frameId)
@@ -41,7 +41,7 @@ class ScanViewAgentTest {
     @Test fun repeatedInvalidSelectionStopsAfterTwoAttempts() = runBlocking {
         withScan { scan ->
             val budget = PhotoSessionBudget()
-            val result = ScanViewAgent { "mock" }.select(scan, ModelSettings(), "", budget) { gateway { ViewSelectionReply("mock", "invalid") } }
+            val result = ScanViewAgent { "mock" }.select(scan, ModelSettings(mode = ModelMode.AUTO), "", budget) { gateway { ViewSelectionReply("mock", "invalid") } }
             assertNull(result.selection); assertEquals(2, budget.calls)
         }
     }
@@ -60,7 +60,7 @@ class ScanViewAgentTest {
             for (code in listOf("REFUSED", "BAD_REQUEST")) {
                 val budget = PhotoSessionBudget(); val requested = mutableListOf<ProviderId>()
                 try {
-                    ScanViewAgent { "mock" }.select(scan, ModelSettings(), "", budget) { p -> gateway { requested += p; throw ModelFailure(code, "", false) } }
+                    ScanViewAgent { "mock" }.select(scan, ModelSettings(mode = ModelMode.AUTO), "", budget) { p -> gateway { requested += p; throw ModelFailure(code, "", false) } }
                     fail("必须保留拒绝原因")
                 } catch (failure: ModelFailure) { assertEquals(code, failure.code) }
                 assertEquals(1, requested.size); assertEquals(1, budget.calls)
@@ -70,14 +70,14 @@ class ScanViewAgentTest {
     @Test fun cancellationPropagatesWithoutRetry() = runBlocking {
         withScan { scan ->
             val budget = PhotoSessionBudget()
-            try { ScanViewAgent { "mock" }.select(scan, ModelSettings(), "", budget) { gateway { throw CancellationException() } }; fail() }
+            try { ScanViewAgent { "mock" }.select(scan, ModelSettings(mode = ModelMode.AUTO), "", budget) { gateway { throw CancellationException() } }; fail() }
             catch (_: CancellationException) { assertEquals(1, budget.calls) }
         }
     }
     @Test fun exhaustedSessionCannotSubmitAnotherSelection() = runBlocking {
         withScan { scan ->
             val budget = PhotoSessionBudget(); repeat(6) { budget.consume(0) }
-            try { ScanViewAgent { "mock" }.select(scan, ModelSettings(), "", budget) { gateway { error("不应请求") } }; fail() }
+            try { ScanViewAgent { "mock" }.select(scan, ModelSettings(mode = ModelMode.AUTO), "", budget) { gateway { error("不应请求") } }; fail() }
             catch (failure: IllegalStateException) { assertEquals("SESSION_BUDGET_EXHAUSTED", failure.message) }
             assertEquals(6, budget.calls)
         }
@@ -85,7 +85,7 @@ class ScanViewAgentTest {
     @Test fun oldGateway404FallsBackWithoutUploading() = runBlocking {
         withScan { scan ->
             val budget = PhotoSessionBudget()
-            val result = ScanViewAgent { "mock" }.select(scan, ModelSettings(), "", budget) {
+            val result = ScanViewAgent { "mock" }.select(scan, ModelSettings(mode = ModelMode.AUTO), "", budget) {
                 object : MultiViewProvider {
                     override suspend fun capabilities(): MultiImageCapabilities = throw ModelFailure("HTTP_404", "", true)
                     override suspend fun select(request: ViewSelectionRequest): ViewSelectionReply = error("不应上传")
@@ -100,7 +100,7 @@ class ScanViewAgentTest {
             val frames = (0..11).map { index -> original.copy(id = if (index == 0) "f" else "f$index",
                 preferred = index == 0, pose = ScanPose("basis", index.toLong(), index * 30f, 0f)) }
             val budget = PhotoSessionBudget()
-            val result = ScanViewAgent { "mock" }.select(scan.copy(frames = frames), ModelSettings(), "保留山体", budget) {
+            val result = ScanViewAgent { "mock" }.select(scan.copy(frames = frames), ModelSettings(mode = ModelMode.AUTO), "保留山体", budget) {
                 gateway { request ->
                     assertEquals(8, request.images.size)
                     assertEquals(8, request.images.map { it.frameId }.distinct().size)

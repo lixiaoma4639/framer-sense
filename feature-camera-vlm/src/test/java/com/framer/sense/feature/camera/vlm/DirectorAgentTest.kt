@@ -157,7 +157,7 @@ class DirectorAgentTest {
     /** 验证暂时不可用时只在区域内切换，并保留实际供应商；无参数。 */
     @Test fun routesWithinRegionWithoutRepeatingFailedProvider() = runTest {
         val called = mutableListOf<ProviderId>()
-        val result = DirectorAgent().run(input(), ModelSettings(), { id ->
+        val result = DirectorAgent().run(input(), ModelSettings(mode = ModelMode.AUTO), { id ->
             object : VisionModelProvider {
                 /** 模拟千问故障及 Seed 成功。@param call 当前请求。 */
                 override suspend fun step(call: ModelCall): StepReply {
@@ -175,7 +175,7 @@ class DirectorAgentTest {
     @Test fun reportsProgressForFallbackRepairValidationAndProjectionInspection() = runTest {
         val progress = mutableListOf<DirectorProgress>()
         var seedCalls = 0
-        val result = DirectorAgent().run(input(), ModelSettings(), { id -> object : VisionModelProvider {
+        val result = DirectorAgent().run(input(), ModelSettings(mode = ModelMode.AUTO), { id -> object : VisionModelProvider {
             /** 千问不可用后由 Seed 首轮返回非法输出、第二轮返回最终方案。 */
             override suspend fun step(call: ModelCall): StepReply = when (id) {
                 ProviderId.QWEN -> throw ModelFailure("TIMEOUT", "超时", true)
@@ -206,7 +206,7 @@ class DirectorAgentTest {
     @Test fun refusalDoesNotFailOver() = runTest {
         var calls = 0
         try {
-            DirectorAgent().run(input(), ModelSettings(), { _ -> object : VisionModelProvider {
+            DirectorAgent().run(input(), ModelSettings(mode = ModelMode.AUTO), { _ -> object : VisionModelProvider {
                 /** 返回不可重试拒绝。@param call 当前请求。 */
                 override suspend fun step(call: ModelCall): StepReply { calls++; throw ModelFailure("REFUSED", "拒绝", false) }
             } }, PreviewInspector { _, _ -> error("不应渲染") })
@@ -220,7 +220,7 @@ class DirectorAgentTest {
         val entered = CompletableDeferred<Unit>()
         var calls = 0
         val job = launch {
-            DirectorAgent().run(input(), ModelSettings(), { _ -> object : VisionModelProvider {
+            DirectorAgent().run(input(), ModelSettings(mode = ModelMode.AUTO), { _ -> object : VisionModelProvider {
                 /** 模拟正在等待的模型调用。@param call 当前请求。 */
                 override suspend fun step(call: ModelCall): StepReply { calls++; entered.complete(Unit); awaitCancellation() }
             } }, PreviewInspector { _, _ -> error("取消后不应渲染") })
@@ -262,7 +262,7 @@ class DirectorAgentTest {
         val calls = mutableListOf<ProviderId>()
         var qwenCalls = 0
         try {
-            DirectorAgent().run(input(), ModelSettings(), { id -> object : VisionModelProvider {
+            DirectorAgent().run(input(), ModelSettings(mode = ModelMode.AUTO), { id -> object : VisionModelProvider {
                 /** 首轮查询能力，第二轮千问故障后 Seed 再次查询能力。@param call 当前请求。 */
                 override suspend fun step(call: ModelCall): StepReply {
                     calls += id

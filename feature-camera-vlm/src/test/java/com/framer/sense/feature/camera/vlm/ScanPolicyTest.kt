@@ -142,7 +142,7 @@ class ScanPolicyTest {
     @Test fun undeclaredMultiImageCapabilityFallsBackBeforeUploading() = runBlocking {
         val b = PhotoSessionBudget()
         val scan = ScanSnapshot(ScanSession("scan", 100, 300), listOf(frame()), 0f)
-        val result = ScanViewAgent().select(scan, ModelSettings(), "", b) {
+        val result = ScanViewAgent().select(scan, ModelSettings(mode = ModelMode.AUTO), "", b) {
             object : MultiViewProvider {
                 override suspend fun capabilities() = MultiImageCapabilities(emptyList())
                 override suspend fun select(request: ViewSelectionRequest): ViewSelectionReply = error("不能上传")

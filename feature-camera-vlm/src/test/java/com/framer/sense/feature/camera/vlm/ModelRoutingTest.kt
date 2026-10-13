@@ -6,8 +6,19 @@ import com.framer.sense.feature.camera.vlm.model.*
 import org.junit.Assert.*
 import org.junit.Test
 import java.io.File
+import kotlinx.serialization.encodeToString
 
 class ModelRoutingTest {
+    @Test fun defaultIsOfflineAndSavedModesRemainExplicit() {
+        assertEquals(ModelMode.OFFLINE, ModelSettings().mode)
+        assertEquals(listOf(ProviderId.LOCAL), ModelRouting.candidates(ModelSettings()))
+        assertEquals(ModelMode.OFFLINE, VlmJson.decodeFromString<ModelSettings>("{}").mode)
+        ModelMode.entries.forEach { mode ->
+            val saved = VlmJson.encodeToString(ModelSettings(mode = mode))
+            assertEquals(mode, VlmJson.decodeFromString<ModelSettings>(saved).mode)
+        }
+    }
+
     /** 固定离线不能包含网络供应商，即使首选项仍保存为 GPT；无参数。 */
     @Test fun offlineNeverUsesCloud() {
         assertEquals(listOf(ProviderId.LOCAL), ModelRouting.candidates(ModelSettings(region = Region.GLOBAL, mode = ModelMode.OFFLINE, preferred = ProviderId.GPT)))
@@ -16,7 +27,7 @@ class ModelRoutingTest {
     /** 指定云端不能偷偷降级，本区域之外的旧设置会被规范化；无参数。 */
     @Test fun pinnedCloudAndRegionalOrder() {
         assertEquals(listOf(ProviderId.QWEN), ModelRouting.candidates(ModelSettings(mode = ModelMode.CLOUD, preferred = ProviderId.GPT)))
-        assertEquals(listOf(ProviderId.GEMINI, ProviderId.GPT, ProviderId.LOCAL), ModelRouting.candidates(ModelSettings(region = Region.GLOBAL, preferred = ProviderId.GEMINI)))
+        assertEquals(listOf(ProviderId.GEMINI, ProviderId.GPT, ProviderId.LOCAL), ModelRouting.candidates(ModelSettings(region = Region.GLOBAL, mode = ModelMode.AUTO, preferred = ProviderId.GEMINI)))
     }
 
     /** ZIP 解包路径必须始终位于私有目录内；无参数。 */

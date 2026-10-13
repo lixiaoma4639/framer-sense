@@ -159,7 +159,7 @@ val VlmJson = Json { encodeDefaults = true; explicitNulls = true }
 )
 @Serializable data class ModelSettings(
     val region: Region = Region.CN,
-    val mode: ModelMode = ModelMode.AUTO,
+    val mode: ModelMode = ModelMode.OFFLINE,
     val preferred: ProviderId = ProviderId.QWEN,
     val gateway: String = "http://10.0.2.2:8000",
     val gatewayToken: String = ""
