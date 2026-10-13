@@ -343,9 +343,11 @@ class VlmCameraViewModel @Inject constructor(
                         val settings = CloudModelConfig.applyQwenConfiguration(intent.settings)
                         if (settings.mode == ModelMode.CLOUD && settings.region == Region.CN && settings.preferred == ProviderId.QWEN &&
                             settings.qwenAccess == QwenAccess.OFFICIAL) QwenOfficialProtocol.validate(settings)
+                        if (settings.mode == ModelMode.CLOUD && settings.region == Region.CN && settings.preferred == ProviderId.SEED &&
+                            settings.seedAccess == SeedAccess.OFFICIAL) SeedOfficialProtocol.validate(settings)
                         withContext(Dispatchers.IO) { settingsStore.save(settings) }
                         _state.update { it.copy(settings = settings, stage = if (it.scanSnapshot != null && it.scene == null) VlmStage.SCAN_REVIEW else if (it.scene == null || it.stage == VlmStage.LIVE) VlmStage.LIVE else VlmStage.FROZEN, settingsVisible = false, error = null) }
-                    } catch (e: Exception) { _state.update { it.copy(error = qwenFailureMessage(e) ?: "设置保存失败：${e.message}") } }
+                    } catch (e: Exception) { _state.update { it.copy(error = cloudFailureMessage(e) ?: "设置保存失败：${e.message}") } }
                 }
             }
             is VlmIntent.CameraForeground -> {
@@ -388,6 +390,22 @@ class VlmCameraViewModel @Inject constructor(
                     val model = QwenOfficialProvider(s).checkConfiguration()
                     Log.i("VlmScan", "模型使用 stage=配置检查 result=成功 ${ModelUsageLog.identity(ProviderId.QWEN, s.copy(qwenAccess = QwenAccess.OFFICIAL), model)} visionVerified=false")
                     _state.update { it.copy(notice = models.message(R.string.vlm_qwen_check_success, model)) }
+                } catch (cancel: CancellationException) {
+                    Log.i("VlmScan", "模型使用 stage=配置检查 result=取消 $identity")
+                    throw cancel
+                } catch (failure: Exception) {
+                    Log.e("VlmScan", "模型使用 stage=配置检查 result=失败 $identity ${ModelUsageLog.failure(failure)}")
+                    throw failure
+                }
+            }
+            VlmIntent.CheckSeed -> maintain(models.message(R.string.vlm_seed_checking)) {
+                val s = _state.value.settings
+                val identity = ModelUsageLog.identity(ProviderId.SEED, s.copy(seedAccess = SeedAccess.OFFICIAL))
+                Log.i("VlmScan", "模型使用 stage=配置检查 result=开始 $identity")
+                try {
+                    val model = SeedOfficialProvider(s).checkConfiguration()
+                    Log.i("VlmScan", "模型使用 stage=配置检查 result=成功 ${ModelUsageLog.identity(ProviderId.SEED, s.copy(seedAccess = SeedAccess.OFFICIAL), model)} visionVerified=false")
+                    _state.update { it.copy(notice = models.message(R.string.vlm_seed_check_success, model)) }
                 } catch (cancel: CancellationException) {
                     Log.i("VlmScan", "模型使用 stage=配置检查 result=取消 $identity")
                     throw cancel
@@ -600,7 +618,7 @@ class VlmCameraViewModel @Inject constructor(
             catch (failure: Exception) {
                 Log.e("VlmScan", "选景流程失败 scan=${scan.session.id.take(8)} token=${token.take(8)} code=${(failure as? ModelFailure)?.code} http=${(failure as? ModelFailure)?.upstreamHttpStatus} upstream=${(failure as? ModelFailure)?.upstreamErrorCode} error=${failure::class.java.simpleName} stale=${token != requestToken}", failure)
                 if (token == requestToken) _state.update { it.copy(stage = VlmStage.SCAN_REVIEW,
-                    error = qwenFailureMessage(failure) ?: if ((failure as? ModelFailure)?.code == "SELECTION_ATTEMPTS_EXHAUSTED")
+                    error = cloudFailureMessage(failure) ?: if ((failure as? ModelFailure)?.code == "SELECTION_ATTEMPTS_EXHAUSTED")
                         models.message(R.string.vlm_scan_selection_attempts_exhausted) else if (failure.message == "SESSION_BUDGET_EXHAUSTED" || (failure as? ModelFailure)?.code == "SESSION_BUDGET_EXHAUSTED")
                         models.message(R.string.vlm_scan_budget_exhausted) else if ((failure as? ModelFailure)?.code == "LOCAL_VIEW_INVALID_OUTPUT") models.message(R.string.vlm_scan_local_invalid_output)
                     else if (s.settings.mode == ModelMode.OFFLINE) failure.message?.takeIf { it.isNotBlank() } ?: models.message(R.string.vlm_scan_local_select_failed)
@@ -719,7 +737,7 @@ class VlmCameraViewModel @Inject constructor(
                 val trace = actualTrace ?: (e as? ModelFailure)?.diagnostics?.traces?.lastOrNull()
                 Log.e(LOG_TAG, "模型使用 stage=构图界面 result=失败 ${ModelUsageLog.identity(trace?.provider, previous.settings, trace?.model)} token=${token.take(8)} ${ModelUsageLog.failure(e)}")
                 Log.e(LOG_TAG, "构图任务失败 token=${token.take(8)} error=${e::class.java.simpleName} http=${(e as? ModelFailure)?.upstreamHttpStatus} upstream=${(e as? ModelFailure)?.upstreamErrorCode}", e)
-                val message = qwenFailureMessage(e) ?: if ((e as? ModelFailure)?.code == "SESSION_BUDGET_EXHAUSTED" || e.message == "SESSION_BUDGET_EXHAUSTED") models.message(R.string.vlm_scan_budget_exhausted) else if ((e as? ModelFailure)?.code == "LOCAL_PHOTO_INVALID_OUTPUT") models.message(R.string.vlm_photo_model_invalid) else if ((e as? ModelFailure)?.code == "LOCAL_INVALID_OUTPUT") models.message(R.string.vlm_local_invalid_output) else e.message ?: "构图失败，请重试"
+                val message = cloudFailureMessage(e) ?: if ((e as? ModelFailure)?.code == "SESSION_BUDGET_EXHAUSTED" || e.message == "SESSION_BUDGET_EXHAUSTED") models.message(R.string.vlm_scan_budget_exhausted) else if ((e as? ModelFailure)?.code == "LOCAL_PHOTO_INVALID_OUTPUT") models.message(R.string.vlm_photo_model_invalid) else if ((e as? ModelFailure)?.code == "LOCAL_INVALID_OUTPUT") models.message(R.string.vlm_local_invalid_output) else e.message ?: "构图失败，请重试"
                 if (token == requestToken) _state.update { it.copy(stage = if (it.result == null) VlmStage.FROZEN else VlmStage.READY, error = message, diagnostics = (e as? ModelFailure)?.diagnostics, directorProgress = null) }
             }
         }
@@ -900,9 +918,19 @@ class VlmCameraViewModel @Inject constructor(
         maintenance = viewModelScope.launch {
             try { operation() }
             catch (cancel: CancellationException) { throw cancel }
-            catch (e: Exception) { _state.update { it.copy(error = qwenFailureMessage(e) ?: if (e is ModelFailure) e.message else models.errorMessage(e)) } }
+            catch (e: Exception) { _state.update { it.copy(error = cloudFailureMessage(e) ?: if (e is ModelFailure) e.message else models.errorMessage(e)) } }
             finally { maintenanceBusy = false; _state.update { it.copy(modelBusy = local.loadState.value.phase == LocalModelPhase.LOADING, modelStatus = modelDescription()) } }
         }
+    }
+
+    private fun cloudFailureMessage(failure: Exception): String? {
+        qwenFailureMessage(failure)?.let { return it }
+        val resource = seedErrorResource(failure) ?: return null
+        val message = models.message(resource)
+        val modelFailure = failure as ModelFailure
+        val status = modelFailure.upstreamHttpStatus ?: return message
+        return models.message(R.string.vlm_seed_error_details, message, status,
+            modelFailure.upstreamErrorCode ?: models.message(R.string.vlm_qwen_unknown_error))
     }
 
     private fun qwenFailureMessage(failure: Exception): String? {

@@ -193,10 +193,13 @@ internal object QwenOfficialProtocol {
 
 object CloudProviders {
     fun officialQwen(settings: ModelSettings, provider: ProviderId) = provider == ProviderId.QWEN && settings.qwenAccess == QwenAccess.OFFICIAL
+    fun officialSeed(settings: ModelSettings, provider: ProviderId) = provider == ProviderId.SEED && settings.seedAccess == SeedAccess.OFFICIAL
     fun vision(settings: ModelSettings, provider: ProviderId): VisionModelProvider =
-        if (officialQwen(settings, provider)) QwenOfficialProvider(settings) else GatewayProvider(settings, provider)
+        if (officialQwen(settings, provider)) QwenOfficialProvider(settings)
+        else if (officialSeed(settings, provider)) SeedOfficialProvider(settings) else GatewayProvider(settings, provider)
     fun views(settings: ModelSettings, provider: ProviderId): MultiViewProvider =
-        if (officialQwen(settings, provider)) QwenOfficialProvider(settings) else MultiViewGateway(settings, provider)
+        if (officialQwen(settings, provider)) QwenOfficialProvider(settings)
+        else if (officialSeed(settings, provider)) SeedOfficialProvider(settings) else MultiViewGateway(settings, provider)
 }
 
 /** 错误文案只由资源提供，不把供应商返回正文展示给用户。 */

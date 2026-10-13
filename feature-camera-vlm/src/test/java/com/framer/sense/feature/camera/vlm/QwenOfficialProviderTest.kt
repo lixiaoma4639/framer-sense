@@ -56,7 +56,7 @@ class QwenOfficialProviderTest {
         assertEquals("", VlmJson.decodeFromString<ModelSettings>(saved).qwenApiKey)
         assertTrue(CloudProviders.vision(settings, ProviderId.QWEN) is QwenOfficialProvider)
         assertTrue(CloudProviders.vision(settings.copy(qwenAccess = QwenAccess.GATEWAY), ProviderId.QWEN) is GatewayProvider)
-        assertTrue(CloudProviders.vision(settings, ProviderId.SEED) is GatewayProvider)
+        assertTrue(CloudProviders.vision(settings.copy(seedAccess = SeedAccess.GATEWAY), ProviderId.SEED) is GatewayProvider)
     }
 
     @Test fun photosUseRealImageChannelAndKeepEveryFrameIdInOrder() {
@@ -79,7 +79,7 @@ class QwenOfficialProviderTest {
             var requests = 0
             val http = client { request ->
                 requests++
-                assertEquals("https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions", request.url.toString())
+                assertEquals(settings.qwenBaseUrl + CloudModelConfig.qwenVisionPath, request.url.toString())
                 assertEquals("Bearer sk-fake-key", request.header("Authorization"))
                 val buffer = okio.Buffer(); request.body!!.writeTo(buffer)
                 assertFalse(buffer.readUtf8().contains("sk-fake-key"))

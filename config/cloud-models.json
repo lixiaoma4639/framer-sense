@@ -18,8 +18,9 @@
     },
     "seed": {
       "base_url": "https://ark.cn-beijing.volces.com/api/v3",
-      "model": "doubao-seed-2-0-lite-260215",
-      "vision_path": "/chat/completions"
+      "model": "doubao-seed-2-1-lite-260915",
+      "vision_path": "/chat/completions",
+      "allowed_hosts": "ark.cn-beijing.volces.com"
     },
     "gpt": {
       "base_url": "https://api.openai.com/v1",

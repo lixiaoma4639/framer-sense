@@ -193,6 +193,38 @@ class VlmCameraScreenTest {
         composeRule.onNodeWithTag("vlm_gateway_configuration").assertExists()
     }
 
+    @Test fun seedOfficialSettingsUseJsonAndKeepQwenKeyWhileSavingAndSwitchingAccess() {
+        val initial = ModelSettings(mode = ModelMode.CLOUD, preferred = ProviderId.SEED, qwenApiKey = "sk-existing-qwen-key")
+        val events = mutableListOf<VlmIntent>()
+        composeRule.setContent { MaterialTheme {
+            ModelSettingsDialog(VlmUiState(settings = initial), events::add, {}, {})
+        } }
+        composeRule.onNodeWithTag("vlm_seed_access_OFFICIAL").assertIsSelected()
+        composeRule.onNodeWithTag("vlm_seed_official_configuration").assertExists()
+        composeRule.onNodeWithTag("vlm_qwen_official_configuration").assertDoesNotExist()
+        composeRule.onNodeWithTag("vlm_gateway_configuration").assertDoesNotExist()
+        composeRule.onNodeWithTag("vlm_seed_base_url").assertTextContains(CloudModelConfig.seedBaseUrl)
+        composeRule.onNodeWithTag("vlm_seed_model").assertTextContains(CloudModelConfig.seedModel)
+        composeRule.onNodeWithTag("vlm_seed_api_key").performScrollTo().performTextReplacement("fake-seed-key")
+        composeRule.onNodeWithText("保存").performClick()
+        assertEquals(listOf(VlmIntent.SaveSettings(initial.copy(seedApiKey = "fake-seed-key"))), events)
+        composeRule.onNodeWithTag("vlm_seed_check").performScrollTo().performClick()
+        assertEquals(VlmIntent.CheckSeed, events.last())
+        composeRule.onNodeWithTag("vlm_seed_access_GATEWAY").performScrollTo().performClick()
+        composeRule.onNodeWithTag("vlm_seed_official_configuration").assertDoesNotExist()
+        composeRule.onNodeWithTag("vlm_gateway_configuration").assertExists()
+    }
+
+    @Test fun autoModeShowsBothOfficialProvidersAndOfflineWithoutRequiringGateway() {
+        composeRule.setContent { MaterialTheme {
+            ModelSettingsDialog(VlmUiState(settings = ModelSettings(mode = ModelMode.AUTO)), {}, {}, {})
+        } }
+        composeRule.onNodeWithTag("vlm_qwen_official_configuration").assertExists()
+        composeRule.onNodeWithTag("vlm_seed_official_configuration").assertExists()
+        composeRule.onNodeWithTag("vlm_offline_configuration").assertExists()
+        composeRule.onNodeWithTag("vlm_gateway_configuration").assertDoesNotExist()
+    }
+
     @Test fun ratioLabelFollowsLandscapeWithoutChangingPreference() {
         val configuration = android.content.res.Configuration().apply { orientation = android.content.res.Configuration.ORIENTATION_LANDSCAPE }
         composeRule.setContent {

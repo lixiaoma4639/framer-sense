@@ -180,7 +180,7 @@ JNI 使用 MNN Omni 的真实 `<img>私有图片路径</img>` 视觉解析入口
 
 - `providers.qwen/seed/gpt/gemini.base_url`：供应商 Base URL；`model`：默认视觉模型 ID；`vision_path`：追加到 Base URL 的请求路径，以 `/` 开头。Gemini 使用 `{model}` 占位符，实际模型 ID 会安全编码。
 - `providers.qwen.allowed_hosts/workspace_host_suffix`：官方直连的域名限制，保留百炼官方域名检查和禁止重定向。当前默认地址保留用户已填写到源码中的北京业务空间地址；可在同一配置中改为账号对应的官方地址。
-- `gateway.base_url`：App 默认网关地址；其余 `*_path` 同时控制 App 请求路径和 FastAPI 路由，修改后必须同步更新 App 与网关。仅 QWEN 当前支持 App 官方直连；其他供应商仍经网关。
+- `gateway.base_url`：App 默认网关地址；其余 `*_path` 同时控制 App 请求路径和 FastAPI 路由，修改后必须同步更新 App 与网关。QWEN 和 Seed 支持 App 官方直连并保留网关入口；GPT/Gemini 仍经网关。
 - QWEN 与 Seed 的默认模型沿用原配置示例；GPT/Gemini 的默认模型为空，需填账号已开通且支持视觉的模型。网关无 `*_MODEL` 环境变量时使用此文件的默认模型，存在显式空环境变量时保持未配置状态；多图能力仍需按原规则额外声明。
 
 Android 在 Gradle 配置时读取 JSON 并生成 BuildConfig，由 `CloudModelConfig` 提供访问入口。QWEN 官方直连的 Base URL 和视觉模型 ID 输入栏只读展示当前 JSON 值；读取旧设置、打开设置和保存设置时均覆盖旧地址/模型，保留用户 API Key、网关令牌和其他选项，确保检查与实际请求使用同一配置。修改文件后同步并重新构建安装，无需清除应用数据。手机网关地址仍可修改并保存。Python 网关启动时从仓库读取同一文件，修改后重启；独立部署需保留仓库相对目录结构及该文件。部署环境 `*_BASE_URL`/`*_MODEL` 优先，已有 `.env` 中旧值会继续覆盖统一默认值。
@@ -218,11 +218,21 @@ QWEN 官方直连开始时标记配置模型；网关构图开始前模型 ID �
 
 403 排障：兼容嵌套 `error.code`、顶层 `code` 和 `error.type`。仅保留 HTTP 状态和白名单中已识别的百炼错误码，页面展示本地化原因，选景/构图日志增加 `http` 与 `upstream`。`Arrearage` 指向账号欠费/状态，`AllocationQuota.FreeTierOnly` 指向免费额度用完即停，`AccessDenied.Unpurchased` 指向服务开通资格，`Model.AccessDenied` 和 `Workspace.AccessDenied` 分别指向模型与业务空间授权。未知错误码不回显，不能仅凭 HTTP 403 断言欠费或 Key 错误。仍不保存/打印上游 `message`、响应正文或 Key，不自动修改计费设置或切换模型规避内容拒绝。官方解释见[百炼错误码](https://help.aliyun.com/zh/model-studio/error-code)。
 
-已有设置若保存了网关令牌且没有 `qwenAccess` 字段，则继续使用“自有网关”；其他旧用户与新用户默认“官方直连”。手动切换接入方式保留隐藏字段，其他三家供应商仍走原网关。设置保存和恢复使用真实 Keystore；恢复失败清空密钥，需用户重新填写。
+已有设置若保存了网关令牌且没有 `qwenAccess` 字段，则继续使用“自有网关”；其他旧用户与新用户默认“官方直连”。手动切换接入方式保留隐藏字段；Seed 另有独立官方接入，GPT/Gemini 仍走网关。设置保存和恢复使用真实 Keystore；恢复失败清空对应密钥，需用户重新填写。
+
+阿里云百炼控制台：[北京地域模型广场](https://bailian.console.aliyun.com/cn-beijing/model/market)。
 
 官方资料：[获取 API Key](https://help.aliyun.com/zh/model-studio/get-api-key/)、[Base URL](https://help.aliyun.com/zh/model-studio/base-url)、[视觉理解](https://help.aliyun.com/zh/model-studio/vision)、[Chat 接口](https://help.aliyun.com/zh/model-studio/qwen-api-via-openai-chat-completions/)、[JSON 输出](https://help.aliyun.com/zh/model-studio/qwen-structured-output)。
 
 已补充官方地址与图片协议、错误脱敏、预算、取消、扫描能力混合、设置加密/迁移及界面回归测试代码；按仓库约定本轮未运行 Gradle/Android 测试，未请求真实计费模型。真实 Key 与设备视觉质量由用户验收。
+
+### Seed 官方直连配置
+
+1. 在方舟控制台开通视觉模型并创建 API Key。共享 JSON 的 Seed 默认模型为 `doubao-seed-2-1-lite-260915`，地址为北京方舟，路径为 Chat Completions；若使用已开通的模型/接入点，在 JSON 中修改 Seed 项后重新构建安装。
+2. App 模型设置选择“指定云端 → CN → SEED → 官方直连”，地址和模型 ID 只读展示 JSON 值；填写独立的方舟 API Key，保存后重新打开，点击“检查已保存 Seed 配置”。检查仅发少量文本，不上传照片；成功后再验收单张构图及 1／6／8 帧扫描。
+3. Seed 复用原云端 Agent、选景协议、校验、预算和取消；独立适配 `thinking.type=disabled` 与 JSON Object。默认离线模式、QWEN 配置及协议、MNN 推理保持原样。三个密钥分开加密，不进公开 JSON；旧设置缺少 `seedAccess` 且有网关令牌时保留 Seed 网关方式，其他默认官方直连。自动模式展示两家独立配置并保留原路由顺序。
+
+官方资料：[模型列表](https://docs.volcengine.com/docs/ark/model-list?lang=zh)、[Base URL 与鉴权](https://docs.volcengine.com/docs/ark/base-url-and-authentication?lang=zh)、[Chat API](https://docs.volcengine.com/docs/ark/chat-api?lang=zh)、[图片理解](https://docs.volcengine.com/docs/ark/image-understanding?lang=zh)、[结构化输出](https://docs.volcengine.com/docs/ark/structured-output-beta?lang=zh)。已补充模拟协议、预算、取消、密钥及界面回归测试，未运行 Gradle/Android 测试或真实计费调用；验收时先确认既有离线与 QWEN，再确认 Seed。
 
 ## 导演与自动切换
 

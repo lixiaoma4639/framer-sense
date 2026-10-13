@@ -40,12 +40,15 @@ class SettingsStore(context: Context) {
         val stored = prefs.getString("settings", null)
         val token = readSecret("token")
         val settings = runCatching {
-            val decoded = VlmJson.decodeFromString<ModelSettings>(stored ?: "{}")
+            var decoded = VlmJson.decodeFromString<ModelSettings>(stored ?: "{}")
             // 旧用户显式保存的网关配置继续走网关；首次设置默认官方直连。
             if (stored != null && token.isNotBlank() && "qwenAccess" !in VlmJson.parseToJsonElement(stored).jsonObject)
-                decoded.copy(qwenAccess = QwenAccess.GATEWAY) else decoded
+                decoded = decoded.copy(qwenAccess = QwenAccess.GATEWAY)
+            if (stored != null && token.isNotBlank() && "seedAccess" !in VlmJson.parseToJsonElement(stored).jsonObject)
+                decoded = decoded.copy(seedAccess = SeedAccess.GATEWAY)
+            decoded
         }.getOrDefault(ModelSettings())
-        return CloudModelConfig.applyQwenConfiguration(settings.copy(gatewayToken = token, qwenApiKey = readSecret("qwen-api-key")))
+        return CloudModelConfig.applyQwenConfiguration(settings.copy(gatewayToken = token, qwenApiKey = readSecret("qwen-api-key"), seedApiKey = readSecret("seed-api-key")))
     }
 
     private fun readSecret(name: String): String = runCatching {
@@ -56,14 +59,15 @@ class SettingsStore(context: Context) {
             cipher.doFinal(payload.copyOfRange(12, payload.size)).toString(Charsets.UTF_8)
         }.getOrDefault("")
 
-    /** 持久化配置，两个密钥分开加密，和公开设置在同一事务内提交。
-     * @param settings 路由、网关和 QWEN 官方配置。
+    /** 持久化配置，三个密钥分开加密，和公开设置在同一事务内提交。
+     * @param settings 路由、网关和两家官方配置。
      */
     fun save(settings: ModelSettings) {
         val token = encrypt(settings.gatewayToken)
         val qwenKey = encrypt(settings.qwenApiKey)
-        check(prefs.edit().putString("settings", VlmJson.encodeToString(CloudModelConfig.applyQwenConfiguration(settings).copy(gatewayToken = "", qwenApiKey = "")))
-            .putString("token", token).putString("qwen-api-key", qwenKey).commit()) { "无法保存模型设置" }
+        val seedKey = encrypt(settings.seedApiKey)
+        check(prefs.edit().putString("settings", VlmJson.encodeToString(CloudModelConfig.applyQwenConfiguration(settings).copy(gatewayToken = "", qwenApiKey = "", seedApiKey = "")))
+            .putString("token", token).putString("qwen-api-key", qwenKey).putString("seed-api-key", seedKey).commit()) { "无法保存模型设置" }
     }
 
     private fun encrypt(value: String): String {

@@ -57,7 +57,8 @@ class ScanViewAgent(
                 catch (cancel: CancellationException) { throw cancel }
                 catch (failure: ModelFailure) {
                     logger.warn("模型使用 stage=选景能力 result=失败 ${ModelUsageLog.identity(provider, settings)} ${ModelUsageLog.failure(failure)} retryable=${failure.retryable}")
-                    if (!failure.retryable || (settings.mode == ModelMode.CLOUD && CloudProviders.officialQwen(settings, provider))) throw failure
+                    if (!failure.retryable || (settings.mode == ModelMode.CLOUD &&
+                        (CloudProviders.officialQwen(settings, provider) || CloudProviders.officialSeed(settings, provider)))) throw failure
                     continue
                 }
                 val capability = capabilities.providers.firstOrNull { it.provider == provider && it.configured && it.multiImage && it.maxImages > 0 }

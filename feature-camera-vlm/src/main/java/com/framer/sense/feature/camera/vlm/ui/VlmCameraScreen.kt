@@ -850,8 +850,15 @@ internal fun ModelSettingsDialog(state: VlmUiState, onEvent: (VlmIntent) -> Unit
                         } } }
                         val showQwen = draft.region == Region.CN && (draft.preferred == ProviderId.QWEN || draft.mode == ModelMode.AUTO)
                         if (showQwen) QwenModelPanel(draft, { draft = it }, state.modelBusy, onEvent)
-                        if (draft.preferred != ProviderId.QWEN || draft.qwenAccess == QwenAccess.GATEWAY) {
+                        val showSeed = draft.region == Region.CN && (draft.preferred == ProviderId.SEED || draft.mode == ModelMode.AUTO)
+                        if (showSeed) {
                             if (showQwen) HorizontalDivider()
+                            SeedModelPanel(draft, { draft = it }, state.modelBusy, onEvent)
+                        }
+                        val needsGateway = draft.region == Region.GLOBAL ||
+                            (showQwen && draft.qwenAccess == QwenAccess.GATEWAY) || (showSeed && draft.seedAccess == SeedAccess.GATEWAY)
+                        if (needsGateway) {
+                            if (showQwen || showSeed) HorizontalDivider()
                             Column(Modifier.testTag("vlm_gateway_configuration"), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                                 OutlinedTextField(draft.gateway, { draft = draft.copy(gateway = it) }, label = { Text(stringResource(R.string.vlm_model_gateway)) }, singleLine = true)
                                 OutlinedTextField(draft.gatewayToken, { draft = draft.copy(gatewayToken = it) }, label = { Text(stringResource(R.string.vlm_model_gateway_token)) }, visualTransformation = PasswordVisualTransformation(), singleLine = true)

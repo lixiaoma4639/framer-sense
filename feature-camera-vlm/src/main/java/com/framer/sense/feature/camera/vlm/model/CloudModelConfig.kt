@@ -15,6 +15,10 @@ object CloudModelConfig {
     const val qwenVisionPath = BuildConfig.MODEL_PROVIDERS_QWEN_VISION_PATH
     val qwenAllowedHosts = BuildConfig.MODEL_PROVIDERS_QWEN_ALLOWED_HOSTS.split(',').map { it.trim() }.toSet()
     const val qwenWorkspaceHostSuffix = BuildConfig.MODEL_PROVIDERS_QWEN_WORKSPACE_HOST_SUFFIX
+    const val seedBaseUrl = BuildConfig.MODEL_PROVIDERS_SEED_BASE_URL
+    const val seedModel = BuildConfig.MODEL_PROVIDERS_SEED_MODEL
+    const val seedVisionPath = BuildConfig.MODEL_PROVIDERS_SEED_VISION_PATH
+    val seedAllowedHosts = BuildConfig.MODEL_PROVIDERS_SEED_ALLOWED_HOSTS.split(',').map { it.trim() }.toSet()
 
     /** 地址和模型以当前构建的 JSON 为准；保留用户密钥和其他设置。 */
     fun applyQwenConfiguration(settings: ModelSettings): ModelSettings =

@@ -3,6 +3,7 @@ package com.framer.sense.feature.camera.vlm
 import com.framer.sense.feature.camera.vlm.agent.*
 import com.framer.sense.feature.camera.vlm.data.ModelFailure
 import com.framer.sense.feature.camera.vlm.data.QwenOfficialProvider
+import com.framer.sense.feature.camera.vlm.data.SeedOfficialProvider
 import com.framer.sense.feature.camera.vlm.model.*
 import com.framer.sense.feature.camera.vlm.scan.*
 import kotlinx.coroutines.*
@@ -12,6 +13,67 @@ import java.io.File
 
 /** 使用临时帧与可注入视觉传输，验证修正、路由、上传预算及取消。 */
 class ScanViewAgentTest {
+    @Test fun seedOfficialSelectionDoesNotQueryQwenOrGatewayAndDeductsBudgetOncePerCall() = runBlocking {
+        withScan { scan ->
+            val settings = ModelSettings(mode = ModelMode.CLOUD, preferred = ProviderId.SEED, seedApiKey = "fake-seed-key")
+            val budget = PhotoSessionBudget()
+            val result = ScanViewAgent { "jpeg" }.select(scan, settings, "", budget) { provider ->
+                assertEquals(ProviderId.SEED, provider)
+                object : MultiViewProvider {
+                    override suspend fun capabilities() = SeedOfficialProvider(settings).capabilities()
+                    override suspend fun select(request: ViewSelectionRequest) = ViewSelectionReply(CloudModelConfig.seedModel, "", valid())
+                }
+            }
+            assertEquals("f", result.selection!!.primary.frameId)
+            assertEquals(ProviderId.SEED, result.traces.single().provider)
+            assertEquals(1, budget.calls); assertEquals(1, budget.selectionCalls); assertEquals(4L, budget.uploadedBytes)
+        }
+    }
+
+    @Test fun offlineStillSkipsCloudFactoriesEvenWithBothOfficialKeysSaved() = runBlocking {
+        withScan { scan ->
+            val settings = ModelSettings(mode = ModelMode.OFFLINE, qwenApiKey = "sk-qwen", seedApiKey = "seed-key")
+            val budget = PhotoSessionBudget()
+            val result = ScanViewAgent { "unused" }.select(scan, settings, "", budget) { error("离线不能创建云端请求") }
+            assertEquals(ScanSelectionFallback.OFFLINE, result.fallback)
+            assertEquals(0, budget.calls)
+        }
+    }
+
+    @Test fun seedCorrectionUsesSameFramesAndExistingTwoCallLimit() = runBlocking {
+        withScan { scan ->
+            val settings = ModelSettings(mode = ModelMode.CLOUD, preferred = ProviderId.SEED, seedApiKey = "fake-seed-key")
+            val requests = mutableListOf<ViewSelectionRequest>(); val budget = PhotoSessionBudget()
+            val result = ScanViewAgent { "jpeg" }.select(scan, settings, "", budget) { provider ->
+                assertEquals(ProviderId.SEED, provider)
+                object : MultiViewProvider {
+                    override suspend fun capabilities() = SeedOfficialProvider(settings).capabilities()
+                    override suspend fun select(request: ViewSelectionRequest): ViewSelectionReply {
+                        requests += request
+                        if (requests.size == 2) assertTrue(request.prompt.contains("INVALID_VIEW_SCAN_ID"))
+                        return ViewSelectionReply(CloudModelConfig.seedModel, "", if (requests.size == 1) valid().copy(scanId = "other") else valid())
+                    }
+                }
+            }
+            assertEquals("f", result.selection!!.primary.frameId)
+            assertEquals(requests[0].images, requests[1].images)
+            assertEquals(2, budget.selectionCalls); assertEquals(2, budget.calls)
+            assertEquals(8L, budget.uploadedBytes)
+        }
+    }
+
+    @Test fun missingOfficialSeedKeyShowsSeedErrorInExplicitCloudModeWithoutQwenFallback() = runBlocking {
+        withScan { scan ->
+            val settings = ModelSettings(mode = ModelMode.CLOUD, preferred = ProviderId.SEED, qwenApiKey = "sk-working-qwen")
+            val budget = PhotoSessionBudget()
+            try {
+                ScanViewAgent { "unused" }.select(scan, settings, "", budget)
+                fail()
+            } catch (failure: ModelFailure) { assertEquals("SEED_KEY", failure.code) }
+            assertEquals(0, budget.calls)
+        }
+    }
+
     @Test fun successfulOfficialSelectionNeverWaitsForUnrelatedGateway() = runBlocking {
         withScan { scan ->
             val settings = ModelSettings(mode = ModelMode.AUTO, qwenApiKey = "sk-fake-key")

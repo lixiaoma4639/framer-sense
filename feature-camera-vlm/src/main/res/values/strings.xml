@@ -354,4 +354,25 @@
     <string name="vlm_director_revise">让导演修改</string>
     <string name="vlm_close_dialog">关闭设置</string>
     <string name="vlm_exit_camera">退出拍摄，返回上一页面</string>
+    <string name="vlm_seed_settings_title">Seed 火山方舟</string>
+    <string name="vlm_seed_base_url">方舟 API 地址（Base URL）</string>
+    <string name="vlm_seed_api_key">方舟 API Key</string>
+    <string name="vlm_seed_model">视觉模型 ID</string>
+    <string name="vlm_seed_configuration_hint">地址和视觉模型由项目 JSON 配置统一管理，修改后重新构建安装。请在方舟开通对应模型，并填写方舟 API Key。Key 独立加密保存在本机，官方直连无需网关。</string>
+    <string name="vlm_seed_check_saved">检查已保存 Seed 配置</string>
+    <string name="vlm_seed_check_hint">请先保存，再重新打开检查。检查会发送一次少量 Token 的文本请求，不上传照片；成功不代表视觉构图已验收。</string>
+    <string name="vlm_seed_checking">正在检查 Seed 官方配置…</string>
+    <string name="vlm_seed_check_success">Seed 官方请求成功，实际模型：%1$s</string>
+    <string name="vlm_seed_key_missing">请填写并保存方舟 API Key</string>
+    <string name="vlm_seed_model_invalid">请检查 JSON 中的 Seed 视觉模型 ID 或接入点 ID，以及账号是否已开通对应模型</string>
+    <string name="vlm_seed_url_invalid">请检查 JSON 中的方舟官方 HTTPS Base URL，不包含账号、查询参数或完整请求路径</string>
+    <string name="vlm_seed_auth_failed">方舟鉴权失败，请检查 Seed API Key 及其项目权限</string>
+    <string name="vlm_seed_permission_failed">方舟拒绝访问，请检查模型开通、API Key 权限及账号状态</string>
+    <string name="vlm_seed_rate_limit">方舟请求被限流，请稍后再试</string>
+    <string name="vlm_seed_service_failed">方舟服务暂不可用，请稍后再试</string>
+    <string name="vlm_seed_request_failed">方舟请求参数错误，请检查视觉模型及接口配置</string>
+    <string name="vlm_seed_refused">Seed 拒绝了本次内容，请调整画面或要求</string>
+    <string name="vlm_seed_output_invalid">Seed 未返回完整有效的结果，请重试或调整要求</string>
+    <string name="vlm_seed_network_failed">无法连接方舟或请求超时，请检查网络后重试</string>
+    <string name="vlm_seed_error_details">%1$s（HTTP %2$d，方舟错误码：%3$s）</string>
 </resources>
