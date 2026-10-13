@@ -11,6 +11,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from .models import PhotoStepRequest, PhotoReferenceDecision, Decision, Provider, StepReply, StepRequest, ViewRequest, ViewReply, ViewSelection
 from .providers import ProviderFailure, config_for, invoke, multi_image_limit
+from .config import GATEWAY
 
 
 @asynccontextmanager
@@ -39,19 +40,19 @@ async def validation_error(request: Request, exc: RequestValidationError) -> JSO
     return JSONResponse(status_code=422, content={"detail": {"code": "BAD_REQUEST", "message": "请求字段不符合构图协议"}})
 
 
-@app.get("/health")
+@app.get(GATEWAY["health_path"])
 async def health() -> dict:
     """返回进程存活状态；无参数，不暴露模型配置。"""
     return {"status": "ok"}
 
 
-@app.get("/v1/capabilities", dependencies=[Depends(authorize)])
+@app.get(GATEWAY["capabilities_v1_path"], dependencies=[Depends(authorize)])
 async def capabilities() -> dict:
     """返回供应商配置状态；无参数，不返回任何密钥。"""
     return {"providers": [{"provider": p.value, "model": config_for(p).model, "configured": bool(config_for(p).key and config_for(p).model), "vision": True, "outputMode": "json_schema" if p in (Provider.GPT, Provider.GEMINI) else "json_object" if p == Provider.QWEN else "prompt_json"} for p in Provider]}
 
 
-@app.post("/v1/director/step", response_model=StepReply, dependencies=[Depends(authorize)])
+@app.post(GATEWAY["director_v1_path"], response_model=StepReply, dependencies=[Depends(authorize)])
 async def step(body: StepRequest, request: Request) -> StepReply:
     """执行一轮真实图文推理。参数 body 为公共协议，request 提供连接池；错误输出交给客户端修正或路由。"""
     try:
@@ -72,7 +73,7 @@ async def step(body: StepRequest, request: Request) -> StepReply:
     return StepReply(model=model, raw=raw, decision=decision, elapsedMs=int((time.monotonic() - started) * 1000))
 
 
-@app.get("/v2/capabilities", dependencies=[Depends(authorize)])
+@app.get(GATEWAY["capabilities_v2_path"], dependencies=[Depends(authorize)])
 async def multi_capabilities() -> dict:
     return {"version": 2, "providers": [{"provider": p.value, "model": config_for(p).model,
         "configured": bool(config_for(p).key and config_for(p).model),
@@ -80,7 +81,7 @@ async def multi_capabilities() -> dict:
         "maxImages": multi_image_limit(p), "directorV2": bool(config_for(p).key and config_for(p).model)} for p in Provider]}
 
 
-@app.post("/v2/views/select", response_model=ViewReply, dependencies=[Depends(authorize)])
+@app.post(GATEWAY["views_path"], response_model=ViewReply, dependencies=[Depends(authorize)])
 async def select_views(body: ViewRequest, request: Request) -> ViewReply:
     limit = multi_image_limit(body.provider)
     if not limit or len(body.images) > limit:
@@ -118,7 +119,7 @@ async def select_views(body: ViewRequest, request: Request) -> ViewReply:
     return ViewReply(model=model, raw=raw, selection=selection, elapsedMs=int((time.monotonic() - started) * 1000))
 
 
-@app.post("/v2/director/step", response_model=StepReply, dependencies=[Depends(authorize)])
+@app.post(GATEWAY["director_v2_path"], response_model=StepReply, dependencies=[Depends(authorize)])
 async def photo_step(body: PhotoStepRequest, request: Request) -> StepReply:
     """摄影参考目录协议：保留 v1，拒绝未登记动作、表情与非法保留区域。"""
     try:

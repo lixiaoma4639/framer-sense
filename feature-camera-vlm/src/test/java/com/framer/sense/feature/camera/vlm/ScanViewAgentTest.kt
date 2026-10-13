@@ -2,6 +2,7 @@ package com.framer.sense.feature.camera.vlm
 
 import com.framer.sense.feature.camera.vlm.agent.*
 import com.framer.sense.feature.camera.vlm.data.ModelFailure
+import com.framer.sense.feature.camera.vlm.data.QwenOfficialProvider
 import com.framer.sense.feature.camera.vlm.model.*
 import com.framer.sense.feature.camera.vlm.scan.*
 import kotlinx.coroutines.*
@@ -11,6 +12,44 @@ import java.io.File
 
 /** 使用临时帧与可注入视觉传输，验证修正、路由、上传预算及取消。 */
 class ScanViewAgentTest {
+    @Test fun successfulOfficialSelectionNeverWaitsForUnrelatedGateway() = runBlocking {
+        withScan { scan ->
+            val settings = ModelSettings(mode = ModelMode.AUTO, qwenApiKey = "sk-fake-key")
+            val result = ScanViewAgent { "jpeg" }.select(scan, settings, "", PhotoSessionBudget()) { provider ->
+                check(provider == ProviderId.QWEN) { "官方选景成功不应查询网关" }
+                object : MultiViewProvider {
+                    override suspend fun capabilities() = QwenOfficialProvider(settings).capabilities()
+                    override suspend fun select(request: ViewSelectionRequest) = ViewSelectionReply(settings.qwenModel, "", valid())
+                }
+            }
+            assertEquals("f", result.selection!!.primary.frameId)
+        }
+    }
+
+    @Test fun officialCapabilityStillWorksWhenEarlierGatewayProviderIsUnavailable() = runBlocking {
+        withScan { scan ->
+            val settings = ModelSettings(mode = ModelMode.AUTO, preferred = ProviderId.SEED, qwenApiKey = "sk-fake-key")
+            val budget = PhotoSessionBudget()
+            val selected = mutableListOf<ProviderId>()
+            val result = ScanViewAgent { "jpeg" }.select(scan, settings, "", budget) { provider ->
+                object : MultiViewProvider {
+                    override suspend fun capabilities(): MultiImageCapabilities {
+                        if (provider == ProviderId.SEED) throw ModelFailure("UNAVAILABLE", "", true)
+                        return QwenOfficialProvider(settings).capabilities()
+                    }
+                    override suspend fun select(request: ViewSelectionRequest): ViewSelectionReply {
+                        selected += provider
+                        assertEquals(listOf("f"), request.images.map { it.frameId })
+                        return ViewSelectionReply(settings.qwenModel, "", valid())
+                    }
+                }
+            }
+            assertEquals(listOf(ProviderId.QWEN), selected)
+            assertEquals("f", result.selection!!.primary.frameId)
+            assertEquals(1, budget.calls)
+        }
+    }
+
     private suspend fun withScan(block: suspend (ScanSnapshot) -> Unit) {
         val file = File.createTempFile("scan-view", ".jpg")
         try {
@@ -40,9 +79,18 @@ class ScanViewAgentTest {
     }
     @Test fun repeatedInvalidSelectionStopsAfterTwoAttempts() = runBlocking {
         withScan { scan ->
+            val logs = mutableListOf<String>()
+            val logger = object : DirectorLogger by NoOpDirectorLogger {
+                override fun info(message: String) { logs += message }
+                override fun warn(message: String, error: Throwable?) { logs += message }
+            }
             val budget = PhotoSessionBudget()
-            val result = ScanViewAgent { "mock" }.select(scan, ModelSettings(mode = ModelMode.AUTO), "", budget) { gateway { ViewSelectionReply("mock", "invalid") } }
+            val result = ScanViewAgent(logger) { "mock" }.select(scan, ModelSettings(mode = ModelMode.AUTO), "", budget) { gateway { ViewSelectionReply("mock", "invalid") } }
             assertNull(result.selection); assertEquals(2, budget.calls)
+            assertTrue(logs.any { it.contains("stage=选景调用 result=返回成功") && it.contains("model=mock") })
+            assertTrue(logs.any { it.contains("stage=选景校验 result=失败") })
+            assertFalse(logs.any { it.contains("stage=选景任务 result=成功") })
+            assertTrue(logs.any { it.contains("stage=选景任务 result=转人工选景") })
         }
     }
     @Test fun retryableFailureSwitchesWithinSameTwoAttemptBudget() = runBlocking {

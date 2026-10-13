@@ -15,6 +15,9 @@
  */
 
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
+import groovy.json.JsonOutput
+import groovy.json.JsonSlurper
+import java.util.Locale
 
 plugins {
     alias(libs.plugins.android.library)
@@ -24,12 +27,26 @@ plugins {
     alias(libs.plugins.kotlin.serialization)
 }
 
+// 两端共用的唯一默认配置；编译到 BuildConfig，不依赖设备运行时文件路径。
+val cloudModelsFile = rootProject.layout.projectDirectory.file("config/cloud-models.json")
+val cloudModels = JsonSlurper().parseText(providers.fileContents(cloudModelsFile).asText.get()) as Map<*, *>
+fun cloudModelFields(values: Map<*, *>, prefix: String = "MODEL"): Map<String, String> =
+    values.entries.flatMap { (key, value) ->
+        val name = "${prefix}_${key.toString().uppercase(Locale.ROOT)}"
+        if (value is Map<*, *>) cloudModelFields(value, name).entries.map { it.key to it.value }
+        else {
+            require(value is String) { "cloud-models.json 的 $name 必须为字符串" }
+            listOf(name to JsonOutput.toJson(value))
+        }
+    }.toMap()
+
 android {
     namespace = "com.framer.sense.feature.camera.vlm"
     compileSdk = 36
     ndkVersion = "28.2.13676358"
 
     defaultConfig {
+        cloudModelFields(cloudModels).forEach { (name, value) -> buildConfigField("String", name, value) }
         minSdk = 24
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         consumerProguardFiles("consumer-rules.pro")

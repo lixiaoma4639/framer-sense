@@ -808,7 +808,7 @@ private fun facingLabel(yaw: Float): String = stringResource(when {
  */
 @Composable
 internal fun ModelSettingsDialog(state: VlmUiState, onEvent: (VlmIntent) -> Unit, importModel: () -> Unit, importDirectory: () -> Unit) {
-    var draft by remember(state.settings) { mutableStateOf(state.settings) }
+    var draft by remember(state.settings) { mutableStateOf(CloudModelConfig.applyQwenConfiguration(state.settings)) }
     val offlineState = rememberSaveableStateHolder()
     AlertDialog(onDismissRequest = { if (!state.modelBusy) onEvent(VlmIntent.SettingsVisible(false)) }, title = { Text(stringResource(R.string.vlm_model_settings_title)) }, modifier = Modifier.testTag("vlm_model_settings_dialog"),
         text = {
@@ -848,10 +848,17 @@ internal fun ModelSettingsDialog(state: VlmUiState, onEvent: (VlmIntent) -> Unit
                         Row { providers.forEach { p -> TextButton(onClick = { draft = draft.copy(preferred = p) }) {
                             Text(if (draft.preferred == p) stringResource(R.string.vlm_model_selected_option, p.name) else p.name)
                         } } }
-                        OutlinedTextField(draft.gateway, { draft = draft.copy(gateway = it) }, label = { Text(stringResource(R.string.vlm_model_gateway)) }, singleLine = true)
-                        OutlinedTextField(draft.gatewayToken, { draft = draft.copy(gatewayToken = it) }, label = { Text(stringResource(R.string.vlm_model_gateway_token)) }, visualTransformation = PasswordVisualTransformation(), singleLine = true)
-                        Text(stringResource(R.string.vlm_model_gateway_hint), style = MaterialTheme.typography.labelSmall)
-                        TextButton(onClick = { onEvent(VlmIntent.CheckGateway) }, enabled = !state.modelBusy) { Text(stringResource(R.string.vlm_model_check_gateway)) }
+                        val showQwen = draft.region == Region.CN && (draft.preferred == ProviderId.QWEN || draft.mode == ModelMode.AUTO)
+                        if (showQwen) QwenModelPanel(draft, { draft = it }, state.modelBusy, onEvent)
+                        if (draft.preferred != ProviderId.QWEN || draft.qwenAccess == QwenAccess.GATEWAY) {
+                            if (showQwen) HorizontalDivider()
+                            Column(Modifier.testTag("vlm_gateway_configuration"), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                OutlinedTextField(draft.gateway, { draft = draft.copy(gateway = it) }, label = { Text(stringResource(R.string.vlm_model_gateway)) }, singleLine = true)
+                                OutlinedTextField(draft.gatewayToken, { draft = draft.copy(gatewayToken = it) }, label = { Text(stringResource(R.string.vlm_model_gateway_token)) }, visualTransformation = PasswordVisualTransformation(), singleLine = true)
+                                Text(stringResource(R.string.vlm_model_gateway_hint), style = MaterialTheme.typography.labelSmall)
+                                TextButton(onClick = { onEvent(VlmIntent.CheckGateway) }, enabled = !state.modelBusy) { Text(stringResource(R.string.vlm_model_check_gateway)) }
+                            }
+                        }
                     }
                 }
                 if (draft.mode == ModelMode.AUTO) HorizontalDivider(Modifier.testTag("vlm_cloud_offline_divider"))

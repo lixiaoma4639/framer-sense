@@ -12,7 +12,7 @@ pip install -r requirements.txt
 cp .env.example .env
 ```
 
-编辑 `.env`：设置独立随机 `VLM_GATEWAY_TOKEN`，再填写所需供应商的 `*_API_KEY` 与账号实际可用的 `*_MODEL`。未同时配置 key/model 的供应商会报告未配置。不要把供应商 API key 填入 App，也不要提交 `.env`。
+编辑 `.env`：设置独立随机 `VLM_GATEWAY_TOKEN`，再填写所需供应商的 `*_API_KEY`。地址、默认模型 ID 和请求路径统一在 [`config/cloud-models.json`](../../config/cloud-models.json)；如需部署覆盖，额外设置 `*_MODEL`/`*_BASE_URL`。Key 或有效模型为空的供应商会报告未配置，不要提交 `.env`。App 的 QWEN 官方直连在设备设置中填 Key；网关接入在 App 中仅填网关令牌。
 
 环境变量由 shell 显式加载（文件必须由你自己维护）：
 
@@ -36,7 +36,9 @@ Android 模拟器地址通常是 `http://10.0.2.2:8000`；真机使用开发电�
 | `GPT` | `/responses` 图像消息 | `text.format` 严格 JSON Schema，`store=false` |
 | `GEMINI` | `/models/{model}:generateContent` | inline 图像、`responseJsonSchema` |
 
-各前缀支持 `_API_KEY`、`_MODEL`、`_BASE_URL` 环境变量。上游地址由服务端管理员设置，客户端不能指定上游 URL。`.env.example` 的模型示例不是可用性保证，需按账号开通情况填写。
+各前缀支持 `_API_KEY`、`_MODEL`、`_BASE_URL` 环境变量。环境变量优先于统一配置，显式空值也会覆盖。统一配置中的 QWEN/Seed 默认模型不代表账号调用已验收；GPT/Gemini 默认模型为空，需按账号开通情况填写。上游地址由服务端管理员设置，客户端不能指定网关上游 URL。
+
+网关启动时读取统一配置，修改后重启。独立部署须同时携带根目录 `config/cloud-models.json` 并保留 `services/vlm-gateway/gateway` 相对位置；不要只复制 Python 文件。修改网关业务路径后，还须重新构建安装 App，使两端一致。各供应商请求结构仍按现有协议适配，修改路径不会自动切换协议。密钥只用环境变量，不写进共享 JSON。
 
 `POST /v1/director/step` 请求字段：
 

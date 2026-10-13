@@ -28,6 +28,9 @@ interface VisionModelProvider {
 
 class ModelFailure(val code: String, message: String, val retryable: Boolean) : Exception(message) {
     var diagnostics: CompositionResult? = null
+    /** 官方响应诊断，只保存状态码和已识别的固定错误码，不保存上游 message 或正文。 */
+    var upstreamHttpStatus: Int? = null
+    var upstreamErrorCode: String? = null
 }
 
 /** 使用客户端明确选择的供应商访问自有网关。 */
@@ -43,7 +46,7 @@ class GatewayProvider(
     override suspend fun step(call: ModelCall): StepReply = withContext(Dispatchers.IO) {
         val photoV2 = if (com.framer.sense.feature.camera.vlm.agent.PhotoReferenceDecisionPolicy.enabled(call.input)) {
             try {
-                VlmJson.decodeFromString<MultiImageCapabilities>(execute("/v2/capabilities", null)).providers
+                VlmJson.decodeFromString<MultiImageCapabilities>(execute(CloudModelConfig.capabilitiesV2Path, null)).providers
                     .any { it.provider == provider && it.configured && it.model.isNotBlank() && it.directorV2 }
             } catch (failure: ModelFailure) { if (failure.code == "HTTP_404") false else throw failure }
         } else false
@@ -52,7 +55,7 @@ class GatewayProvider(
         catch (_: IllegalStateException) { throw ModelFailure("SESSION_BUDGET_EXHAUSTED", "", false) }
         val body = GatewayRequest(provider, call.requestId, Base64.encodeToString(bytes, Base64.NO_WRAP),
             if (photoV2) call.prompt else call.legacyPrompt ?: call.prompt, call.input.scene.id, if (photoV2) 2 else 1)
-        val text = execute(if (photoV2) "/v2/director/step" else "/v1/director/step", VlmJson.encodeToString(body))
+        val text = execute(if (photoV2) CloudModelConfig.directorV2Path else CloudModelConfig.directorV1Path, VlmJson.encodeToString(body))
         try { VlmJson.decodeFromString<StepReply>(text).copy(photoProtocol = photoV2) }
         catch (e: IllegalArgumentException) { throw ModelFailure("INVALID_OUTPUT", "网关响应不符合协议", true) }
     }
@@ -60,7 +63,7 @@ class GatewayProvider(
     /** 查询网关实际配置的模型。
      * @return 供应商列表；不返回密钥。
      */
-    suspend fun capabilities(): GatewayCapabilities = VlmJson.decodeFromString(execute("/v1/capabilities", null))
+    suspend fun capabilities(): GatewayCapabilities = VlmJson.decodeFromString(execute(CloudModelConfig.capabilitiesV1Path, null))
 
     /** 发起可取消的 HTTP 请求。
      * @param path 固定业务接口路径。

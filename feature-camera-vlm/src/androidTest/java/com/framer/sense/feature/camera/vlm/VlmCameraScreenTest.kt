@@ -109,7 +109,7 @@ class VlmCameraScreenTest {
     }
 
     @Test fun modelSettingsShowsOnlySelectedModeConfigurationAndKeepsHiddenGatewayDraft() {
-        val initial = ModelSettings(gateway = "https://example.invalid/vlm", gatewayToken = "test-token")
+        val initial = ModelSettings(gateway = "https://example.invalid/vlm", gatewayToken = "test-token", qwenAccess = QwenAccess.GATEWAY)
         val editedGateway = "https://example.invalid/edited"
         val events = mutableListOf<VlmIntent>()
         composeRule.setContent { MaterialTheme {
@@ -170,6 +170,27 @@ class VlmCameraScreenTest {
         composeRule.onNodeWithTag("vlm_model_mode_CLOUD").assertIsSelected()
         composeRule.onNodeWithTag("vlm_cloud_configuration").assertExists()
         composeRule.onNodeWithTag("vlm_offline_configuration").assertDoesNotExist()
+    }
+
+    @Test fun officialQwenSettingsUseJsonAddressAndModelAndSaveUserKey() {
+        val initial = ModelSettings(mode = ModelMode.CLOUD, qwenBaseUrl = "https://old.example.invalid/v1", qwenModel = "old-model")
+        val events = mutableListOf<VlmIntent>()
+        composeRule.setContent { MaterialTheme {
+            ModelSettingsDialog(VlmUiState(settings = initial), events::add, {}, {})
+        } }
+        composeRule.onNodeWithTag("vlm_qwen_access_OFFICIAL").assertIsSelected()
+        composeRule.onNodeWithTag("vlm_qwen_official_configuration").assertExists()
+        composeRule.onNodeWithTag("vlm_gateway_configuration").assertDoesNotExist()
+        composeRule.onNodeWithTag("vlm_qwen_base_url").assertTextContains(CloudModelConfig.qwenBaseUrl)
+        composeRule.onNodeWithTag("vlm_qwen_model").assertTextContains(CloudModelConfig.qwenModel)
+        composeRule.onNodeWithTag("vlm_qwen_api_key").performScrollTo().performTextReplacement("sk-fake-qwen-key")
+        composeRule.onNodeWithText("保存").performClick()
+        assertEquals(listOf(VlmIntent.SaveSettings(CloudModelConfig.applyQwenConfiguration(initial).copy(qwenApiKey = "sk-fake-qwen-key"))), events)
+        composeRule.onNodeWithTag("vlm_qwen_check").performScrollTo().performClick()
+        assertEquals(VlmIntent.CheckQwen, events.last())
+        composeRule.onNodeWithTag("vlm_qwen_access_GATEWAY").performScrollTo().performClick()
+        composeRule.onNodeWithTag("vlm_qwen_official_configuration").assertDoesNotExist()
+        composeRule.onNodeWithTag("vlm_gateway_configuration").assertExists()
     }
 
     @Test fun ratioLabelFollowsLandscapeWithoutChangingPreference() {

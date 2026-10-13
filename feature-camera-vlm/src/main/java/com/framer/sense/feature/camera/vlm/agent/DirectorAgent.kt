@@ -91,6 +91,8 @@ class DirectorAgent(
         val failedProviders = mutableSetOf<ProviderId>()
         var lastRaw: String? = null
         var localAttempted = false
+        var activeProvider: ProviderId? = null
+        var activeModel: String? = null
         try {
             repeat(2) { turn ->
                 currentCoroutineContext().ensureActive()
@@ -100,6 +102,11 @@ class DirectorAgent(
                 var lastError: ModelFailure? = null
                 var switchingProvider = false
                 for (id in ModelRouting.candidates(settings).filterNot { it in failedProviders }) {
+                    val previousProvider = activeProvider
+                    activeProvider = id
+                    activeModel = null
+                    if (previousProvider != null && previousProvider != id)
+                        logger.info("模型使用 stage=构图切换 result=切换 from=$previousProvider ${ModelUsageLog.identity(id, settings)} turn=${turn + 1}")
                     onProgress(
                         if (switchingProvider) DirectorProgress.SwitchingProvider(turn + 1)
                         else DirectorProgress.AnalyzingScene(turn + 1, revisingFromFeedback = turn > 0 && id != ProviderId.LOCAL)
@@ -107,19 +114,20 @@ class DirectorAgent(
                     val start = System.nanoTime()
                     try {
                         val prompt = DirectorPrompt.build(input, observations, lastRaw, turn == 1, offline = id == ProviderId.LOCAL)
-                        logger.info("调用模型 turn=${turn + 1} provider=$id fallback=$switchingProvider")
+                        logger.info("模型使用 stage=构图调用 result=开始 ${ModelUsageLog.identity(id, settings)} turn=${turn + 1} fallback=$switchingProvider")
                         if (id == ProviderId.LOCAL) localAttempted = true
                         val answer = providerFactory(id).step(ModelCall(input, prompt, newVlmId(),
                             if (PhotoReferenceDecisionPolicy.enabled(input)) DirectorPrompt.build(input.copy(photoReferences = false), observations, lastRaw, turn == 1, offline = id == ProviderId.LOCAL) else null))
                         traces += CallTrace(id, answer.model, (System.nanoTime() - start) / 1_000_000, "决策 ${turn + 1}")
-                        logger.info("模型返回 turn=${turn + 1} provider=$id model=${answer.model} elapsedMs=${traces.last().elapsedMs} outputBytes=${answer.raw.toByteArray().size}")
+                        activeModel = answer.model
+                        logger.info("模型使用 stage=构图调用 result=返回成功 ${ModelUsageLog.identity(id, settings, answer.model)} turn=${turn + 1} elapsedMs=${traces.last().elapsedMs} awaitingValidation=true")
                         reply = answer
                         break
                     } catch (cancelled: CancellationException) {
                         throw cancelled
                     } catch (failure: ModelFailure) {
                         traces += CallTrace(id, "", (System.nanoTime() - start) / 1_000_000, failure.message.orEmpty())
-                        logger.warn("模型失败 turn=${turn + 1} provider=$id code=${failure.code} retryable=${failure.retryable} elapsedMs=${traces.last().elapsedMs}", failure)
+                        logger.warn("模型使用 stage=构图调用 result=失败 ${ModelUsageLog.identity(id, settings)} ${ModelUsageLog.failure(failure)} turn=${turn + 1} retryable=${failure.retryable} elapsedMs=${traces.last().elapsedMs}")
                         if (!failure.retryable || settings.mode != ModelMode.AUTO) throw failure
                         failedProviders += id
                         lastError = failure
@@ -225,16 +233,22 @@ class DirectorAgent(
                         val old = input.existing.find { it.id == plan.id }
                         if (plan.id == input.selectedId && old != null) plan.withRevision(old.revision + 1) else plan
                     }
-                    logger.info("导演任务完成 image=${input.scene.id.take(8)} turns=${turn + 1} plans=${revised.size}")
+                    logger.info("模型使用 stage=构图任务 result=成功 ${ModelUsageLog.identity(activeProvider, settings, activeModel)} image=${input.scene.id.take(8)} turns=${turn + 1} plans=${revised.size}")
                     return CompositionResult(revised, traces, observations, outputs)
                 }
             }
             if (localAttempted) throw ModelFailure("LOCAL_INVALID_OUTPUT", "", false)
             throw ModelFailure("INVALID_OUTPUT", "导演在两轮内未提交有效最终方案，请修改要求或更换模型后重试", false)
         } catch (failure: ModelFailure) {
-            logger.error("导演任务失败 image=${input.scene.id.take(8)} code=${failure.code} retryable=${failure.retryable}", failure)
+            logger.error("模型使用 stage=构图任务 result=失败 ${ModelUsageLog.identity(activeProvider, settings, activeModel)} image=${input.scene.id.take(8)} ${ModelUsageLog.failure(failure)} retryable=${failure.retryable}")
             failure.diagnostics = CompositionResult(emptyList(), traces.toList(), observations.toList(), outputs.toList())
             throw failure
+        } catch (cancel: CancellationException) {
+            logger.info("模型使用 stage=构图任务 result=取消 ${ModelUsageLog.identity(activeProvider, settings, activeModel)} image=${input.scene.id.take(8)}")
+            throw cancel
+        } catch (error: Exception) {
+            logger.error("模型使用 stage=构图任务 result=失败 ${ModelUsageLog.identity(activeProvider, settings, activeModel)} image=${input.scene.id.take(8)} ${ModelUsageLog.failure(error)}")
+            throw error
         }
     }
 
@@ -263,7 +277,7 @@ class CompositionRepository(private val local: VisionModelProvider, private val 
     ): CompositionResult = agent.run(
         input,
         settings,
-        { id -> if (id == ProviderId.LOCAL) local else GatewayProvider(settings, id) },
+        { id -> if (id == ProviderId.LOCAL) local else CloudProviders.vision(settings, id) },
         inspector,
         onProgress
     )

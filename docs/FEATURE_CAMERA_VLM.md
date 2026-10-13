@@ -33,7 +33,7 @@
 | `feature-camera-vlm/.../camera` | CameraX 绑定、连续分析、光轴姿态、冻结复制、转正裁剪、MediaStore 保存 |
 | `.../scan` | 扫描窗口、关键帧与文件缓存、共享预算、OpenCV 背景验证 |
 | `.../model` | JSON 协议、坐标、最终事实 ResolvedPhotoSpec、指导、模型配置和会话输入 |
-| `.../data` | 网关适配、区域路由、OkHttp 下载与前台服务、目录/ZIP 导入、MNN 串行推理、加密设置 |
+| `.../data` | QWEN 官方直连、网关适配、区域路由、OkHttp 下载与前台服务、目录/ZIP 导入、MNN 串行推理、加密设置 |
 | `.../agent` | 提示词、结构与几何校验、本地单次/云端两轮导演循环、Repository |
 | `.../avatar` | 4 个角色、版本化动作/能力目录、受控姿势/完整快照/动画采样、独立脸部示范和预览缓存 |
 | `.../ui` | MVI 状态、Intent、Effect、ViewModel、相机和模型设置面板 |
@@ -170,9 +170,55 @@ JNI 使用 MNN Omni 的真实 `<img>私有图片路径</img>` 视觉解析入口
 | `GET /v1/capabilities` | 已配置供应商及服务端模型 ID，需要网关令牌 |
 | `POST /v1/director/step` | 单步图文请求，返回 model/raw/decision/elapsedMs，需要网关令牌 |
 
-Android 不保存供应商 API key，也不写死云端模型 ID。设置中的令牌用 Android Keystore AES-GCM 加密保存。Debug manifest 允许本地 HTTP；Release 客户端拒绝 HTTP，部署时使用 HTTPS。
+网关接入模式的供应商 API Key 与模型 ID 仍由服务端配置；QWEN 新增 Android 官方直连方式，用户自行填写 API Key、官方 Base URL 和视觉模型 ID。网关令牌与 QWEN Key 分开用 Android Keystore AES-GCM 加密保存；QWEN Key 不进入序列化配置 JSON、不写入日志。Debug manifest 允许本地网关 HTTP；Release 网关和所有官方直连请求使用 HTTPS。
 
 四家适配使用各自实际图像通道：千问/Seed Chat Completions `image_url`，GPT Responses `input_image` 和严格 JSON Schema，Gemini `inlineData` 和 `responseJsonSchema`。千问启用 JSON Object；Seed 按提示词生成 JSON，由公共协议校验，不能假定所有模型支持同一种严格结构化输出。
+
+### 云端模型统一配置（2026-10-13）
+
+所有云端默认地址、模型 ID、视觉请求路径及客户端/网关业务路径统一维护在 [`config/cloud-models.json`](../config/cloud-models.json)，Android 和 Python 网关共用这一份文件，调用代码不再保存这些固定值。
+
+- `providers.qwen/seed/gpt/gemini.base_url`：供应商 Base URL；`model`：默认视觉模型 ID；`vision_path`：追加到 Base URL 的请求路径，以 `/` 开头。Gemini 使用 `{model}` 占位符，实际模型 ID 会安全编码。
+- `providers.qwen.allowed_hosts/workspace_host_suffix`：官方直连的域名限制，保留百炼官方域名检查和禁止重定向。当前默认地址保留用户已填写到源码中的北京业务空间地址；可在同一配置中改为账号对应的官方地址。
+- `gateway.base_url`：App 默认网关地址；其余 `*_path` 同时控制 App 请求路径和 FastAPI 路由，修改后必须同步更新 App 与网关。仅 QWEN 当前支持 App 官方直连；其他供应商仍经网关。
+- QWEN 与 Seed 的默认模型沿用原配置示例；GPT/Gemini 的默认模型为空，需填账号已开通且支持视觉的模型。网关无 `*_MODEL` 环境变量时使用此文件的默认模型，存在显式空环境变量时保持未配置状态；多图能力仍需按原规则额外声明。
+
+Android 在 Gradle 配置时读取 JSON 并生成 BuildConfig，由 `CloudModelConfig` 提供访问入口。QWEN 官方直连的 Base URL 和视觉模型 ID 输入栏只读展示当前 JSON 值；读取旧设置、打开设置和保存设置时均覆盖旧地址/模型，保留用户 API Key、网关令牌和其他选项，确保检查与实际请求使用同一配置。修改文件后同步并重新构建安装，无需清除应用数据。手机网关地址仍可修改并保存。Python 网关启动时从仓库读取同一文件，修改后重启；独立部署需保留仓库相对目录结构及该文件。部署环境 `*_BASE_URL`/`*_MODEL` 优先，已有 `.env` 中旧值会继续覆盖统一默认值。
+
+此文件只存公开配置，不填写 API Key 或网关令牌。设备 Key 仍在界面填写并加密保存；网关 Key/令牌仍用环境变量。路径配置只适用于现有协议：QWEN/Seed 为 Chat Completions、GPT 为 Responses、Gemini 为 generateContent，不能仅将 QWEN 路径改为 DashScope 原生路径就切换协议，需要另外适配请求和响应结构。
+
+已新增共享默认值/环境覆盖、实际请求路径和 Gemini 模型路径转义测试代码，更新 QWEN 地址检查测试；本轮只做静态检查，未运行自动化测试。
+
+### 模型使用日志（2026-10-13）
+
+在 Logcat 搜索 `模型使用`；标签 `VlmScan` 对应配置检查与选景，`VlmDirector` 对应构图调用及校验后的任务结果，`VlmCamera` 对应最终预览界面结果。统一字段 `source=云端/离线`、`provider=QWEN/SEED/GPT/GEMINI/LOCAL`、`access=官方直连/项目网关/本机`、`model` 和 `modelSource` 标明本次实际执行的模型。
+
+`result=开始/返回成功/成功/失败/取消/切换/转人工选景` 区分调用、任务和路由结果。`返回成功` 仅表示适配器返回，仍需校验；只有合法选景、导演完整校验通过或最终预览就绪时，对应任务/界面阶段记录 `成功`。配置检查只是文本请求，日志带 `visionVerified=false`，不代表视觉任务已验收。能力声明记录 `actualCallSucceeded=false`，不能当成云端调用成功。自动模式记录切换的来源和目标，最终结果记录最后实际成功的供应商；云端选景降级当前为人工选景，不伪称已调用离线模型。
+
+QWEN 官方直连开始时标记配置模型；网关构图开始前模型 ID 为待返回，因为部署环境可能覆盖 JSON。能力接口返回的模型标记为 `能力声明`，调用返回后的模型标记为 `实际返回`；离线也记录实际返回的模型。失败日志包含稳定 `code`、可用的 `http` 与百炼 `upstream`，不新增密钥、地址、照片、提示词、错误正文或模型原文日志；模型标识拒绝密钥形态、URL 和换行注入。日志出口可注入，JVM 测试不依赖 Android Logcat。
+
+已补充自动切换后实际云端/离线结果、非法选景不能报成功与日志脱敏测试代码；未运行 Gradle/Android 测试。
+
+### QWEN 官方直连配置（2026-10-13）
+
+适用于只有百炼官方 API Key、不运行项目网关的个人设备。无需下载云端模型，不使用 LangChain 或第三方聚合平台。首次模型模式仍为强制离线；使用云端时主动切换。
+
+1. 打开拍照页模型设置，选择“指定云端 → CN → QWEN → 官方直连”。
+2. 在 `config/cloud-models.json` 的 `providers.qwen.base_url` 配置地址，App 输入栏只读展示它；当前保留北京业务空间地址。北京通用地址可设为 `https://dashscope.aliyuncs.com/compatible-mode/v1`，新加坡可设为 `https://dashscope-intl.aliyuncs.com/compatible-mode/v1`；官方业务空间地址如 `https://{WorkspaceId}.cn-beijing.maas.aliyuncs.com/compatible-mode/v1` 也可使用。替换真实业务空间 ID，地址只到 `/compatible-mode/v1`，不能再追加 `/chat/completions`。修改 JSON 后重新构建安装，在 App 填写同地域的百炼 API Key。仅允许百炼官方 HTTPS 域名，不发送 Key 到第三方地址或重定向目标。
+3. 视觉模型 ID 由 `providers.qwen.model` 配置，App 输入栏只读展示它，当前为 `qwen3-vl-plus`。需具备当前地域的模型调用权限，支持图片与非思考 JSON Object 输出。其他视觉模型由用户在 JSON 中配置并验收，不把文本模型视为已验证视觉模型。
+4. 保存后重新打开设置，点击“检查已保存 QWEN 配置”。该按钮发送一次少量 Token 的文本请求，验证鉴权及当前模型调用，不上传图片，不计入扫描会话预算；成功后先验收单张构图，再验收扫描选景和应用参考。
+
+`QwenOfficialProvider` 同时实现 `VisionModelProvider` 和 `MultiViewProvider`，由 `CloudProviders` 分配。直接调用 `/chat/completions`，设置 `enable_thinking=false`、`response_format=json_object`，图像以 JPEG Base64 的 `image_url` 通道输入；每张扫描图附带原始 frameId，不允许模型返回未提交帧。摄影参考保持 v2 意图与实际目录校验；普通构图保持原导演协议。扫描最多八张/3 MiB，最多两次选景调用，和后续构图共享每扫描六次/12 MiB 预算；官方直连不查询项目网关能力接口。每个供应商分别查询能力，网关不可用不隐藏可用的官方 QWEN 候选。取消调用实际 `Call.cancel()`，无传输自动重试；连接超时 10 秒，读取和总请求超时 180 秒。
+
+地址、鉴权、模型权限、限流、请求参数、内容拒绝、无效结果和网络错误分别用本地化提示；上游错误正文不进入异常、日志或界面。非法选择保留原扫描并交有限修正，不伪造背景。Key 为空时不能保存指定云端的官方 QWEN 配置；自动模式可以保留未配置供应商并按既有规则降级。
+
+403 排障：兼容嵌套 `error.code`、顶层 `code` 和 `error.type`。仅保留 HTTP 状态和白名单中已识别的百炼错误码，页面展示本地化原因，选景/构图日志增加 `http` 与 `upstream`。`Arrearage` 指向账号欠费/状态，`AllocationQuota.FreeTierOnly` 指向免费额度用完即停，`AccessDenied.Unpurchased` 指向服务开通资格，`Model.AccessDenied` 和 `Workspace.AccessDenied` 分别指向模型与业务空间授权。未知错误码不回显，不能仅凭 HTTP 403 断言欠费或 Key 错误。仍不保存/打印上游 `message`、响应正文或 Key，不自动修改计费设置或切换模型规避内容拒绝。官方解释见[百炼错误码](https://help.aliyun.com/zh/model-studio/error-code)。
+
+已有设置若保存了网关令牌且没有 `qwenAccess` 字段，则继续使用“自有网关”；其他旧用户与新用户默认“官方直连”。手动切换接入方式保留隐藏字段，其他三家供应商仍走原网关。设置保存和恢复使用真实 Keystore；恢复失败清空密钥，需用户重新填写。
+
+官方资料：[获取 API Key](https://help.aliyun.com/zh/model-studio/get-api-key/)、[Base URL](https://help.aliyun.com/zh/model-studio/base-url)、[视觉理解](https://help.aliyun.com/zh/model-studio/vision)、[Chat 接口](https://help.aliyun.com/zh/model-studio/qwen-api-via-openai-chat-completions/)、[JSON 输出](https://help.aliyun.com/zh/model-studio/qwen-structured-output)。
+
+已补充官方地址与图片协议、错误脱敏、预算、取消、扫描能力混合、设置加密/迁移及界面回归测试代码；按仓库约定本轮未运行 Gradle/Android 测试，未请求真实计费模型。真实 Key 与设备视觉质量由用户验收。
 
 ## 导演与自动切换
 

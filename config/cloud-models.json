@@ -1,0 +1,35 @@
+{
+  "gateway": {
+    "base_url": "http://10.0.2.2:8000",
+    "health_path": "/health",
+    "capabilities_v1_path": "/v1/capabilities",
+    "capabilities_v2_path": "/v2/capabilities",
+    "director_v1_path": "/v1/director/step",
+    "director_v2_path": "/v2/director/step",
+    "views_path": "/v2/views/select"
+  },
+  "providers": {
+    "qwen": {
+      "base_url": "https://ws-i4o988pfogx6zqcg.cn-beijing.maas.aliyuncs.com/compatible-mode/v1",
+      "model": "qwen3-vl-plus",
+      "vision_path": "/chat/completions",
+      "allowed_hosts": "dashscope.aliyuncs.com,dashscope-intl.aliyuncs.com,dashscope-us.aliyuncs.com,cn-hongkong.dashscope.aliyuncs.com",
+      "workspace_host_suffix": ".maas.aliyuncs.com"
+    },
+    "seed": {
+      "base_url": "https://ark.cn-beijing.volces.com/api/v3",
+      "model": "doubao-seed-2-0-lite-260215",
+      "vision_path": "/chat/completions"
+    },
+    "gpt": {
+      "base_url": "https://api.openai.com/v1",
+      "model": "",
+      "vision_path": "/responses"
+    },
+    "gemini": {
+      "base_url": "https://generativelanguage.googleapis.com/v1beta",
+      "model": "",
+      "vision_path": "/models/{model}:generateContent"
+    }
+  }
+}

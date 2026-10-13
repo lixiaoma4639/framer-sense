@@ -156,6 +156,7 @@ sealed interface VlmIntent {
     data object UnloadModel : VlmIntent
     data object DeleteModel : VlmIntent
     data object CheckGateway : VlmIntent
+    data object CheckQwen : VlmIntent
     data class ImportImage(val uri: Uri) : VlmIntent
     data object Capture : VlmIntent
     data class CaptureFinished(val token: String, val error: String? = null) : VlmIntent

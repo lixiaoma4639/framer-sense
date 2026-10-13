@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from urllib.parse import quote
 import httpx
 from .models import Decision, Provider, StepRequest, ViewRequest, ViewSelection, PhotoStepRequest, PhotoReferenceDecision
+from .config import PROVIDERS
 
 
 @dataclass(frozen=True)
@@ -25,19 +26,15 @@ class ProviderFailure(Exception):
 
 def config_for(provider: Provider) -> ProviderConfig:
     """读取供应商配置。参数 provider 为供应商标识；返回密钥、模型与服务端固定上游。"""
-    defaults = {
-        Provider.QWEN: "https://dashscope.aliyuncs.com/compatible-mode/v1",
-        Provider.SEED: "https://ark.cn-beijing.volces.com/api/v3",
-        Provider.GPT: "https://api.openai.com/v1",
-        Provider.GEMINI: "https://generativelanguage.googleapis.com/v1beta",
-    }
+    defaults = PROVIDERS[provider.value.lower()]
     prefix = provider.value
-    return ProviderConfig(os.getenv(f"{prefix}_API_KEY", ""), os.getenv(f"{prefix}_MODEL", ""), os.getenv(f"{prefix}_BASE_URL", defaults[provider]).rstrip("/"))
+    return ProviderConfig(os.getenv(f"{prefix}_API_KEY", ""), os.getenv(f"{prefix}_MODEL", defaults["model"]), os.getenv(f"{prefix}_BASE_URL", defaults["base_url"]).rstrip("/"))
 
 
 def request_payload(provider: Provider, model: str, request: StepRequest | ViewRequest) -> tuple[str, dict]:
     """构造真实图像请求。参数 provider/model 指定供应商与模型，request 为统一图文输入；返回相对路径和请求体。"""
     multi = isinstance(request, ViewRequest)
+    path = PROVIDERS[provider.value.lower()]["vision_path"].replace("{model}", quote(model, safe=""))
     schema = (ViewSelection if multi else PhotoReferenceDecision if isinstance(request, PhotoStepRequest) else Decision).model_json_schema()
     images = [(image.frameId, image.imageBase64) for image in request.images] if multi else [(request.imageId, request.imageBase64)]
     content = [{"type": "input_text" if provider == Provider.GPT else "text", "text": request.prompt}]
@@ -50,19 +47,19 @@ def request_payload(provider: Provider, model: str, request: StepRequest | ViewR
         content.append({"type": "input_image", "image_url": uri} if provider == Provider.GPT else {"type": "image_url", "image_url": {"url": uri}})
         parts.append({"inlineData": {"mimeType": "image/jpeg", "data": encoded}})
     if provider == Provider.GPT:
-        return "/responses", {
+        return path, {
             "model": model, "store": False,
             "input": [{"role": "user", "content": content}],
             "text": {"format": {"type": "json_schema", "name": "director", "strict": True, "schema": schema}},
             "max_output_tokens": 4096,
         }
     if provider == Provider.GEMINI:
-        return f"/models/{quote(model, safe='')}:generateContent", {
+        return path, {
             "contents": [{"role": "user", "parts": parts}],
             "generationConfig": {"responseMimeType": "application/json", "responseJsonSchema": schema, "maxOutputTokens": 4096},
         }
     # 千问、Seed 的 Chat Completions 图像通道；模型特定严格 Schema 不作统一假设。
-    return "/chat/completions", {
+    return path, {
         "model": model,
         "messages": [{"role": "user", "content": content}],
         "max_tokens": 4096,

@@ -10,6 +10,7 @@ val VlmJson = Json { encodeDefaults = true; explicitNulls = true }
 
 @Serializable enum class Region { CN, GLOBAL }
 @Serializable enum class ModelMode { OFFLINE, CLOUD, AUTO }
+@Serializable enum class QwenAccess { OFFICIAL, GATEWAY }
 @Serializable enum class ProviderId { QWEN, SEED, GPT, GEMINI, LOCAL }
 @Serializable enum class ShotType { ENVIRONMENT, FULL, HALF, CLOSE_UP }
 @Serializable enum class PoseId {
@@ -161,8 +162,12 @@ val VlmJson = Json { encodeDefaults = true; explicitNulls = true }
     val region: Region = Region.CN,
     val mode: ModelMode = ModelMode.OFFLINE,
     val preferred: ProviderId = ProviderId.QWEN,
-    val gateway: String = "http://10.0.2.2:8000",
-    val gatewayToken: String = ""
+    val gateway: String = CloudModelConfig.gatewayBaseUrl,
+    val gatewayToken: String = "",
+    val qwenAccess: QwenAccess = QwenAccess.OFFICIAL,
+    val qwenBaseUrl: String = CloudModelConfig.qwenBaseUrl,
+    val qwenModel: String = CloudModelConfig.qwenModel,
+    @kotlinx.serialization.Transient val qwenApiKey: String = ""
 )
 @Serializable data class ToolIssue(val code: String, val message: String, val planId: String? = null)
 

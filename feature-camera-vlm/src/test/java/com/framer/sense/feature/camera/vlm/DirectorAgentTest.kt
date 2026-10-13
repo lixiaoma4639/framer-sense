@@ -157,7 +157,12 @@ class DirectorAgentTest {
     /** 验证暂时不可用时只在区域内切换，并保留实际供应商；无参数。 */
     @Test fun routesWithinRegionWithoutRepeatingFailedProvider() = runTest {
         val called = mutableListOf<ProviderId>()
-        val result = DirectorAgent().run(input(), ModelSettings(mode = ModelMode.AUTO), { id ->
+        val logs = mutableListOf<String>()
+        val logger = object : DirectorLogger by NoOpDirectorLogger {
+            override fun info(message: String) { logs += message }
+            override fun warn(message: String, error: Throwable?) { logs += message }
+        }
+        val result = DirectorAgent(logger = logger).run(input(), ModelSettings(mode = ModelMode.AUTO), { id ->
             object : VisionModelProvider {
                 /** 模拟千问故障及 Seed 成功。@param call 当前请求。 */
                 override suspend fun step(call: ModelCall): StepReply {
@@ -169,6 +174,28 @@ class DirectorAgentTest {
         }, PreviewInspector { _, _ -> PreviewInspection() })
         assertEquals(listOf(ProviderId.QWEN, ProviderId.SEED), called)
         assertEquals(ProviderId.SEED, result.traces.last().provider)
+        assertTrue(logs.any { it.contains("stage=构图调用 result=失败 source=云端 provider=QWEN") })
+        assertTrue(logs.any { it.contains("stage=构图切换 result=切换 from=QWEN source=云端 provider=SEED") })
+        assertTrue(logs.any { it.contains("stage=构图任务 result=成功 source=云端 provider=SEED") && it.contains("model=test-model") })
+    }
+
+    @Test fun cloudFailuresFollowedByOfflineSuccessLogActualOfflineProvider() = runTest {
+        val logs = mutableListOf<String>()
+        val logger = object : DirectorLogger by NoOpDirectorLogger {
+            override fun info(message: String) { logs += message }
+            override fun warn(message: String, error: Throwable?) { logs += message }
+        }
+        DirectorAgent(logger = logger).run(input(), ModelSettings(mode = ModelMode.AUTO), { id ->
+            object : VisionModelProvider {
+                override suspend fun step(call: ModelCall): StepReply {
+                    if (id != ProviderId.LOCAL) throw ModelFailure("UNAVAILABLE", "sk-secret", true)
+                    return reply(DirectorDecision(ActionKind.FINAL, plans(), imageId = "frame")).copy(model = "offline-actual")
+                }
+            }
+        }, PreviewInspector { _, _ -> PreviewInspection() })
+        assertTrue(logs.any { it.contains("stage=构图任务 result=成功 source=离线 provider=LOCAL") && it.contains("model=offline-actual") })
+        assertFalse(logs.any { it.contains("sk-secret") })
+        assertFalse(logs.any { it.contains("stage=构图任务 result=成功 source=云端") })
     }
 
     /** 自动切换、两轮修正、结构校验和逐方案投影检验都应按真实执行顺序报告当前步骤。 */

@@ -4,6 +4,7 @@ import com.framer.sense.feature.camera.vlm.data.ModelFailure
 import com.framer.sense.feature.camera.vlm.model.*
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.CancellationException
 
 /** 真正的多图视觉调用；图像顺序与短协议编号一一对应，不使用拼图或规则代选。 */
 fun interface OfflineViewInference {
@@ -63,18 +64,31 @@ class OfflineScanViewAgent(private val logger: DirectorLogger = NoOpDirectorLogg
             .sortedWith(compareBy<ScanFrame> { it.receivedNs }.thenBy { it.id })
 
     suspend fun select(scan: ScanSnapshot, instruction: String, inference: OfflineViewInference): ScanSelectionResult {
-        val frames = representativeFrames(scan.frames)
-        logger.info("离线选景提交 scan=${scan.session.id.take(8)} protocol=BACKGROUND_DIGIT_CONSTRAINED rubric=PORTRAIT_BACKGROUND_V2 cached=${scan.frames.size} compared=${frames.size} ordinalFrames=${frames.mapIndexed { i, frame -> "${i + 1}:${frame.id.take(8)}" }} preferred=${frames.mapIndexedNotNull { i, frame -> if (frame.preferred) i + 1 else null }}")
-        if (frames.isEmpty()) throw ModelFailure("LOCAL_VIEW_INPUT", "", false)
-        currentCoroutineContext().ensureActive()
-        val answer = inference.compare(frames.map { it.scene.modelImagePath }, OfflineViewSelectionProtocol.prompt(frames, instruction))
-        currentCoroutineContext().ensureActive()
-        val parsed = OfflineViewSelectionProtocol.inspect(answer.raw, scan.session.id, frames)
-        val selection = parsed.selection ?: run {
-            logger.warn("离线选景解析失败 scan=${scan.session.id.take(8)} reason=${parsed.failure} outputChars=${answer.raw.length} outputLines=${answer.raw.lines().size} compared=${frames.size}")
-            throw ModelFailure("LOCAL_VIEW_INVALID_OUTPUT", "", false)
+        var actualModel: String? = null
+        logger.info("模型使用 stage=选景调用 result=开始 ${ModelUsageLog.identity(ProviderId.LOCAL)} scan=${scan.session.id.take(8)}")
+        try {
+            val frames = representativeFrames(scan.frames)
+            logger.info("离线选景提交 scan=${scan.session.id.take(8)} protocol=BACKGROUND_DIGIT_CONSTRAINED rubric=PORTRAIT_BACKGROUND_V2 cached=${scan.frames.size} compared=${frames.size} ordinalFrames=${frames.mapIndexed { i, frame -> "${i + 1}:${frame.id.take(8)}" }} preferred=${frames.mapIndexedNotNull { i, frame -> if (frame.preferred) i + 1 else null }}")
+            if (frames.isEmpty()) throw ModelFailure("LOCAL_VIEW_INPUT", "", false)
+            currentCoroutineContext().ensureActive()
+            val answer = inference.compare(frames.map { it.scene.modelImagePath }, OfflineViewSelectionProtocol.prompt(frames, instruction))
+            actualModel = answer.model
+            logger.info("模型使用 stage=选景调用 result=返回成功 ${ModelUsageLog.identity(ProviderId.LOCAL, actualModel = answer.model)} scan=${scan.session.id.take(8)} elapsedMs=${answer.elapsedMs} awaitingValidation=true")
+            currentCoroutineContext().ensureActive()
+            val parsed = OfflineViewSelectionProtocol.inspect(answer.raw, scan.session.id, frames)
+            val selection = parsed.selection ?: run {
+                logger.warn("离线选景解析失败 scan=${scan.session.id.take(8)} reason=${parsed.failure} outputChars=${answer.raw.length} outputLines=${answer.raw.lines().size} compared=${frames.size}")
+                throw ModelFailure("LOCAL_VIEW_INVALID_OUTPUT", "", false)
+            }
+            logger.info("离线选景解析成功 scan=${scan.session.id.take(8)} frame=${selection.primary.frameId.take(8)} ordinal=${frames.indexOfFirst { it.id == selection.primary.frameId } + 1} elapsedMs=${answer.elapsedMs}")
+            logger.info("模型使用 stage=选景任务 result=成功 ${ModelUsageLog.identity(ProviderId.LOCAL, actualModel = answer.model)} scan=${scan.session.id.take(8)}")
+            return ScanSelectionResult(selection, frames.size, listOf(CallTrace(ProviderId.LOCAL, answer.model, answer.elapsedMs, "SELECT_VIEWS_LOCAL")))
+        } catch (cancel: CancellationException) {
+            logger.info("模型使用 stage=选景任务 result=取消 ${ModelUsageLog.identity(ProviderId.LOCAL, actualModel = actualModel)} scan=${scan.session.id.take(8)}")
+            throw cancel
+        } catch (error: Exception) {
+            logger.error("模型使用 stage=选景任务 result=失败 ${ModelUsageLog.identity(ProviderId.LOCAL, actualModel = actualModel)} scan=${scan.session.id.take(8)} ${ModelUsageLog.failure(error)}")
+            throw error
         }
-        logger.info("离线选景解析成功 scan=${scan.session.id.take(8)} frame=${selection.primary.frameId.take(8)} ordinal=${frames.indexOfFirst { it.id == selection.primary.frameId } + 1} elapsedMs=${answer.elapsedMs}")
-        return ScanSelectionResult(selection, frames.size, listOf(CallTrace(ProviderId.LOCAL, answer.model, answer.elapsedMs, "SELECT_VIEWS_LOCAL")))
     }
 }
