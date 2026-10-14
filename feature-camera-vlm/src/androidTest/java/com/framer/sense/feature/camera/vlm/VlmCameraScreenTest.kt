@@ -170,6 +170,17 @@ class VlmCameraScreenTest {
         composeRule.onNodeWithTag("vlm_model_mode_CLOUD").assertIsSelected()
         composeRule.onNodeWithTag("vlm_cloud_configuration").assertExists()
         composeRule.onNodeWithTag("vlm_offline_configuration").assertDoesNotExist()
+        composeRule.onNodeWithText("✓ 中国").assertIsDisplayed()
+        composeRule.onNodeWithText("国际").assertIsDisplayed()
+        composeRule.onNodeWithText("✓ 阿里千问").assertIsDisplayed()
+        composeRule.onNodeWithText("豆包Seed").assertIsDisplayed().performClick()
+        composeRule.onNodeWithText("✓ 豆包Seed").assertIsDisplayed()
+        composeRule.onNodeWithTag("vlm_seed_official_configuration").assertExists()
+        composeRule.onNodeWithTag("vlm_qwen_official_configuration").assertDoesNotExist()
+        composeRule.onNodeWithText("国际").performClick()
+        composeRule.onNodeWithText("✓ 国际").assertIsDisplayed()
+        composeRule.onNodeWithText("✓ GPT").assertIsDisplayed()
+        composeRule.onNodeWithText("Gemini").assertIsDisplayed()
     }
 
     @Test fun officialQwenSettingsUseJsonAddressAndModelAndSaveUserKey() {

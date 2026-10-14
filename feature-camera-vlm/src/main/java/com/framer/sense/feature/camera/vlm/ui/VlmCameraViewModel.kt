@@ -139,9 +139,9 @@ class VlmCameraViewModel @Inject constructor(
         LocalModelPhase.UNLOADED -> models.description()
     }
 
-    /** 前台空闲时自动加载已下载或已安装目录；无参数，失败或卸载后不循环重试。 */
+    /** 非指定云端模式在前台空闲时自动加载目录；失败或卸载后不循环重试。 */
     private fun maybeAutoLoad() {
-        if (!foreground || busy()) return
+        if (_state.value.settings.mode == ModelMode.CLOUD || !foreground || busy()) return
         val phase = downloads.state.value.phase
         // 下载完成时优先尝试候选目录；导入/既有安装没有下载会话，直接加载当前安装。
         val dir = if (phase == DownloadPhase.DOWNLOADED) {

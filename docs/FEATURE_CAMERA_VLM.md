@@ -232,7 +232,7 @@ QWEN 官方直连开始时标记配置模型；网关构图开始前模型 ID �
 2. App 模型设置选择“指定云端 → CN → SEED → 官方直连”，地址和模型 ID 只读展示 JSON 值；填写独立的方舟 API Key，保存后重新打开，点击“检查已保存 Seed 配置”。检查仅发少量文本，不上传照片；成功后再验收单张构图及 1／6／8 帧扫描。
 3. Seed 复用原云端 Agent、选景协议、校验、预算和取消；独立适配 `thinking.type=disabled` 与 JSON Object。默认离线模式、QWEN 配置及协议、MNN 推理保持原样。三个密钥分开加密，不进公开 JSON；旧设置缺少 `seedAccess` 且有网关令牌时保留 Seed 网关方式，其他默认官方直连。自动模式展示两家独立配置并保留原路由顺序。
 
-官方资料：[模型列表](https://docs.volcengine.com/docs/ark/model-list?lang=zh)、[Base URL 与鉴权](https://docs.volcengine.com/docs/ark/base-url-and-authentication?lang=zh)、[Chat API](https://docs.volcengine.com/docs/ark/chat-api?lang=zh)、[图片理解](https://docs.volcengine.com/docs/ark/image-understanding?lang=zh)、[结构化输出](https://docs.volcengine.com/docs/ark/structured-output-beta?lang=zh)。已补充模拟协议、预算、取消、密钥及界面回归测试，未运行 Gradle/Android 测试或真实计费调用；验收时先确认既有离线与 QWEN，再确认 Seed。
+官方资料：[后台控制中心](https://console.volcengine.com/finance/account-overview) [模型列表](https://docs.volcengine.com/docs/ark/model-list?lang=zh)、[Base URL 与鉴权](https://docs.volcengine.com/docs/ark/base-url-and-authentication?lang=zh)、[Chat API](https://docs.volcengine.com/docs/ark/chat-api?lang=zh)、[图片理解](https://docs.volcengine.com/docs/ark/image-understanding?lang=zh)、[结构化输出](https://docs.volcengine.com/docs/ark/structured-output-beta?lang=zh)。已补充模拟协议、预算、取消、密钥及界面回归测试，未运行 Gradle/Android 测试或真实计费调用；验收时先确认既有离线与 QWEN，再确认 Seed。
 
 ## 导演与自动切换
 

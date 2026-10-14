@@ -14,6 +14,8 @@ import com.framer.sense.feature.camera.vlm.model.CompositionPlan
 import com.framer.sense.feature.camera.vlm.model.CameraCapabilities
 import com.framer.sense.feature.camera.vlm.model.DirectorInput
 import com.framer.sense.feature.camera.vlm.model.ModelCall
+import com.framer.sense.feature.camera.vlm.model.ModelMode
+import com.framer.sense.feature.camera.vlm.model.ModelSettings
 import com.framer.sense.feature.camera.vlm.model.SceneSnapshot
 import com.framer.sense.feature.camera.vlm.model.ScanLimits
 import com.framer.sense.feature.camera.vlm.ui.*
@@ -159,7 +161,7 @@ class ModelDownloadRepositoryTest {
         }
         val provider = MnnProvider(store, { arrayOf("arm64-v8a") }, native)
         try {
-            provider.preloadOnAppStart(); provider.preloadOnAppStart()
+            provider.preloadOnAppStart { ModelMode.OFFLINE }; provider.preloadOnAppStart { ModelMode.OFFLINE }
             withTimeout(5_000) { provider.loadState.first { it.phase == LocalModelPhase.LOADING } }
             val camera = async { provider.load() }
             release.countDown(); camera.await()
@@ -167,10 +169,37 @@ class ModelDownloadRepositoryTest {
             assertEquals(LocalModelPhase.READY, provider.loadState.value.phase)
             assertEquals(installed.path, provider.loadState.value.path)
             assertEquals(1, calls.get())
-            provider.unload(); provider.preloadOnAppStart(); provider.awaitIdle()
+            provider.unload(); provider.preloadOnAppStart { ModelMode.OFFLINE }; provider.awaitIdle()
             assertEquals(LocalModelPhase.UNLOADED, provider.loadState.value.phase)
             assertEquals(1, calls.get())
         } finally { release.countDown(); provider.unload(); root.deleteRecursively() }
+    }
+
+    /** 已保存模式决定启动加载，指定云端不能初始化 JNI；自动模式保留原行为。 */
+    @Test fun startupWarmupRespectsSavedMode() = runBlocking<Unit> {
+        for (mode in ModelMode.entries) {
+            val root = File(InstrumentationRegistry.getInstrumentation().targetContext.cacheDir, UUID.randomUUID().toString()).apply { mkdirs() }
+            val context = context(root)
+            val store = LocalModelStore(context)
+            store.activate(fixture(store, "active"))
+            val settings = SettingsStore(context).apply { save(ModelSettings(mode = mode)) }
+            val initializations = AtomicInteger()
+            val loads = AtomicInteger()
+            val native = object : MnnRuntime by runtime(AtomicBoolean(false)) {
+                override fun initialize() { initializations.incrementAndGet() }
+                override fun load(path: String): Long { loads.incrementAndGet(); return 1L }
+            }
+            val provider = MnnProvider(store, { arrayOf("arm64-v8a") }, native)
+            try {
+                withTimeout(5_000) { provider.preloadOnAppStart { settings.read().mode }!!.join() }
+                val expectedLoads = if (mode == ModelMode.CLOUD) 0 else 1
+                assertEquals(expectedLoads, initializations.get())
+                assertEquals(expectedLoads, loads.get())
+                assertEquals(if (mode == ModelMode.CLOUD) LocalModelPhase.UNLOADED else LocalModelPhase.READY, provider.loadState.value.phase)
+                assertNull(provider.preloadOnAppStart { settings.read().mode })
+                assertNotNull(store.activeDirectory())
+            } finally { provider.unload(); store.delete(); root.deleteRecursively() }
+        }
     }
 
     @Test fun cancellationWaitsForOldNativeExitAndPreservesLoadedModel() = runBlocking<Unit> {
@@ -457,6 +486,45 @@ class ModelDownloadRepositoryTest {
             assertFalse(old.exists())
         } finally { provider.unload(); store.delete(); root.deleteRecursively() }
     }
+    /** 指定云端进入拍照页不加载；改为强制离线后仍能加载同一安装。 */
+    @Test fun cloudCameraSkipsAutomaticLoadUntilOfflineModeIsSaved() = runBlocking<Unit> {
+        val root = File(InstrumentationRegistry.getInstrumentation().targetContext.cacheDir, UUID.randomUUID().toString()).apply { mkdirs() }
+        val context = context(root)
+        val store = LocalModelStore(context)
+        val settings = SettingsStore(context).apply { save(ModelSettings(mode = ModelMode.CLOUD)) }
+        val loads = AtomicInteger()
+        val native = object : MnnRuntime by runtime(AtomicBoolean(false)) {
+            override fun load(path: String): Long { loads.incrementAndGet(); return 1L }
+        }
+        val provider = MnnProvider(store, { arrayOf("arm64-v8a") }, native)
+        val owner = ViewModelStore()
+        try {
+            val installed = fixture(store, "active")
+            store.activate(installed)
+            val downloads = ModelDownloadRepository(context, store, noNetwork(AtomicInteger()), { true })
+            val renderer = object : AvatarRenderer {
+                override suspend fun render(plan: CompositionPlan, width: Int, height: Int, warmth: Float, brightness: Float): AvatarPreview = error("No GPU in this test")
+            }
+            withContext(Dispatchers.Main) {
+                val vm = VlmCameraViewModel(CompositionRepository(provider), SnapshotStore(context), PreviewStore(renderer), settings, store, provider, downloads, SavedStateHandle(), com.framer.sense.feature.camera.vlm.scan.PhotoSessionController(context))
+                owner.put("camera", vm)
+                vm.onIntent(VlmIntent.CameraForeground(true))
+                yield()
+                provider.awaitIdle()
+                assertEquals(0, loads.get())
+                assertEquals(LocalModelPhase.UNLOADED, provider.loadState.value.phase)
+                vm.onIntent(VlmIntent.SaveSettings(vm.state.value.settings.copy(mode = ModelMode.OFFLINE)))
+                withTimeout(5_000) { vm.state.first { it.settings.mode == ModelMode.OFFLINE && it.download.phase == DownloadPhase.READY && !it.modelBusy } }
+                assertEquals(1, loads.get())
+                assertEquals(installed, store.activeDirectory())
+                vm.onLeave()
+            }
+        } finally {
+            withContext(Dispatchers.Main) { owner.clear() }
+            provider.unload(); store.delete(); root.deleteRecursively()
+        }
+    }
+
     /** 已下载模型只在相机前台空闲时加载，重复前台事件和手动卸载不会触发加载循环；无参数。 */
     @Test fun automaticLoadWaitsForForegroundAndIdleCamera() = runBlocking<Unit> {
         val root = File(InstrumentationRegistry.getInstrumentation().targetContext.cacheDir, UUID.randomUUID().toString()).apply { mkdirs() }

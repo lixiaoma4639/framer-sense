@@ -27,11 +27,13 @@ import androidx.compose.material3.Surface
 import androidx.compose.ui.Modifier
 import dagger.hilt.android.AndroidEntryPoint
 import com.framer.sense.feature.camera.vlm.data.MnnProvider
+import com.framer.sense.feature.camera.vlm.data.SettingsStore
 import javax.inject.Inject
 
 @AndroidEntryPoint
 class MainActivity : ComponentActivity() {
     @Inject lateinit var localModel: MnnProvider
+    @Inject lateinit var modelSettings: SettingsStore
 
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge(
@@ -39,7 +41,7 @@ class MainActivity : ComponentActivity() {
             navigationBarStyle = SystemBarStyle.light(android.graphics.Color.WHITE, android.graphics.Color.WHITE)
         )
         super.onCreate(savedInstanceState)
-        localModel.preloadOnAppStart()
+        localModel.preloadOnAppStart { modelSettings.read().mode }
         setContent {
             FramerAppTheme {
                 Surface(

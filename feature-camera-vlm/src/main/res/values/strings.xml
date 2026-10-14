@@ -324,8 +324,12 @@
     <string name="vlm_model_mode_offline">强制离线</string>
     <string name="vlm_model_mode_cloud">指定云端</string>
     <string name="vlm_model_mode_auto">自动切换</string>
-    <string name="vlm_model_region_cn">CN</string>
-    <string name="vlm_model_region_global">GLOBAL</string>
+    <string name="vlm_model_region_cn">中国</string>
+    <string name="vlm_model_region_global">国际</string>
+    <string name="vlm_model_provider_qwen">阿里千问</string>
+    <string name="vlm_model_provider_seed">豆包Seed</string>
+    <string name="vlm_model_provider_gpt">GPT</string>
+    <string name="vlm_model_provider_gemini">Gemini</string>
     <string name="vlm_model_selected_option">✓ %1$s</string>
     <string name="vlm_model_gateway">网关地址</string>
     <string name="vlm_model_gateway_token">独立网关令牌</string>

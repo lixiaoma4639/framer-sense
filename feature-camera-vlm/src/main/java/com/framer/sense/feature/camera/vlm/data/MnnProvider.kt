@@ -16,6 +16,7 @@ import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -113,13 +114,23 @@ class MnnProvider(
     val loadState: StateFlow<LocalModelLoadState> = _loadState.asStateFlow()
     val isInferenceRunning: Boolean get() = nativeInferenceRunning.get()
 
-    /** App 启动后预加载既有安装，进程内只请求一次；不下载、不受 Tab 生命周期取消。 */
-    fun preloadOnAppStart() {
-        if (!startupRequested.compareAndSet(false, true)) return
-        processScope.launch {
-            if (store.activeDirectory() == null) return@launch
-            Log.i(LOG_TAG, "首页预加载开始")
-            try { load(); Log.i(LOG_TAG, "首页预加载完成") }
+    /** 后台读取已保存模式；指定云端跳过，其余模式预加载既有安装，进程内仅一次。
+     * 不下载、不受 Tab 生命周期取消。@param readMode 已保存模式的读取操作。
+     */
+    fun preloadOnAppStart(readMode: () -> ModelMode): Job? {
+        if (!startupRequested.compareAndSet(false, true)) return null
+        return processScope.launch {
+            try {
+                val mode = readMode()
+                if (mode == ModelMode.CLOUD) {
+                    Log.i(LOG_TAG, "首页预加载跳过 mode=$mode reason=指定云端")
+                    return@launch
+                }
+                if (store.activeDirectory() == null) return@launch
+                Log.i(LOG_TAG, "首页预加载开始 source=离线 mode=$mode")
+                load()
+                Log.i(LOG_TAG, "首页预加载完成 source=离线 mode=$mode")
+            }
             catch (error: Exception) { Log.w(LOG_TAG, "首页预加载失败，保留模型供手动重试", error) }
         }
     }

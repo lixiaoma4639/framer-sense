@@ -846,7 +846,14 @@ internal fun ModelSettingsDialog(state: VlmUiState, onEvent: (VlmIntent) -> Unit
                         }
                         val providers = if (draft.region == Region.CN) listOf(ProviderId.QWEN, ProviderId.SEED) else listOf(ProviderId.GPT, ProviderId.GEMINI)
                         Row { providers.forEach { p -> TextButton(onClick = { draft = draft.copy(preferred = p) }) {
-                            Text(if (draft.preferred == p) stringResource(R.string.vlm_model_selected_option, p.name) else p.name)
+                            val label = stringResource(when (p) {
+                                ProviderId.QWEN -> R.string.vlm_model_provider_qwen
+                                ProviderId.SEED -> R.string.vlm_model_provider_seed
+                                ProviderId.GPT -> R.string.vlm_model_provider_gpt
+                                ProviderId.GEMINI -> R.string.vlm_model_provider_gemini
+                                ProviderId.LOCAL -> R.string.vlm_model_mode_offline
+                            })
+                            Text(if (draft.preferred == p) stringResource(R.string.vlm_model_selected_option, label) else label)
                         } } }
                         val showQwen = draft.region == Region.CN && (draft.preferred == ProviderId.QWEN || draft.mode == ModelMode.AUTO)
                         if (showQwen) QwenModelPanel(draft, { draft = it }, state.modelBusy, onEvent)
