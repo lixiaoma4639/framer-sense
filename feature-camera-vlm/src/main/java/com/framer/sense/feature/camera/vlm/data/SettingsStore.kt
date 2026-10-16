@@ -35,6 +35,14 @@ class SettingsStore(context: Context) {
             .putString("avatar-ethnicity", value.ethnicity.name).apply()
     }
 
+    fun readInstructionHistory(): List<String> = runCatching {
+        InstructionHistory.normalize(VlmJson.decodeFromString<List<String>>(prefs.getString("instruction-history", null) ?: "[]"))
+    }.getOrDefault(emptyList())
+
+    fun saveInstructionHistory(values: List<String>) {
+        prefs.edit().putString("instruction-history", VlmJson.encodeToString(InstructionHistory.normalize(values))).apply()
+    }
+
     /** 读取设置；无参数，无法解密时清空令牌，提示用户重新配置。 */
     fun read(): ModelSettings {
         val stored = prefs.getString("settings", null)

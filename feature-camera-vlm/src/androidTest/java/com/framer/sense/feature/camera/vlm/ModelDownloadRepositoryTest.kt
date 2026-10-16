@@ -464,7 +464,7 @@ class ModelDownloadRepositoryTest {
         } finally { provider.unload(); store.delete(); root.deleteRecursively() }
     }
 
-    /** 加载失败不修改安装，成功后才提交并清理旧文件；无参数。 */
+    /** 加载失败不修改安装，成功后提交且保留旧文件；无参数。 */
     @Test fun installationCommitsOnlyAfterSuccessfulNativeLoad() = runBlocking<Unit> {
         val root = File(InstrumentationRegistry.getInstrumentation().targetContext.cacheDir, UUID.randomUUID().toString()).apply { mkdirs() }
         val store = LocalModelStore(context(root))
@@ -483,7 +483,8 @@ class ModelDownloadRepositoryTest {
             provider.install(candidate)
             assertEquals(candidate, store.activeDirectory())
             assertNull(store.pendingDirectory())
-            assertFalse(old.exists())
+            assertTrue(old.exists())
+            assertTrue(store.installed.value.any { it.directory == old.name })
         } finally { provider.unload(); store.delete(); root.deleteRecursively() }
     }
     /** 指定云端进入拍照页不加载；改为强制离线后仍能加载同一安装。 */

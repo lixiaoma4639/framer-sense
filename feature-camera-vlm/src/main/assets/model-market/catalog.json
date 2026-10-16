@@ -1,0 +1,871 @@
+{
+  "version": "22",
+  "tagTranslations": {
+    "Vision": "图像理解",
+    "Video": "视频理解",
+    "Audio": "音频理解",
+    "Code": "代码",
+    "Math": "数学",
+    "ImageGen": "文生图",
+    "AudioGen": "音频生成",
+    "Think": "深度思考",
+    "Chat": "对话"
+  },
+  "quickFilterTags": [
+    "Think",
+    "NPU",
+    "Vision",
+    "ImageGen",
+    "Audio",
+    "AudioGen",
+    "Code",
+    "Video"
+  ],
+  "vendorOrder": [
+    "Qwen",
+    "DeepSeek",
+    "Gemma",
+    "LFM",
+    "Smol",
+    "stability.ai",
+    "Llama",
+    "FastVLM",
+    "MiMo",
+    "ERNIE",
+    "Baichuan",
+    "Phi",
+    "MobileLLM",
+    "TinyLlama",
+    "THUDM",
+    "InternLM",
+    "01.AI",
+    "Hunyuan",
+    "MiniCPM",
+    "Lingshu"
+  ],
+  "models": [
+    {
+      "modelName": "gemma-4-E2B-it-MNN",
+      "tags": [
+        "Vision",
+        "Audio"
+      ],
+      "categories": [
+        "chat",
+        "gemma"
+      ],
+      "sources": {
+        "HuggingFace": "taobao-mnn/gemma-4-E2B-it-MNN",
+        "ModelScope": "MNN/gemma-4-E2B-it-MNN"
+      },
+      "min_app_version": "0.8.3",
+      "size_gb": 2,
+      "vendor": "Gemma",
+      "file_size": 3739999029
+    },
+    {
+      "modelName": "gemma-4-E4B-it-MNN",
+      "tags": [
+        "Vision",
+        "Audio"
+      ],
+      "categories": [
+        "chat",
+        "gemma"
+      ],
+      "sources": {
+        "HuggingFace": "taobao-mnn/gemma-4-E4B-it-MNN",
+        "ModelScope": "MNN/gemma-4-E4B-it-MNN"
+      },
+      "min_app_version": "0.8.3",
+      "size_gb": 4,
+      "vendor": "Gemma",
+      "file_size": 5542173790
+    },
+    {
+      "modelName": "gemma-4-26B-A4B-it-MNN",
+      "tags": [
+        "Vision"
+      ],
+      "categories": [
+        "chat",
+        "gemma"
+      ],
+      "sources": {
+        "HuggingFace": "taobao-mnn/gemma-4-26B-A4B-it-MNN",
+        "ModelScope": "MNN/gemma-4-26B-A4B-it-MNN"
+      },
+      "min_app_version": "0.8.3",
+      "size_gb": 26,
+      "vendor": "Gemma",
+      "file_size": 16542648227
+    },
+    {
+      "modelName": "gemma-4-31B-it-MNN",
+      "tags": [
+        "Vision"
+      ],
+      "categories": [
+        "chat",
+        "gemma"
+      ],
+      "sources": {
+        "HuggingFace": "taobao-mnn/gemma-4-31B-it-MNN",
+        "ModelScope": "MNN/gemma-4-31B-it-MNN"
+      },
+      "min_app_version": "0.8.3",
+      "size_gb": 31,
+      "vendor": "Gemma",
+      "file_size": 19893380963
+    },
+    {
+      "modelName": "LFM2-VL-450M-MNN",
+      "tags": [
+        "Vision"
+      ],
+      "categories": [
+        "chat",
+        "lfm"
+      ],
+      "sources": {
+        "HuggingFace": "taobao-mnn/LFM2-VL-450M-MNN",
+        "ModelScope": "MNN/LFM2-VL-450M-MNN"
+      },
+      "min_app_version": "0.8.3",
+      "size_gb": 0.45,
+      "vendor": "LFM",
+      "file_size": 327132700
+    },
+    {
+      "modelName": "LFM2-VL-1.6B-MNN",
+      "tags": [
+        "Vision"
+      ],
+      "categories": [
+        "chat",
+        "lfm"
+      ],
+      "sources": {
+        "HuggingFace": "taobao-mnn/LFM2-VL-1.6B-MNN",
+        "ModelScope": "MNN/LFM2-VL-1.6B-MNN"
+      },
+      "min_app_version": "0.8.3",
+      "size_gb": 1.6,
+      "vendor": "LFM",
+      "file_size": 1169276117
+    },
+    {
+      "modelName": "Qwen3.5-0.8B-Claude-4.6-Opus-Reasoning-Distilled-MNN",
+      "tags": [
+        "Think",
+        "Vision"
+      ],
+      "extra_tags": [
+        "opencl_warning",
+        "ThinkingSwitch"
+      ],
+      "categories": [
+        "recommended",
+        "qwen"
+      ],
+      "sources": {
+        "HuggingFace": "taobao-mnn/Qwen3.5-0.8B-Claude-4.6-Opus-Reasoning-Distilled-MNN",
+        "ModelScope": "MNN/Qwen3.5-0.8B-Claude-4.6-Opus-Reasoning-Distilled-MNN"
+      },
+      "min_app_version": "0.8.3",
+      "size_gb": 0.8,
+      "vendor": "Qwen",
+      "file_size": 544134218
+    },
+    {
+      "modelName": "Qwen3.5-2B-Claude-4.6-Opus-Reasoning-Distilled-MNN",
+      "tags": [
+        "Think",
+        "Vision"
+      ],
+      "extra_tags": [
+        "opencl_warning",
+        "ThinkingSwitch"
+      ],
+      "categories": [
+        "recommended",
+        "qwen"
+      ],
+      "sources": {
+        "HuggingFace": "taobao-mnn/Qwen3.5-2B-Claude-4.6-Opus-Reasoning-Distilled-MNN",
+        "ModelScope": "MNN/Qwen3.5-2B-Claude-4.6-Opus-Reasoning-Distilled-MNN"
+      },
+      "min_app_version": "0.8.3",
+      "size_gb": 2,
+      "vendor": "Qwen",
+      "file_size": 1383239575
+    },
+    {
+      "modelName": "Qwen3.5-4B-Claude-4.6-Opus-Reasoning-Distilled-MNN",
+      "tags": [
+        "Think",
+        "Vision"
+      ],
+      "extra_tags": [
+        "opencl_warning",
+        "ThinkingSwitch"
+      ],
+      "categories": [
+        "recommended",
+        "qwen"
+      ],
+      "sources": {
+        "HuggingFace": "taobao-mnn/Qwen3.5-4B-Claude-4.6-Opus-Reasoning-Distilled-MNN",
+        "ModelScope": "MNN/Qwen3.5-4B-Claude-4.6-Opus-Reasoning-Distilled-MNN"
+      },
+      "min_app_version": "0.8.3",
+      "size_gb": 4,
+      "vendor": "Qwen",
+      "file_size": 2842506997
+    },
+    {
+      "modelName": "Qwen3.5-27B-Claude-4.6-Opus-Reasoning-Distilled-MNN",
+      "tags": [
+        "Think",
+        "Vision"
+      ],
+      "extra_tags": [
+        "opencl_warning",
+        "ThinkingSwitch"
+      ],
+      "categories": [
+        "recommended",
+        "qwen"
+      ],
+      "sources": {
+        "HuggingFace": "taobao-mnn/Qwen3.5-27B-Claude-4.6-Opus-Reasoning-Distilled-MNN",
+        "ModelScope": "MNN/Qwen3.5-27B-Claude-4.6-Opus-Reasoning-Distilled-MNN"
+      },
+      "min_app_version": "0.8.3",
+      "size_gb": 27,
+      "vendor": "Qwen",
+      "file_size": 18858231999
+    },
+    {
+      "modelName": "Qwen3.5-2B-MNN",
+      "tags": [
+        "Think",
+        "Vision"
+      ],
+      "extra_tags": [
+        "opencl_warning",
+        "ThinkingSwitch"
+      ],
+      "categories": [
+        "recommended",
+        "qwen"
+      ],
+      "sources": {
+        "HuggingFace": "taobao-mnn/Qwen3.5-2B-MNN",
+        "ModelScope": "MNN/Qwen3.5-2B-MNN",
+        "Modelers": "MNN/Qwen3.5-2B-MNN"
+      },
+      "min_app_version": "0.8.0.1",
+      "size_gb": 2.0,
+      "vendor": "Qwen",
+      "file_size": 1386694140
+    },
+    {
+      "modelName": "Qwen3.5-0.8B-MNN",
+      "tags": [
+        "Think",
+        "Vision"
+      ],
+      "extra_tags": [
+        "opencl_warning",
+        "ThinkingSwitch"
+      ],
+      "categories": [
+        "recommended",
+        "qwen"
+      ],
+      "sources": {
+        "HuggingFace": "taobao-mnn/Qwen3.5-0.8B-MNN",
+        "ModelScope": "MNN/Qwen3.5-0.8B-MNN",
+        "Modelers": "MNN/Qwen3.5-0.8B-MNN"
+      },
+      "size_gb": 0.8,
+      "vendor": "Qwen",
+      "file_size": 547648308
+    },
+    {
+      "modelName": "Qwen3.5-4B-MNN",
+      "tags": [
+        "Think",
+        "Vision"
+      ],
+      "extra_tags": [
+        "opencl_warning",
+        "ThinkingSwitch"
+      ],
+      "categories": [
+        "recommended",
+        "qwen"
+      ],
+      "sources": {
+        "HuggingFace": "taobao-mnn/Qwen3.5-4B-MNN",
+        "ModelScope": "MNN/Qwen3.5-4B-MNN",
+        "Modelers": "MNN/Qwen3.5-4B-MNN"
+      },
+      "size_gb": 4.0,
+      "vendor": "Qwen",
+      "file_size": 2845946907
+    },
+    {
+      "modelName": "Qwen3.5-35B-A3B-MNN",
+      "tags": [
+        "Think",
+        "Vision"
+      ],
+      "extra_tags": [
+        "opencl_warning",
+        "ThinkingSwitch"
+      ],
+      "categories": [
+        "recommended",
+        "qwen"
+      ],
+      "sources": {
+        "HuggingFace": "taobao-mnn/Qwen3.5-35B-A3B-MNN",
+        "ModelScope": "MNN/Qwen3.5-35B-A3B-MNN",
+        "Modelers": "MNN/Qwen3.5-35B-A3B-MNN"
+      },
+      "size_gb": 2.0,
+      "vendor": "Qwen",
+      "file_size": 22797088046
+    },
+    {
+      "modelName": "Qwen3.5-9B-MNN",
+      "tags": [
+        "Think",
+        "Vision"
+      ],
+      "extra_tags": [
+        "opencl_warning",
+        "ThinkingSwitch"
+      ],
+      "categories": [
+        "recommended",
+        "qwen"
+      ],
+      "sources": {
+        "HuggingFace": "taobao-mnn/Qwen3.5-9B-MNN",
+        "ModelScope": "MNN/Qwen3.5-9B-MNN",
+        "Modelers": "MNN/Qwen3.5-9B-MNN"
+      },
+      "min_app_version": "0.8.0.1",
+      "size_gb": 2.0,
+      "vendor": "Qwen",
+      "file_size": 7274875830
+    },
+    {
+      "modelName": "Qwen3-VL-2B-Instruct-MNN",
+      "tags": [
+        "Vision"
+      ],
+      "categories": [
+        "qwen"
+      ],
+      "sources": {
+        "HuggingFace": "taobao-mnn/Qwen3-VL-2B-Instruct-MNN",
+        "ModelScope": "MNN/Qwen3-VL-2B-Instruct-MNN"
+      },
+      "size_gb": 1.4,
+      "vendor": "Qwen",
+      "file_size": 1475228382
+    },
+    {
+      "modelName": "Qwen3-VL-2B-Thinking-MNN",
+      "tags": [
+        "Vision",
+        "Think"
+      ],
+      "categories": [
+        "qwen"
+      ],
+      "sources": {
+        "HuggingFace": "taobao-mnn/Qwen3-VL-2B-Thinking-MNN",
+        "ModelScope": "MNN/Qwen3-VL-2B-Thinking-MNN"
+      },
+      "size_gb": 1.4,
+      "vendor": "Qwen",
+      "file_size": 1475228296
+    },
+    {
+      "modelName": "Qwen3-VL-32B-Instruct-MNN",
+      "tags": [
+        "Vision"
+      ],
+      "categories": [
+        "qwen"
+      ],
+      "sources": {
+        "HuggingFace": "taobao-mnn/Qwen3-VL-32B-Instruct-MNN",
+        "ModelScope": "MNN/Qwen3-VL-32B-Instruct-MNN"
+      },
+      "size_gb": 19.4,
+      "vendor": "Qwen",
+      "file_size": 20825698858
+    },
+    {
+      "modelName": "Qwen3-VL-32B-Thinking-MNN",
+      "tags": [
+        "Vision",
+        "Think"
+      ],
+      "categories": [
+        "qwen"
+      ],
+      "sources": {
+        "HuggingFace": "taobao-mnn/Qwen3-VL-32B-Thinking-MNN",
+        "ModelScope": "MNN/Qwen3-VL-32B-Thinking-MNN"
+      },
+      "size_gb": 19.4,
+      "vendor": "Qwen",
+      "file_size": 20825698772
+    },
+    {
+      "modelName": "Qwen3-VL-4B-Thinking-MNN",
+      "tags": [
+        "Vision",
+        "Think"
+      ],
+      "categories": [],
+      "sources": {
+        "HuggingFace": "taobao-mnn/Qwen3-VL-4B-Thinking-MNN",
+        "ModelScope": "MNN/Qwen3-VL-4B-Thinking-MNN",
+        "Modelers": "MNN/Qwen3-VL-4B-Thinking-MNN"
+      },
+      "size_gb": 4,
+      "vendor": "Qwen",
+      "file_size": 2958468649
+    },
+    {
+      "modelName": "Qwen3-VL-4B-Instruct-MNN",
+      "tags": [
+        "Vision"
+      ],
+      "categories": [],
+      "sources": {
+        "HuggingFace": "taobao-mnn/Qwen3-VL-4B-Instruct-MNN",
+        "ModelScope": "MNN/Qwen3-VL-4B-Instruct-MNN",
+        "Modelers": "MNN/Qwen3-VL-4B-Instruct-MNN"
+      },
+      "size_gb": 4,
+      "vendor": "Qwen",
+      "file_size": 2958468736
+    },
+    {
+      "modelName": "Qwen3-VL-8B-Thinking-MNN",
+      "tags": [
+        "Vision",
+        "Think"
+      ],
+      "categories": [],
+      "sources": {
+        "HuggingFace": "taobao-mnn/Qwen3-VL-8B-Thinking-MNN",
+        "ModelScope": "MNN/Qwen3-VL-8B-Thinking-MNN",
+        "Modelers": "MNN/Qwen3-VL-8B-Thinking-MNN"
+      },
+      "size_gb": 8,
+      "vendor": "Qwen",
+      "file_size": 5453819329
+    },
+    {
+      "modelName": "Qwen3-VL-8B-Instruct-MNN",
+      "tags": [
+        "Vision"
+      ],
+      "categories": [],
+      "sources": {
+        "HuggingFace": "taobao-mnn/Qwen3-VL-8B-Instruct-MNN",
+        "ModelScope": "MNN/Qwen3-VL-8B-Instruct-MNN",
+        "Modelers": "MNN/Qwen3-VL-8B-Instruct-MNN"
+      },
+      "size_gb": 8,
+      "vendor": "Qwen",
+      "file_size": 5453819411
+    },
+    {
+      "modelName": "Qwen3-VL-30B-A3B-Instruct-MNN",
+      "tags": [
+        "Vision"
+      ],
+      "categories": [],
+      "sources": {
+        "HuggingFace": "taobao-mnn/Qwen3-VL-30B-A3B-Instruct-MNN",
+        "ModelScope": "MNN/Qwen3-VL-30B-A3B-Instruct-MNN",
+        "Modelers": "MNN/Qwen3-VL-30B-A3B-Instruct-MNN"
+      },
+      "size_gb": 30,
+      "vendor": "Qwen",
+      "file_size": 19489921379
+    },
+    {
+      "modelName": "Qwen3-VL-30B-A3B-Thinking-MNN",
+      "tags": [
+        "Think",
+        "Vision"
+      ],
+      "categories": [],
+      "sources": {
+        "HuggingFace": "taobao-mnn/Qwen3-VL-30B-A3B-Thinking-MNN",
+        "ModelScope": "MNN/Qwen3-VL-30B-A3B-Thinking-MNN",
+        "Modelers": "MNN/Qwen3-VL-30B-A3B-Thinking-MNN"
+      },
+      "size_gb": 30,
+      "vendor": "Qwen",
+      "file_size": 19489921292
+    },
+    {
+      "modelName": "Lingshu-7B-MNN",
+      "tags": [
+        "Vision"
+      ],
+      "categories": [
+        "recommended",
+        "qwen"
+      ],
+      "sources": {
+        "HuggingFace": "taobao-mnn/Lingshu-7B-MNN",
+        "ModelScope": "MNN/Lingshu-7B-MNN"
+      },
+      "size_gb": 7,
+      "vendor": "Lingshu",
+      "file_size": 5890502337
+    },
+    {
+      "modelName": "MiniCPM-V-4-MNN",
+      "tags": [
+        "Vision"
+      ],
+      "categories": [
+        "recommended",
+        "qwen"
+      ],
+      "sources": {
+        "HuggingFace": "taobao-mnn/MiniCPM-V-4-MNN",
+        "ModelScope": "MNN/MiniCPM-V-4-MNN",
+        "Modelers": "MNN/MiniCPM-V-4-MNN"
+      },
+      "size_gb": 4.1,
+      "vendor": "MiniCPM",
+      "file_size": 2834668967
+    },
+    {
+      "modelName": "Qwen2.5-Omni-3B-MNN",
+      "tags": [
+        "Vision",
+        "Audio",
+        "AudioGen"
+      ],
+      "categories": [
+        "recommended",
+        "qwen"
+      ],
+      "sources": {
+        "HuggingFace": "taobao-mnn/Qwen2.5-Omni-3B-MNN",
+        "ModelScope": "MNN/Qwen2.5-Omni-3B-MNN",
+        "Modelers": "MNN/Qwen2.5-Omni-3B-MNN"
+      },
+      "size_gb": 3.0,
+      "vendor": "Qwen",
+      "file_size": 4015566788
+    },
+    {
+      "modelName": "Qwen2.5-Omni-7B-MNN",
+      "tags": [
+        "Vision",
+        "Audio",
+        "AudioGen"
+      ],
+      "categories": [
+        "recommended",
+        "qwen"
+      ],
+      "sources": {
+        "HuggingFace": "taobao-mnn/Qwen2.5-Omni-7B-MNN",
+        "ModelScope": "MNN/Qwen2.5-Omni-7B-MNN",
+        "Modelers": "MNN/Qwen2.5-Omni-7B-MNN"
+      },
+      "size_gb": 7.0,
+      "vendor": "Qwen",
+      "file_size": 7111667196
+    },
+    {
+      "modelName": "deepseek-vl-7b-chat-MNN",
+      "tags": [
+        "Vision"
+      ],
+      "categories": [
+        "chat",
+        "deepseek"
+      ],
+      "sources": {
+        "HuggingFace": "taobao-mnn/deepseek-vl-7b-chat-MNN",
+        "ModelScope": "MNN/deepseek-vl-7b-chat-MNN",
+        "Modelers": "MNN/deepseek-vl-7b-chat-MNN"
+      },
+      "size_gb": 7.0,
+      "vendor": "DeepSeek",
+      "file_size": 4949488405
+    },
+    {
+      "modelName": "Qwen2.5-VL-3B-Instruct-MNN",
+      "tags": [
+        "Vision"
+      ],
+      "categories": [
+        "chat",
+        "qwen"
+      ],
+      "sources": {
+        "HuggingFace": "taobao-mnn/Qwen2.5-VL-3B-Instruct-MNN",
+        "ModelScope": "MNN/Qwen2.5-VL-3B-Instruct-MNN",
+        "Modelers": "MNN/Qwen2.5-VL-3B-Instruct-MNN"
+      },
+      "size_gb": 3.0,
+      "vendor": "Qwen",
+      "file_size": 2736203723
+    },
+    {
+      "modelName": "InternVL2_5-1B-MNN",
+      "tags": [
+        "Vision"
+      ],
+      "categories": [
+        "chat",
+        "internvl"
+      ],
+      "sources": {
+        "HuggingFace": "taobao-mnn/InternVL2_5-1B-MNN",
+        "ModelScope": "MNN/InternVL2_5-1B-MNN",
+        "Modelers": "MNN/InternVL2_5-1B-MNN"
+      },
+      "size_gb": 1.0,
+      "vendor": "InternLM",
+      "file_size": 887553126
+    },
+    {
+      "modelName": "SmolVLM2-2.2B-Instruct-MNN",
+      "tags": [
+        "Vision"
+      ],
+      "categories": [
+        "chat",
+        "smol"
+      ],
+      "sources": {
+        "HuggingFace": "taobao-mnn/SmolVLM2-2.2B-Instruct-MNN",
+        "ModelScope": "MNN/SmolVLM2-2.2B-Instruct-MNN",
+        "Modelers": "MNN/SmolVLM2-2.2B-Instruct-MNN"
+      },
+      "size_gb": 2.2,
+      "vendor": "Smol",
+      "file_size": 2480683993
+    },
+    {
+      "modelName": "FastVLM-1.5B-Stage3-MNN",
+      "tags": [
+        "Vision"
+      ],
+      "categories": [
+        "chat",
+        "fastvlm"
+      ],
+      "sources": {
+        "HuggingFace": "taobao-mnn/FastVLM-1.5B-Stage3-MNN",
+        "ModelScope": "MNN/FastVLM-1.5B-Stage3-MNN",
+        "Modelers": "MNN/FastVLM-1.5B-Stage3-MNN"
+      },
+      "size_gb": 1.5,
+      "vendor": "FastVLM",
+      "file_size": 1228204915
+    },
+    {
+      "modelName": "SmolVLM-500M-Instruct-MNN",
+      "tags": [
+        "Vision"
+      ],
+      "categories": [
+        "chat",
+        "smol"
+      ],
+      "sources": {
+        "HuggingFace": "taobao-mnn/SmolVLM-500M-Instruct-MNN",
+        "ModelScope": "MNN/SmolVLM-500M-Instruct-MNN",
+        "Modelers": "MNN/SmolVLM-500M-Instruct-MNN"
+      },
+      "size_gb": 0.5,
+      "vendor": "Smol",
+      "file_size": 607101723
+    },
+    {
+      "modelName": "Qwen-VL-Chat-MNN",
+      "tags": [
+        "Vision"
+      ],
+      "categories": [
+        "chat",
+        "qwen"
+      ],
+      "sources": {
+        "HuggingFace": "taobao-mnn/Qwen-VL-Chat-MNN",
+        "ModelScope": "MNN/Qwen-VL-Chat-MNN",
+        "Modelers": "MNN/Qwen-VL-Chat-MNN"
+      },
+      "size_gb": 1.0,
+      "vendor": "Qwen",
+      "file_size": 9145507680
+    },
+    {
+      "modelName": "SmolVLM-256M-Instruct-MNN",
+      "tags": [
+        "Vision"
+      ],
+      "categories": [
+        "chat",
+        "smol"
+      ],
+      "sources": {
+        "HuggingFace": "taobao-mnn/SmolVLM-256M-Instruct-MNN",
+        "ModelScope": "MNN/SmolVLM-256M-Instruct-MNN",
+        "Modelers": "MNN/SmolVLM-256M-Instruct-MNN"
+      },
+      "size_gb": 0.256,
+      "vendor": "Smol",
+      "file_size": 311431732
+    },
+    {
+      "modelName": "FastVLM-0.5B-Stage3-MNN",
+      "tags": [
+        "Vision"
+      ],
+      "categories": [
+        "chat",
+        "fastvlm"
+      ],
+      "sources": {
+        "HuggingFace": "taobao-mnn/FastVLM-0.5B-Stage3-MNN",
+        "ModelScope": "MNN/FastVLM-0.5B-Stage3-MNN",
+        "Modelers": "MNN/FastVLM-0.5B-Stage3-MNN"
+      },
+      "size_gb": 0.5,
+      "vendor": "FastVLM",
+      "file_size": 519168032
+    },
+    {
+      "modelName": "SmolVLM-Instruct-MNN",
+      "tags": [
+        "Vision"
+      ],
+      "categories": [
+        "chat",
+        "smol"
+      ],
+      "sources": {
+        "HuggingFace": "taobao-mnn/SmolVLM-Instruct-MNN",
+        "ModelScope": "MNN/SmolVLM-Instruct-MNN",
+        "Modelers": "MNN/SmolVLM-Instruct-MNN"
+      },
+      "size_gb": 1.0,
+      "vendor": "Smol",
+      "file_size": 2479896055
+    },
+    {
+      "modelName": "Qwen2-VL-2B-Instruct-MNN",
+      "tags": [
+        "Vision"
+      ],
+      "categories": [
+        "chat",
+        "qwen"
+      ],
+      "sources": {
+        "HuggingFace": "taobao-mnn/Qwen2-VL-2B-Instruct-MNN",
+        "ModelScope": "MNN/Qwen2-VL-2B-Instruct-MNN",
+        "Modelers": "MNN/Qwen2-VL-2B-Instruct-MNN"
+      },
+      "size_gb": 2.0,
+      "vendor": "Qwen",
+      "file_size": 1718109172
+    },
+    {
+      "modelName": "FastVLM-0.5B-Stage2-MNN",
+      "tags": [
+        "Vision"
+      ],
+      "categories": [
+        "chat",
+        "fastvlm"
+      ],
+      "sources": {
+        "HuggingFace": "taobao-mnn/FastVLM-0.5B-Stage2-MNN",
+        "ModelScope": "MNN/FastVLM-0.5B-Stage2-MNN",
+        "Modelers": "MNN/FastVLM-0.5B-Stage2-MNN"
+      },
+      "size_gb": 0.5,
+      "vendor": "FastVLM",
+      "file_size": 519168032
+    },
+    {
+      "modelName": "Qwen2.5-VL-7B-Instruct-MNN",
+      "tags": [
+        "Vision"
+      ],
+      "categories": [
+        "chat",
+        "qwen"
+      ],
+      "sources": {
+        "HuggingFace": "taobao-mnn/Qwen2.5-VL-7B-Instruct-MNN",
+        "ModelScope": "MNN/Qwen2.5-VL-7B-Instruct-MNN",
+        "Modelers": "MNN/Qwen2.5-VL-7B-Instruct-MNN"
+      },
+      "size_gb": 7.0,
+      "vendor": "Qwen",
+      "file_size": 5449575998
+    },
+    {
+      "modelName": "FastVLM-1.5B-Stage2-MNN",
+      "tags": [
+        "Vision"
+      ],
+      "categories": [
+        "chat",
+        "fastvlm"
+      ],
+      "sources": {
+        "HuggingFace": "taobao-mnn/FastVLM-1.5B-Stage2-MNN",
+        "ModelScope": "MNN/FastVLM-1.5B-Stage2-MNN",
+        "Modelers": "MNN/FastVLM-1.5B-Stage2-MNN"
+      },
+      "size_gb": 1.5,
+      "vendor": "FastVLM",
+      "file_size": 1228204915
+    },
+    {
+      "modelName": "Qwen2-VL-7B-Instruct-MNN",
+      "tags": [
+        "Vision"
+      ],
+      "categories": [
+        "chat",
+        "qwen"
+      ],
+      "sources": {
+        "HuggingFace": "taobao-mnn/Qwen2-VL-7B-Instruct-MNN",
+        "ModelScope": "MNN/Qwen2-VL-7B-Instruct-MNN",
+        "Modelers": "MNN/Qwen2-VL-7B-Instruct-MNN"
+      },
+      "size_gb": 7.0,
+      "vendor": "Qwen",
+      "file_size": 5457279512
+    }
+  ]
+}

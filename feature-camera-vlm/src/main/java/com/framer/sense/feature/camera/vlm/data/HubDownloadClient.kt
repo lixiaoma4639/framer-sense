@@ -13,7 +13,7 @@ import java.io.IOException
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 
-@Serializable data class HubFile(val path: String, val size: Long, val sha256: String? = null, val gitSha1: String? = null)
+@Serializable data class HubFile(val path: String, val size: Long, val sha256: String? = null, val gitSha1: String? = null, val revision: String? = null)
 @Serializable data class HubSnapshot(val revision: String, val files: List<HubFile>)
 
 /** 使用官方 Hub HTTP 接口读取固定版本快照和流式权重；不依赖 Python 或 Retrofit。
@@ -34,12 +34,14 @@ class HubDownloadClient(private val client: OkHttpClient = OkHttpClient.Builder(
     }
 
     /** 获取提交版本及全部分页文件清单。@param source 已配置下载源。@return 固定提交及文件大小、可验证的 LFS 摘要。 */
-    suspend fun snapshot(source: String): HubSnapshot {
+    suspend fun snapshot(source: String, repository: String = MODEL): HubSnapshot {
         val base = normalizeSource(source)
-        val info = json("$base/api/models/$MODEL/revision/main").first.jsonObject
+        validateRepository(repository)
+        if (base.toHttpUrl().host == "modelscope.cn") return modelScopeSnapshot(base, repository)
+        val info = json("$base/api/models/$repository/revision/main").first.jsonObject
         val revision = info["sha"]?.jsonPrimitive?.content ?: throw ModelStorageException(R.string.vlm_model_metadata)
         if (!revision.matches(Regex("[a-fA-F0-9]{40,64}"))) throw ModelStorageException(R.string.vlm_model_metadata)
-        var next: String? = "$base/api/models/$MODEL/tree/$revision?recursive=true&expand=false"
+        var next: String? = "$base/api/models/$repository/tree/$revision?recursive=true&expand=false"
         val visited = mutableSetOf<String>()
         val entries = mutableListOf<HubFile>()
         while (next != null) {
@@ -62,12 +64,44 @@ class HubDownloadClient(private val client: OkHttpClient = OkHttpClient.Builder(
             if (next != null) {
                 val parsed = next!!.toHttpUrl()
                 val origin = base.toHttpUrl()
-                if (parsed.scheme != origin.scheme || parsed.host != origin.host || parsed.port != origin.port || !parsed.encodedPath.startsWith(origin.encodedPath.trimEnd('/') + "/api/models/$MODEL/tree/$revision"))
+                if (parsed.scheme != origin.scheme || parsed.host != origin.host || parsed.port != origin.port || !parsed.encodedPath.startsWith(origin.encodedPath.trimEnd('/') + "/api/models/$repository/tree/$revision"))
                     throw ModelStorageException(R.string.vlm_model_metadata)
             }
         }
         if (entries.isEmpty() || entries.size > 4096 || entries.map { it.path }.toSet().size != entries.size || entries.sumOf { it.size } > ModelFiles.MAX_BYTES)
             throw ModelStorageException(R.string.vlm_model_metadata)
+        return HubSnapshot(revision, entries)
+    }
+
+    internal suspend fun metadata(url: String): String = json(url).first.toString()
+
+    private fun validateRepository(repository: String) {
+        if (!repository.matches(Regex("[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+")))
+            throw ModelStorageException(R.string.vlm_model_metadata)
+    }
+
+    /** 魔搭与 HF 协议独立；固定清单和每文件 revision/摘要，绝不把分支名当提交摘要。 */
+    private suspend fun modelScopeSnapshot(base: String, repository: String): HubSnapshot {
+        val root = json("$base/api/v1/models/$repository/repo/files?Recursive=1").first.jsonObject
+        if (root["Success"]?.jsonPrimitive?.booleanOrNull != true)
+            throw ModelStorageException(R.string.vlm_model_metadata)
+        val entries = root["Data"]!!.jsonObject["Files"]!!.jsonArray.mapNotNull { value ->
+            val file = value.jsonObject
+            if (file["Type"]?.jsonPrimitive?.content == "tree") return@mapNotNull null
+            val path = file["Path"]!!.jsonPrimitive.content
+            val size = file["Size"]!!.jsonPrimitive.long
+            val digest = file["Sha256"]?.jsonPrimitive?.contentOrNull
+            if (path.length > 1024 || size < 0 || size > ModelFiles.MAX_BYTES ||
+                digest == null || !digest.matches(Regex("[a-fA-F0-9]{64}")))
+                throw ModelStorageException(R.string.vlm_model_metadata)
+            HubFile(path, size, digest, revision = file["Revision"]?.jsonPrimitive?.contentOrNull)
+        }
+        if (entries.isEmpty() || entries.size > 4096 || entries.map { it.path }.distinct().size != entries.size ||
+            entries.sumOf { it.size } > ModelFiles.MAX_BYTES) throw ModelStorageException(R.string.vlm_model_metadata)
+        // 清单摘要用作本地版本标识；下载后逐文件 SHA-256 验证，可检测上游版本变化。
+        val identity = entries.joinToString("\n") { "${it.path}:${it.size}:${it.sha256}:${it.revision}" }
+        val revision = java.security.MessageDigest.getInstance("SHA-256").digest(identity.toByteArray())
+            .joinToString("") { "%02x".format(it) }
         return HubSnapshot(revision, entries)
     }
 
@@ -100,7 +134,7 @@ class HubDownloadClient(private val client: OkHttpClient = OkHttpClient.Builder(
      * @param file 私有临时文件。@param checkNetwork 每块写入前检查网络约束。
      * @param progress 当前文件已写入字节数，服务端重置时可能回退。
      */
-    suspend fun download(source: String, revision: String, entry: HubFile, file: File, checkNetwork: () -> Unit, progress: (Long) -> Unit) {
+    suspend fun download(source: String, revision: String, entry: HubFile, file: File, checkNetwork: () -> Unit, progress: (Long) -> Unit, repository: String = MODEL) {
         checkNetwork()
         file.parentFile?.mkdirs()
         if (file.length() > entry.size) file.delete()
@@ -109,7 +143,13 @@ class HubDownloadClient(private val client: OkHttpClient = OkHttpClient.Builder(
             catch (_: ModelStorageException) { file.delete() }
         }
         val offset = file.length()
-        val url = (normalizeSource(source) + "/$MODEL/resolve/$revision/").toHttpUrl().newBuilder().addPathSegments(entry.path).build()
+        validateRepository(repository)
+        val base = normalizeSource(source)
+        val url = if (base.toHttpUrl().host == "modelscope.cn") {
+            (base + "/api/v1/models/$repository/repo").toHttpUrl().newBuilder()
+                .addQueryParameter("FilePath", entry.path)
+                .apply { entry.revision?.let { addQueryParameter("Revision", it) } }.build()
+        } else (base + "/$repository/resolve/$revision/").toHttpUrl().newBuilder().addPathSegments(entry.path).build()
         val request = Request.Builder().url(url).header("Accept-Encoding", "identity").apply { if (offset > 0) header("Range", "bytes=$offset-") }.build()
         exchange(request) { response ->
             val append = response.code == 206

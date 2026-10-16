@@ -10,6 +10,10 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.serialization.encodeToString
+import com.framer.sense.feature.camera.vlm.market.MarketCatalog
 import kotlinx.serialization.Serializable
 import java.io.File
 import java.io.InputStream
@@ -18,10 +22,47 @@ import java.util.zip.ZipInputStream
 @Serializable data class ModelFile(val path: String, val size: Long, val sha256: String)
 @Serializable data class ModelManifest(val model: String, val runtime: String, val files: List<ModelFile>)
 
+@Serializable data class InstalledModel(
+    val id: String, val directory: String, val source: String = "", val repository: String = "",
+    val revision: String = "", val installedAt: Long = System.currentTimeMillis()
+)
+
 /** 管理官方模型目录与旧 ZIP；只有串行原生加载成功后才提交激活指针。 */
 class LocalModelStore(private val context: Context, private val availableSpace: (File) -> Long = { it.usableSpace }) {
     val root = File(context.noBackupFilesDir, "vlm-models").canonicalFile.apply { mkdirs() }
     private val preferences = context.getSharedPreferences("vlm-model", Context.MODE_PRIVATE)
+
+    private val _installed = MutableStateFlow(readInstalled())
+    val installed = _installed.asStateFlow()
+    private val _changes = MutableStateFlow(0L)
+    val changes = _changes.asStateFlow()
+
+    private fun readInstalled(): List<InstalledModel> {
+        val records = runCatching { VlmJson.decodeFromString<List<InstalledModel>>(preferences.getString("installed", null) ?: "[]") }
+            .getOrDefault(emptyList()).filter { runCatching { ModelFiles.child(root, it.directory).isDirectory }.getOrDefault(false) }.toMutableList()
+        // 旧安装/已校验候选仅登记元数据，目录和下载断点保持原样。
+        listOfNotNull(activeDirectory(), pendingDirectory()).forEach { dir ->
+            if (records.none { it.directory == dir.name }) records += InstalledModel(
+                if (dir.name.startsWith("download-")) MarketCatalog.DEFAULT_MODEL else "local-${dir.name}", dir.name)
+        }
+        check(preferences.edit().putString("installed", VlmJson.encodeToString(records)).commit())
+        return records
+    }
+
+    @Synchronized fun register(dir: File, id: String, source: String = "", repository: String = "", revision: String = "") {
+        check(dir.canonicalFile.parentFile == root && dir.isDirectory)
+        val record = InstalledModel(id, dir.name, source, repository, revision)
+        saveInstalled(_installed.value.filterNot { it.directory == dir.name } + record)
+    }
+
+    private fun saveInstalled(records: List<InstalledModel>) {
+        if (!preferences.edit().putString("installed", VlmJson.encodeToString(records)).commit()) throw ModelStorageException(R.string.vlm_model_persist)
+        _installed.value = records
+        changed()
+    }
+    private fun changed() { _changes.value = _changes.value + 1 }
+    fun installedModel(id: String): InstalledModel? = installed.value.filter { it.id == id }.maxByOrNull { it.installedAt }
+    fun modelId(dir: File? = activeDirectory()): String? = dir?.let { path -> installed.value.firstOrNull { it.directory == path.name }?.id }
 
     /** 获取当前安装；无参数，目录丢失时返回 null。 */
     fun activeDirectory(): File? = directory("active")
@@ -34,7 +75,7 @@ class LocalModelStore(private val context: Context, private val availableSpace: 
     /** 获取已安装模型说明；无参数，不将安装等同于已加载。 */
     fun description(): String = message(if (activeDirectory() == null) R.string.vlm_model_absent else R.string.vlm_model_installed)
     /** 返回模型调用记录名称；无参数，未知导入模型不冒充官方具体型号。 */
-    fun modelName(): String = if (activeDirectory()?.name?.startsWith("download-") == true) HubDownloadClient.MODEL else message(R.string.vlm_model_generic_name)
+    fun modelName(): String = modelId()?.takeUnless { it.startsWith("local-") } ?: message(R.string.vlm_model_generic_name)
     /** 获取本地化文案。@param resource 字符串资源。@param args 格式化参数。@return 当前语言文案。 */
     fun message(resource: Int, vararg args: Any): String = context.getString(resource, *args)
     /** 将文件操作异常转成可展示的消息。@param error 原始异常。@return 不含响应正文或密钥的错误。 */
@@ -43,26 +84,31 @@ class LocalModelStore(private val context: Context, private val availableSpace: 
     /** 登记候选目录，下载和导入共用；调用前完成文件校验。
      * @param dir 私有候选目录，不能移动已打开的模型文件。
      */
-    fun stage(dir: File) {
+    @Synchronized fun stage(dir: File) {
         if (dir.canonicalFile.parentFile != root.canonicalFile) throw ModelStorageException(R.string.vlm_model_path)
         val previous = pendingDirectory()
         if (!preferences.edit().putString("pending", dir.name).commit()) throw ModelStorageException(R.string.vlm_model_persist)
-        previous?.takeIf { it != dir && it != activeDirectory() }?.deleteRecursively()
+        previous?.takeIf { it != dir && it != activeDirectory() && installed.value.none { record -> record.directory == it.name } }?.deleteRecursively()
+        changed()
     }
 
     /** 提交已成功加载的模型；必须由 MNN 串行线程调用。
      * @param dir 已加载候选。@return 原安装目录，调用方释放旧句柄后可清理。
      */
-    fun activate(dir: File): File? {
+    @Synchronized fun activate(dir: File): File? {
         if (dir.canonicalFile.parentFile != root.canonicalFile) throw ModelStorageException(R.string.vlm_model_path)
         val old = activeDirectory()
-        if (!preferences.edit().putString("active", dir.name).remove("pending").commit()) throw ModelStorageException(R.string.vlm_model_persist)
+        if (installed.value.none { it.directory == dir.name }) register(dir, "local-${dir.name}")
+        val edit = preferences.edit().putString("active", dir.name)
+        if (pendingDirectory() == dir) edit.remove("pending")
+        if (!edit.commit()) throw ModelStorageException(R.string.vlm_model_persist)
+        changed()
         return old?.takeIf { it != dir }
     }
 
     /** 移除未激活候选；不会删除当前安装。@param dir 需要丢弃的候选目录。 */
     fun discard(dir: File) {
-        if (activeDirectory() == dir) return
+        if (activeDirectory() == dir || installed.value.any { it.directory == dir.name }) return
         if (pendingDirectory() == dir && !preferences.edit().remove("pending").commit()) throw ModelStorageException(R.string.vlm_model_persist)
         if (dir.canonicalFile.parentFile == root.canonicalFile) dir.deleteRecursively()
     }
@@ -145,9 +191,13 @@ class LocalModelStore(private val context: Context, private val availableSpace: 
             copy(dir)
             validateDirectory(dir)
             currentCoroutineContext().ensureActive()
+            register(dir, "local-${dir.name}")
             stage(dir)
             return dir
-        } catch (error: Throwable) { dir.deleteRecursively(); throw error }
+        } catch (error: Throwable) {
+            synchronized(this@LocalModelStore) { runCatching { saveInstalled(installed.value.filterNot { it.directory == dir.name }) } }
+            dir.deleteRecursively(); throw error
+        }
     }
 
     /** 分块复制文件并检查空间。@param input 借用的输入流，由调用者关闭。@param target 输出文件。
@@ -184,12 +234,21 @@ class LocalModelStore(private val context: Context, private val availableSpace: 
         ModelFiles.validate(dir)
     }
 
-    /** 删除已卸载安装和候选；无参数，由调用方先串行卸载模型。 */
-    suspend fun delete() = withContext(Dispatchers.IO) {
-        val dirs = listOfNotNull(activeDirectory(), pendingDirectory()).distinct()
-        if (!preferences.edit().remove("active").remove("pending").commit()) throw ModelStorageException(R.string.vlm_model_persist)
-        dirs.forEach { it.deleteRecursively() }
+    /** 仅删除指定且已卸载的模型；调用方先等待 JNI 释放，其他安装不受影响。 */
+    suspend fun deleteDirectory(dir: File) = withContext(Dispatchers.IO) {
+        synchronized(this@LocalModelStore) {
+            if (dir.canonicalFile.parentFile != root) throw ModelStorageException(R.string.vlm_model_path)
+            val edit = preferences.edit()
+            if (activeDirectory() == dir) edit.remove("active")
+            if (pendingDirectory() == dir) edit.remove("pending")
+            if (!edit.commit()) throw ModelStorageException(R.string.vlm_model_persist)
+            if (dir.exists() && !dir.deleteRecursively()) throw ModelStorageException(R.string.vlm_model_operation_failed)
+            saveInstalled(installed.value.filterNot { it.directory == dir.name })
+        }
     }
+
+    /** 兼容原入口：仅删除当前模型；无当前安装时删除候选。 */
+    suspend fun delete() { (activeDirectory() ?: pendingDirectory())?.let { deleteDirectory(it) } }
 
     companion object {
         /** 兼容已有调用的安全路径入口。@param root 根目录。@param path 相对路径。@return 内部文件。 */

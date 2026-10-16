@@ -58,18 +58,25 @@ class CameraFramingTest {
         assertEquals(.26296297f, projectedX, .00001f)
     }
 
-    @Test fun presetsRespectActualDeviceRangeButPinchCanReachBeyondFive() {
-        assertEquals(listOf(.6f, 1f, 2f), CameraZoomPolicy.presets(.6f, 10f))
-        assertEquals(listOf(.5f, 1f, 3.5f, 10f), CameraZoomPolicy.presets(.5f, 10f, listOf(.5f, 1f, 3.49f, 10f)))
-        assertEquals(listOf(1f, 2f), CameraZoomPolicy.presets(1f, 2.5f, listOf(.5f, 10f)))
-        assertEquals(listOf(1f, 2f), CameraZoomPolicy.presets(1f, 2f, listOf(Float.NaN, -1f)))
+    @Test fun presetsUseOneTwoThreeAndActualMaximumWithinDeviceRange() {
+        assertEquals(listOf(1f, 2f, 3f, 8f), CameraZoomPolicy.presets(1f, 8f))
+        assertEquals(listOf(1f, 2f, 3f, 10f), CameraZoomPolicy.presets(.6f, 10f))
+        assertEquals(listOf(1f, 2f, 2.5f), CameraZoomPolicy.presets(1f, 2.5f))
+        assertEquals(listOf(1f, 2f), CameraZoomPolicy.presets(1f, 2f))
         assertEquals(3.5f, CameraZoomPolicy.lensRatio(7f, 4f, 3f, 4f, 8f, 6f)!!, .0001f)
         assertNull(CameraZoomPolicy.lensRatio(4f, 0f, 3f, 4f, 8f, 6f))
-        assertEquals(listOf(1f, 2f), CameraZoomPolicy.presets(1f, 2.5f))
+        assertEquals(listOf(1f, 2f, 3f, 30f), CameraZoomPolicy.presets(1f, 30f))
         assertEquals(listOf(1f), CameraZoomPolicy.presets(1f, 1f))
         assertEquals(10f, CameraZoomPolicy.clamp(20f, .6f, 10f), 0f)
         assertEquals(.6f, CameraZoomPolicy.clamp(.1f, .6f, 10f), 0f)
         assertEquals(.6f, CameraZoomPolicy.clamp(Float.NaN, .6f, 10f), 0f)
+    }
+
+    @Test fun maximumIsNotDuplicatedOrRoundedAndOutOfRangeStopsAreOmitted() {
+        assertEquals(listOf(1f, 2f, 3f), CameraZoomPolicy.presets(1f, 3f))
+        assertEquals(listOf(1f, 2f, 3f, 3.49f), CameraZoomPolicy.presets(.54f, 3.49f))
+        assertEquals(listOf(2f, 3f, 6f), CameraZoomPolicy.presets(2f, 6f))
+        assertEquals(listOf(.8f), CameraZoomPolicy.presets(.5f, .8f))
     }
 
     @Test fun liftingSecondFingerCannotProduceClickAndNextSingleTapWorks() {

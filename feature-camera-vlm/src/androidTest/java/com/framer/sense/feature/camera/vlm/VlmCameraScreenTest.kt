@@ -2,6 +2,12 @@ package com.framer.sense.feature.camera.vlm
 
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.text.TextRange
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.test.performTouchInput
 import androidx.compose.foundation.layout.height
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.test.performScrollTo
@@ -10,6 +16,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.ui.Modifier
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.test.assertTextContains
+import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
@@ -20,6 +27,8 @@ import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.ui.test.assertIsNotSelected
+import androidx.compose.ui.test.assertIsNotFocused
+import androidx.compose.ui.test.assertIsFocused
 import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.text.TextLayoutResult
@@ -35,12 +44,108 @@ import com.framer.sense.feature.camera.vlm.model.*
 import com.framer.sense.feature.camera.vlm.avatar.*
 import com.framer.sense.feature.camera.vlm.ui.*
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 
 /** 验证导演加载遮罩展示当前真实步骤，而不是旧的通用固定文案。 */
 class VlmCameraScreenTest {
+    @Test fun topAiEntryExpandsDraftAndOnlyConfirmsWhenRequested() {
+        val state = mutableStateOf(VlmUiState(cameraReady = true, instruction = "保留环境"))
+        val events = mutableListOf<VlmIntent>()
+        val onEvent: (VlmIntent) -> Unit = { event ->
+                events += event
+                state.value = when (event) {
+                    is VlmIntent.InstructionEditorVisible -> state.value.copy(instructionEditorVisible = event.visible,
+                        instructionDraft = state.value.instruction)
+                    is VlmIntent.InstructionDraftChanged -> state.value.copy(instructionDraft = event.text)
+                    VlmIntent.SubmitInstruction -> state.value.copy(instruction = state.value.instructionDraft,
+                        instructionEditorVisible = false)
+                    else -> state.value
+                }
+        }
+        composeRule.setContent { MaterialTheme {
+            Box(Modifier.fillMaxSize()) {
+                CameraTopBar(state.value, onEvent)
+                CompositionInstructionOverlay(state.value, onEvent, Modifier.fillMaxSize())
+            }
+        } }
+        composeRule.onNodeWithTag("vlm_ai_instruction_panel").assertDoesNotExist()
+        composeRule.onNodeWithTag("vlm_ai_instruction_toggle").performClick()
+        composeRule.onNodeWithTag("vlm_ai_instruction_toggle").assertIsSelected()
+        composeRule.onNodeWithTag("vlm_ai_instruction_input").assertIsNotFocused()
+        assertEquals(TextRange(state.value.instruction.length), composeRule.onNodeWithTag("vlm_ai_instruction_input")
+            .fetchSemanticsNode().config[SemanticsProperties.TextSelectionRange])
+        composeRule.onNodeWithTag("vlm_ai_instruction_input").performClick().assertIsFocused()
+            .performTextReplacement("人物靠右")
+        assertEquals("保留环境", state.value.instruction)
+        assertTrue(events.none { it == VlmIntent.SubmitInstruction || it is VlmIntent.InstructionChanged })
+        composeRule.onNodeWithTag("vlm_ai_instruction_confirm").performClick()
+        composeRule.onNodeWithTag("vlm_ai_instruction_panel").assertDoesNotExist()
+        assertEquals("人物靠右", state.value.instruction)
+        composeRule.onNodeWithTag("vlm_ai_instruction_toggle").performClick()
+        composeRule.onNodeWithTag("vlm_ai_instruction_input").assertTextContains("人物靠右")
+        composeRule.onNodeWithTag("vlm_ai_instruction_panel").performTouchInput {
+            click(Offset(width - 2f, height - 2f))
+        }
+        composeRule.onNodeWithTag("vlm_ai_instruction_panel").assertIsDisplayed()
+        composeRule.onNodeWithTag("vlm_ai_instruction_dismiss").performTouchInput { click(Offset(2f, 2f)) }
+        composeRule.onNodeWithTag("vlm_ai_instruction_panel").assertDoesNotExist()
+        composeRule.runOnIdle { state.value = state.value.copy(stage = VlmStage.GENERATING) }
+        composeRule.onNodeWithTag("vlm_ai_instruction_toggle").assertIsNotEnabled()
+    }
+
+    @Test fun historyDeleteDoesNotSelectRowAndRecommendationsMoveCursorToEnd() {
+        val state = mutableStateOf(VlmUiState(instructionEditorVisible = true, instructionDraft = "保留建筑",
+            instructionHistory = listOf("保留建筑")))
+        val events = mutableListOf<VlmIntent>()
+        composeRule.setContent { MaterialTheme {
+            CompositionInstructionBar(state.value) { event ->
+                events += event
+                if (event is VlmIntent.InstructionRecommendationSelected) state.value = state.value.copy(
+                    instructionDraft = event.text, instructionDraftFromRecommendation = true,
+                    instructionDraftRevision = state.value.instructionDraftRevision + 1)
+            }
+        } }
+        composeRule.onNodeWithTag("vlm_ai_history_0").assertIsSelected()
+        composeRule.onNodeWithTag("vlm_ai_history_delete_0").performClick()
+        assertEquals(listOf(VlmIntent.DeleteInstructionHistory("保留建筑")), events)
+        composeRule.onNodeWithTag("vlm_ai_history_0").performClick()
+        assertEquals(VlmIntent.InstructionHistorySelected("保留建筑"), events.last())
+        composeRule.onNodeWithTag("vlm_ai_instruction_choices").performScrollToNode(hasTestTag("vlm_ai_recommendation_0"))
+        composeRule.onNodeWithTag("vlm_ai_recommendation_0").performClick()
+        composeRule.onNodeWithTag("vlm_ai_recommendation_0").assertIsSelected()
+        composeRule.onNodeWithTag("vlm_ai_instruction_input").assertIsNotFocused()
+        assertEquals(TextRange(state.value.instructionDraft.length), composeRule.onNodeWithTag("vlm_ai_instruction_input")
+            .fetchSemanticsNode().config[SemanticsProperties.TextSelectionRange])
+    }
+
     @get:Rule val composeRule = createComposeRule()
+
+    @Test fun topBarIconsAlignWithInstructionPanelMarginsAndAiEntryStaysCentered() {
+        val state = mutableStateOf(VlmUiState())
+        composeRule.setContent { MaterialTheme { CameraTopBar(state.value, {}, onExit = {}) } }
+        fun assertPositions() {
+            val bar = composeRule.onNodeWithTag("vlm_camera_top_bar").getUnclippedBoundsInRoot()
+            val back = composeRule.onNodeWithTag("vlm_camera_exit").getUnclippedBoundsInRoot()
+            val settings = composeRule.onNodeWithTag("vlm_photo_settings").getUnclippedBoundsInRoot()
+            val backIcon = composeRule.onNodeWithTag("vlm_camera_exit_icon", useUnmergedTree = true).getUnclippedBoundsInRoot()
+            val settingsIcon = composeRule.onNodeWithTag("vlm_photo_settings_icon", useUnmergedTree = true).getUnclippedBoundsInRoot()
+            val ai = composeRule.onNodeWithTag("vlm_ai_instruction_toggle").getUnclippedBoundsInRoot()
+            assertEquals(0f, (back.left - bar.left).value, .1f)
+            assertEquals(0f, (bar.right - settings.right).value, .1f)
+            assertEquals(12f, (backIcon.left - bar.left).value, .1f)
+            assertEquals(12f, (bar.right - settingsIcon.right).value, .1f)
+            assertEquals((bar.left.value + bar.right.value) / 2, (ai.left.value + ai.right.value) / 2, .1f)
+            val aspect = composeRule.onNodeWithTag("vlm_aspect_ratio").getUnclippedBoundsInRoot()
+            val model = composeRule.onNodeWithTag("vlm_model_settings").getUnclippedBoundsInRoot()
+            assertTrue(aspect.right <= ai.left)
+            assertTrue(ai.right <= model.left)
+        }
+        assertPositions()
+        composeRule.runOnIdle { state.value = state.value.copy(cameraMode = CameraMode.AR) }
+        assertPositions()
+    }
 
     @Test fun exitButtonWorksDuringGenerationAndIsDisabledWhileSaving() {
         val state = mutableStateOf(VlmUiState(stage = VlmStage.GENERATING))
@@ -168,6 +273,7 @@ class VlmCameraScreenTest {
             ModelSettingsDialog(VlmUiState(settings = ModelSettings(mode = ModelMode.CLOUD)), {}, {}, {})
         } }
         composeRule.onNodeWithTag("vlm_model_mode_CLOUD").assertIsSelected()
+        composeRule.onNodeWithTag("vlm_open_model_market").assertDoesNotExist()
         composeRule.onNodeWithTag("vlm_cloud_configuration").assertExists()
         composeRule.onNodeWithTag("vlm_offline_configuration").assertDoesNotExist()
         composeRule.onNodeWithText("✓ 中国").assertIsDisplayed()
@@ -236,6 +342,145 @@ class VlmCameraScreenTest {
         composeRule.onNodeWithTag("vlm_gateway_configuration").assertDoesNotExist()
     }
 
+    @Test fun marketRoundTripRetainsUnsavedModelSettingsDraft() {
+        val initial = ModelSettings(qwenAccess = QwenAccess.GATEWAY)
+        val events = mutableListOf<VlmIntent>()
+        composeRule.setContent { MaterialTheme {
+            ModelSettingsDialog(VlmUiState(settings = initial), events::add, {}, {}, marketContent = { close ->
+                androidx.compose.material3.TextButton(onClick = close, modifier = Modifier.testTag("market_test_back")) {
+                    androidx.compose.material3.Text("返回市场测试")
+                }
+            })
+        } }
+        composeRule.onNodeWithTag("vlm_model_mode_AUTO").performClick()
+        composeRule.onNodeWithTag("vlm_open_model_market").performScrollTo().performClick()
+        composeRule.onNodeWithTag("vlm_model_settings_dialog").assertDoesNotExist()
+        composeRule.onNodeWithTag("market_test_back").performClick()
+        composeRule.onNodeWithTag("vlm_model_mode_AUTO").assertIsSelected()
+        composeRule.onNodeWithText("保存").performClick()
+        assertEquals(listOf(VlmIntent.SaveSettings(initial.copy(mode = ModelMode.AUTO))), events)
+    }
+
+    @Test fun unsupportedVisionModelsCannotDownload() {
+        val unsupported = com.framer.sense.feature.camera.vlm.market.MarketModel("unreviewed-VL-MNN", "Example", listOf("Vision"),
+            mapOf("ModelScope" to "MNN/unreviewed-VL-MNN"))
+        val state = com.framer.sense.feature.camera.vlm.market.MarketUiState(models = listOf(unsupported), allModels = listOf(unsupported))
+        composeRule.setContent { MaterialTheme {
+            com.framer.sense.feature.camera.vlm.market.ModelMarketContent(state, false, ModelMode.OFFLINE, {}, {}, {}, {}, { _, _ -> }, {}, {}, {}, {})
+        } }
+        composeRule.onNodeWithTag("vlm_market_download_unreviewed-VL-MNN").assertIsNotEnabled()
+    }
+
+    @Test fun marketUpdatesDownloadedLabelWhenRuntimeLoadsAndUnloads() {
+        val model = com.framer.sense.feature.camera.vlm.market.MarketModel(
+            "Qwen3-VL-4B-Instruct-MNN", "Qwen", listOf("Vision"), emptyMap())
+        val path = "/models/4b"
+        val state = androidx.compose.runtime.mutableStateOf(com.framer.sense.feature.camera.vlm.market.MarketUiState(
+            models = listOf(model), allModels = listOf(model), activeModel = model.id,
+            installed = listOf(com.framer.sense.feature.camera.vlm.data.InstalledModel(model.id, path)),
+            downloads = mapOf(model.id to com.framer.sense.feature.camera.vlm.data.ModelDownloadState(
+                modelId = model.id, phase = com.framer.sense.feature.camera.vlm.data.DownloadPhase.DOWNLOADED))))
+        composeRule.setContent { MaterialTheme {
+            com.framer.sense.feature.camera.vlm.market.ModelMarketContent(state.value, false, ModelMode.OFFLINE,
+                {}, {}, {}, {}, { _, _ -> }, {}, {}, {}, {})
+        } }
+        val status = composeRule.onNodeWithTag("vlm_market_status_${model.id}")
+        status.assertTextEquals("模型已下载")
+        composeRule.runOnIdle { state.value = state.value.copy(runtime =
+            com.framer.sense.feature.camera.vlm.data.LocalModelLoadState(com.framer.sense.feature.camera.vlm.data.LocalModelPhase.READY, path)) }
+        status.assertTextEquals(androidx.test.platform.app.InstrumentationRegistry.getInstrumentation().targetContext.getString(R.string.vlm_model_loaded))
+        composeRule.runOnIdle { state.value = state.value.copy(runtime = com.framer.sense.feature.camera.vlm.data.LocalModelLoadState()) }
+        status.assertTextEquals("模型已下载")
+    }
+
+    @Test fun marketConfirmsEveryMobileDownloadAndStartsWifiWithoutConfirmation() {
+        val model = com.framer.sense.feature.camera.vlm.market.MarketModel(
+            com.framer.sense.feature.camera.vlm.market.MarketCatalog.DEFAULT_MODEL, "Qwen", listOf("Vision"),
+            mapOf("ModelScope" to "MNN/Qwen3-VL-2B-Instruct-MNN"))
+        val state = com.framer.sense.feature.camera.vlm.market.MarketUiState(models = listOf(model), allModels = listOf(model))
+        val requests = mutableListOf<Pair<String, Boolean>>()
+        var mobile = true
+        composeRule.setContent { MaterialTheme {
+            com.framer.sense.feature.camera.vlm.market.ModelMarketContent(state, false, ModelMode.CLOUD,
+                {}, {}, {}, {}, { id, allowed -> requests += id to allowed }, {}, {}, {}, {},
+                requiresMobileConfirmation = { mobile })
+        } }
+        composeRule.onNodeWithText("当前已保存为指定云端：下载可以继续，离线模型不会自动加载。").assertDoesNotExist()
+        composeRule.onNodeWithText("允许使用计费网络（包括移动流量）").assertDoesNotExist()
+        repeat(2) {
+            composeRule.onNodeWithTag("vlm_market_download_${model.id}").performClick()
+            composeRule.onNodeWithTag("vlm_market_mobile_confirmation").assertIsDisplayed()
+            assertEquals(it, requests.size)
+            composeRule.onNodeWithText("允许本次下载").performClick()
+        }
+        assertEquals(listOf(model.id to true, model.id to true), requests)
+        composeRule.onNodeWithTag("vlm_market_download_${model.id}").performClick()
+        composeRule.onNodeWithText("暂不允许").performClick()
+        assertEquals(2, requests.size)
+        composeRule.runOnIdle { mobile = false }
+        composeRule.onNodeWithTag("vlm_market_download_${model.id}").performClick()
+        composeRule.onNodeWithTag("vlm_market_mobile_confirmation").assertDoesNotExist()
+        assertEquals(model.id to false, requests.last())
+    }
+
+    @Test fun marketFilterUsesExpandedBottomSheetWithPriorityVendorsAndSourceSpacing() {
+        val models = listOf("Other", "Gemma", "DeepSeek", "Qwen").map { vendor ->
+            com.framer.sense.feature.camera.vlm.market.MarketModel("$vendor-VL", vendor, listOf("Vision"), emptyMap())
+        }
+        val state = com.framer.sense.feature.camera.vlm.market.MarketUiState(models = models, allModels = models)
+        composeRule.setContent { MaterialTheme {
+            com.framer.sense.feature.camera.vlm.market.ModelMarketContent(state, false, ModelMode.OFFLINE,
+                {}, {}, {}, {}, { _, _ -> }, {}, {}, {}, {})
+        } }
+        val china = composeRule.onNodeWithTag("vlm_market_source_MODELSCOPE").getUnclippedBoundsInRoot()
+        val global = composeRule.onNodeWithTag("vlm_market_source_HUGGING_FACE").getUnclippedBoundsInRoot()
+        org.junit.Assert.assertTrue(global.left.value - china.right.value >= 11f)
+        composeRule.onNodeWithTag("vlm_market_filter_open").performClick()
+        composeRule.onNodeWithTag("vlm_market_filter_sheet").assertIsDisplayed()
+        val bounds = listOf("qwen", "deepseek", "gemma", "gpt", "other").map { vendor ->
+            composeRule.onNodeWithTag("vlm_market_vendor_$vendor").assertIsDisplayed().getUnclippedBoundsInRoot()
+        }
+        bounds.zipWithNext().forEach { (before, after) ->
+            org.junit.Assert.assertTrue(before.top < after.top || before.top == after.top && before.right <= after.left)
+        }
+    }
+
+    @Test fun downloadedViewIsIndependentAndFilterButtonReflectsSelection() {
+        val qwen = com.framer.sense.feature.camera.vlm.market.MarketModel("Qwen3-VL-4B-Instruct-MNN", "Qwen", listOf("Vision"), emptyMap())
+        val gemma = com.framer.sense.feature.camera.vlm.market.MarketModel("gemma-4-E2B-it-MNN", "Gemma", listOf("Vision"), emptyMap())
+        val models = listOf(qwen, gemma)
+        val installed = listOf(com.framer.sense.feature.camera.vlm.data.InstalledModel(gemma.id, "download-gemma"))
+        val filter = mutableStateOf(com.framer.sense.feature.camera.vlm.market.MarketFilter())
+        composeRule.setContent { MaterialTheme {
+            val state = com.framer.sense.feature.camera.vlm.market.MarketUiState(
+                models = com.framer.sense.feature.camera.vlm.market.MarketCatalog.filter(models, filter.value, setOf(gemma.id)),
+                allModels = models, installed = installed, filter = filter.value)
+            com.framer.sense.feature.camera.vlm.market.ModelMarketContent(state, false, ModelMode.OFFLINE,
+                {}, { filter.value = it }, {}, {}, { _, _ -> }, {}, {}, {}, {})
+        } }
+        val advanced = composeRule.onNodeWithTag("vlm_market_filter_open")
+        val downloaded = composeRule.onNodeWithTag("vlm_market_installed")
+        assertTrue(advanced.getUnclippedBoundsInRoot().left < downloaded.getUnclippedBoundsInRoot().left)
+        downloaded.performClick().assertIsSelected()
+        advanced.assertIsNotSelected()
+        composeRule.onNodeWithTag("vlm_market_model_${qwen.id}").assertDoesNotExist()
+        composeRule.onNodeWithTag("vlm_market_model_${gemma.id}").assertIsDisplayed()
+        composeRule.onNodeWithTag("vlm_market_tag_Vision").performClick()
+        downloaded.assertIsNotSelected()
+        advanced.assertIsSelected()
+        downloaded.performClick()
+        composeRule.onNodeWithTag("vlm_market_tag_Vision").assertIsNotSelected()
+        advanced.performClick()
+        composeRule.onNodeWithTag("vlm_market_vendor_qwen").performClick()
+        composeRule.onNodeWithText("完成").performClick()
+        downloaded.assertIsNotSelected()
+        advanced.assertIsSelected()
+        downloaded.performClick()
+        composeRule.onNodeWithTag("vlm_market_search").performTextReplacement("qwen")
+        downloaded.assertIsNotSelected()
+        advanced.assertIsSelected()
+    }
+
     @Test fun ratioLabelFollowsLandscapeWithoutChangingPreference() {
         val configuration = android.content.res.Configuration().apply { orientation = android.content.res.Configuration.ORIENTATION_LANDSCAPE }
         composeRule.setContent {
@@ -301,6 +546,27 @@ class VlmCameraScreenTest {
         composeRule.runOnIdle { state.value = state.value.copy(zoom = 2f, actualZoom = 2f) }
         assertZoomStyle(1f, false)
         assertZoomStyle(2f, true)
+    }
+
+    @Test fun zoomButtonsFollowUpdatedDeviceCapabilities() {
+        val state = mutableStateOf(VlmUiState(cameraReady = true,
+            camera = CameraCapabilities(1f, 2f, CameraZoomPolicy.presets(1f, 2f))))
+        val events = mutableListOf<VlmIntent>()
+        composeRule.setContent { MaterialTheme { CameraBottomBar(state.value, events::add, {}, true) } }
+        composeRule.onNodeWithTag("vlm_zoom_3.0").assertDoesNotExist()
+        composeRule.runOnIdle {
+            state.value = state.value.copy(camera = CameraCapabilities(1f, 8f,
+                CameraZoomPolicy.presets(1f, 8f)))
+        }
+        composeRule.onNodeWithTag("vlm_zoom_2.0").assertExists()
+        composeRule.onNodeWithTag("vlm_zoom_3.0").assertExists()
+        composeRule.onNodeWithTag("vlm_zoom_5.0").assertDoesNotExist()
+        composeRule.onNodeWithTag("vlm_zoom_8.0").performScrollTo().performClick()
+        assertEquals(listOf(VlmIntent.ZoomChanged(8f)), events)
+        // 选中态只跟随相机回报，点击目标尚未执行时仍保持 1×。
+        composeRule.onNodeWithTag("vlm_zoom_1.0").assertIsSelected()
+        composeRule.runOnIdle { state.value = state.value.copy(zoom = 8f, actualZoom = 8f) }
+        composeRule.onNodeWithTag("vlm_zoom_8.0").assertIsSelected()
     }
 
     @Test fun compositionSelectionCollapsesTogetherAndDetailsFollowSelectedPlan() {

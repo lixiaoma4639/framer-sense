@@ -34,8 +34,10 @@ import kotlin.coroutines.resumeWithException
 object MnnNative {
     /** 加载已编译的本地库；无参数，ABI 或库缺失时抛出链接错误。 */
     fun initialize() { System.loadLibrary("vlm_mnn") }
-    /** 加载多模态模型。@param configPath 已校验模型包中的 config.json 绝对路径。@return 原生句柄。 */
-    external fun load(configPath: String): Long
+    /** 加载多模态模型。@param configPath 已校验模型包中的 config.json 绝对路径。
+     * @param gemmaVisualOnly 仅 Gemma 4 视觉音频包在内存中关闭音频分支。
+     * @param qwen35NonThinking 仅 Qwen3.5 在内存中关闭思考模式。@return 原生句柄。 */
+    external fun load(configPath: String, gemmaVisualOnly: Boolean, qwen35NonThinking: Boolean): Long
     /** 一次真实视觉预填充后返回模型选择的合法编号。
      * @param handle 活跃模型句柄。
      * @param imagePaths 按编号排列的私有 JPEG 绝对路径。
@@ -81,7 +83,10 @@ object NativeMnnRuntime : MnnRuntime {
     /** 初始化 JNI 库；无参数。 */
     override fun initialize() = MnnNative.initialize()
     /** 加载官方配置。@param path 配置路径。@return 原生句柄。 */
-    override fun load(path: String): Long = MnnNative.load(path)
+    override fun load(path: String): Long {
+        val dir = File(path).absoluteFile.parentFile!!
+        return MnnNative.load(path, ModelFiles.gemmaVisualOnly(dir), ModelFiles.qwen35NonThinking(dir))
+    }
     /** 释放原生模型。@param handle 空闲句柄。 */
     override fun release(handle: Long) = MnnNative.release(handle)
     /** 执行多模态推理。@param handle 活跃句柄。@param image 图片路径。@param prompt UTF-8 输入。@param cancel 取消标志。@return UTF-8 输出。 */
@@ -144,35 +149,47 @@ class MnnProvider(
         store.description()
     }
 
-    /** 串行加载候选后提交安装；失败保留旧目录和指针，旧句柄可在下次使用时重新加载。
+    /** 串行加载候选后提交安装，保留所有已登记模型；失败时恢复此前已加载的句柄。
      * @param dir 已校验且位置固定的私有模型目录。@return 已加载模型的说明。
      */
     suspend fun install(dir: File): String = submit { cancelled ->
         checkAbi()
         if (cancelled.get()) throw kotlinx.coroutines.CancellationException()
+        val previousPath = loadedPath?.takeIf { handle != 0L }
         _loadState.value = LocalModelLoadState(LocalModelPhase.LOADING, dir.path)
         try {
-        if (handle != 0L) runtime.release(handle)
-        sceneDescriptions.clear()
-        handle = 0L
-        loadedPath = null
-        runtime.initialize()
-        val candidate = runtime.load(File(dir, "config.json").path)
-        if (candidate == 0L) throw ModelStorageException(R.string.vlm_model_load_failed)
-        try {
-            if (cancelled.get()) throw kotlinx.coroutines.CancellationException()
-            val old = store.activate(dir)
-            handle = candidate
-            loadedPath = dir.path
-            _loadState.value = LocalModelLoadState(LocalModelPhase.READY, dir.path)
-            // 旧安装清理失败不反转已成功提交的加载事务。
-            runCatching { old?.deleteRecursively() }
-            store.message(R.string.vlm_model_loaded)
-        } catch (error: Throwable) { runtime.release(candidate); throw error }
+            if (handle != 0L) runtime.release(handle)
+            sceneDescriptions.clear()
+            handle = 0L
+            loadedPath = null
+            runtime.initialize()
+            val candidate = runtime.load(File(dir, "config.json").path)
+            if (candidate == 0L) throw ModelStorageException(R.string.vlm_model_load_failed)
+            try {
+                if (cancelled.get()) throw CancellationException()
+                store.activate(dir)
+                handle = candidate
+                loadedPath = dir.path
+                _loadState.value = LocalModelLoadState(LocalModelPhase.READY, dir.path)
+                Log.i(LOG_TAG, "模型切换成功 source=离线 model=${store.modelName()}")
+                store.message(R.string.vlm_model_loaded)
+            } catch (error: Throwable) { runtime.release(candidate); throw error }
         } catch (error: Throwable) {
-            _loadState.value = LocalModelLoadState(if (error is CancellationException) LocalModelPhase.UNLOADED else LocalModelPhase.FAILED,
-                dir.path, if (error is CancellationException) null else store.message(R.string.vlm_model_load_failed))
-            throw error
+            // 先释放候选再恢复旧句柄，始终只持有一份模型权重；目录和激活指针不提前替换。
+            val restored = previousPath != null && runCatching {
+                val previous = runtime.load(File(previousPath, "config.json").path)
+                check(previous != 0L)
+                handle = previous
+                loadedPath = previousPath
+            }.isSuccess
+            val resource = if (restored) R.string.vlm_market_switch_restored else R.string.vlm_market_switch_restore_failed
+            _loadState.value = if (restored) LocalModelLoadState(LocalModelPhase.READY, previousPath)
+                else LocalModelLoadState(if (error is CancellationException) LocalModelPhase.UNLOADED else LocalModelPhase.FAILED,
+                    previousPath ?: dir.path, if (error is CancellationException) null else store.message(resource))
+            Log.w(LOG_TAG, "模型切换失败 source=离线 model=${store.modelId(dir)} previousRestored=$restored error=${error::class.java.simpleName}")
+            if (error is CancellationException) throw error
+            if (previousPath == null) throw error
+            throw ModelStorageException(resource)
         }
     }
 

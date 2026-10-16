@@ -22,6 +22,81 @@ import java.util.UUID
 
 /** 验证相机事件门控，不调用摄像头、网络、GPU 或原生模型。 */
 class VlmSessionTest {
+    @Test fun recommendationEditsAndHistorySelectionHaveDistinctRecordingRules() = runBlocking {
+        withContext(Dispatchers.Main) {
+            val vm = viewModel()
+            try {
+                fun open() = vm.onIntent(VlmIntent.InstructionEditorVisible(true))
+                fun confirm() = vm.onIntent(VlmIntent.SubmitInstruction)
+                open()
+                vm.onIntent(VlmIntent.InstructionRecommendationSelected("保留风景"))
+                confirm()
+                assertTrue(vm.state.value.instructionHistory.isEmpty())
+                assertTrue(vm.state.value.photoPreferences.instructionFromRecommendation)
+                open()
+                confirm()
+                assertTrue(vm.state.value.instructionHistory.isEmpty())
+                open()
+                vm.onIntent(VlmIntent.InstructionRecommendationSelected("保留风景"))
+                vm.onIntent(VlmIntent.InstructionDraftChanged("保留风景，人物靠右"))
+                confirm()
+                assertEquals(listOf("保留风景，人物靠右"), vm.state.value.instructionHistory)
+                assertFalse(vm.state.value.photoPreferences.instructionFromRecommendation)
+                open()
+                vm.onIntent(VlmIntent.InstructionDraftChanged("全身人像"))
+                confirm()
+                assertEquals(listOf("全身人像", "保留风景，人物靠右"), vm.state.value.instructionHistory)
+                open()
+                vm.onIntent(VlmIntent.InstructionHistorySelected("保留风景，人物靠右"))
+                confirm()
+                assertEquals(listOf("保留风景，人物靠右", "全身人像"), vm.state.value.instructionHistory)
+                open()
+                vm.onIntent(VlmIntent.DeleteInstructionHistory("保留风景，人物靠右"))
+                assertEquals(listOf("全身人像"), vm.state.value.instructionHistory)
+                vm.onIntent(VlmIntent.InstructionRecommendationSelected("居中构图"))
+                vm.onIntent(VlmIntent.InstructionDraftChanged("居中构图！"))
+                vm.onIntent(VlmIntent.InstructionDraftChanged("居中构图"))
+                confirm()
+                assertEquals(listOf("居中构图", "全身人像"), vm.state.value.instructionHistory)
+            } finally { vm.onLeave() }
+        }
+    }
+
+    @Test fun instructionDraftOnlyCommitsOnConfirmAndDoesNotRestartCamera() = runBlocking {
+        withContext(Dispatchers.Main) {
+            val vm = viewModel()
+            try {
+                vm.onIntent(VlmIntent.CameraReady(CameraCapabilities(1f, 8f)))
+                val original = vm.state.value.instruction
+                val epoch = vm.state.value.cameraEpoch
+                vm.onIntent(VlmIntent.InstructionEditorVisible(true))
+                vm.onIntent(VlmIntent.InstructionDraftChanged("人物靠右，保留建筑"))
+                assertEquals(original, vm.state.value.instruction)
+                assertFalse(vm.state.value.canCapture)
+                assertFalse(vm.state.value.canRestartScan)
+                vm.onIntent(VlmIntent.StartComposition)
+                assertEquals(VlmStage.LIVE, vm.state.value.stage)
+                vm.onIntent(VlmIntent.InstructionEditorVisible(false))
+                vm.onIntent(VlmIntent.InstructionEditorVisible(true))
+                assertEquals(original, vm.state.value.instructionDraft)
+                vm.onIntent(VlmIntent.InstructionDraftChanged("  人物靠右，保留建筑  "))
+                vm.onIntent(VlmIntent.SubmitInstruction)
+                assertEquals("人物靠右，保留建筑", vm.state.value.instruction)
+                assertEquals(vm.state.value.instruction, vm.state.value.photoPreferences.instruction)
+                assertFalse(vm.state.value.instructionEditorVisible)
+                assertTrue(vm.state.value.canCapture)
+                assertTrue(vm.state.value.canRestartScan)
+                assertEquals(epoch, vm.state.value.cameraEpoch)
+                vm.onIntent(VlmIntent.InstructionEditorVisible(true))
+                assertEquals("人物靠右，保留建筑", vm.state.value.instructionDraft)
+                vm.onIntent(VlmIntent.InstructionEditorVisible(false))
+                vm.onIntent(VlmIntent.StartComposition)
+                vm.onIntent(VlmIntent.InstructionEditorVisible(true))
+                assertFalse(vm.state.value.instructionEditorVisible)
+            } finally { vm.onLeave() }
+        }
+    }
+
     @Test fun cancellingSingleCompositionPreservesReadyCameraAndAllowsAnotherFreeze() = runBlocking {
         withContext(Dispatchers.Main) {
             val vm = viewModel()

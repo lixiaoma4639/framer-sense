@@ -82,8 +82,13 @@ object ModelFiles {
         val config = readConfig(child(dir, "config.json"))
         val info = readConfig(child(dir, config["llm_config"]?.jsonPrimitive?.content ?: "llm_config.json"))
         val merged = JsonObject(config + info)
-        if (merged["is_visual"]?.jsonPrimitive?.booleanOrNull != true || merged["is_audio"]?.jsonPrimitive?.booleanOrNull == true || merged["is_single"]?.jsonPrimitive?.booleanOrNull == false)
-            throw ModelStorageException(R.string.vlm_model_visual)
+        if (merged["is_visual"]?.jsonPrimitive?.booleanOrNull != true)
+            throw ModelStorageException(R.string.vlm_model_visual, "VISUAL_REQUIRED")
+        if (merged["is_single"]?.jsonPrimitive?.booleanOrNull == false)
+            throw ModelStorageException(R.string.vlm_model_visual, "MULTI_GRAPH_UNSUPPORTED")
+        // Gemma 4 同时具备视觉与音频；加载时只关闭其音频分支，保留原始文件和摘要。
+        if (merged["is_audio"]?.jsonPrimitive?.booleanOrNull == true && !gemmaVisualOnly(merged))
+            throw ModelStorageException(R.string.vlm_model_visual, "AUDIO_MODEL_UNSUPPORTED")
         checkPaths(config, dir)
         checkPaths(info, dir)
         val defaults = mapOf("llm_model" to "llm.mnn", "llm_weight" to "llm.mnn.weight", "tokenizer_file" to "tokenizer.txt", "visual_model" to "visual.mnn")
@@ -96,10 +101,34 @@ object ModelFiles {
             else -> null
         }
         if (offset == null || offset == 0L) requireFile(child(dir, merged["embedding_file"]?.jsonPrimitive?.content ?: "embeddings_bf16.bin"))
+        merged["ple_embed_file"]?.let { requireFile(child(dir, it.jsonPrimitive.content)) }
         // 外置视觉权重由 MNN 图决定；官方 Qwen 包带此文件，清单下载时可发现缺失。
         val visual = child(dir, merged["visual_model"]?.jsonPrimitive?.content ?: "visual.mnn")
         if (File(visual.path + ".weight").exists()) requireFile(File(visual.path + ".weight"))
     }
+
+    /** 仅 Gemma 4 视觉音频包启用图文适配；Qwen 和其他模型沿用原加载配置。 */
+    internal fun gemmaVisualOnly(dir: File): Boolean {
+        return gemmaVisualOnly(mergedConfig(dir))
+    }
+
+    /** Qwen3.5 官方包默认开启思考；摄影短协议在内存配置中关闭，不修改原始文件。 */
+    internal fun qwen35NonThinking(dir: File): Boolean {
+        val config = mergedConfig(dir)
+        return config["model_type"]?.jsonPrimitive?.contentOrNull == "qwen3_5" &&
+            config["is_visual"]?.jsonPrimitive?.booleanOrNull == true
+    }
+
+    private fun mergedConfig(dir: File): JsonObject {
+        val config = readConfig(child(dir, "config.json"))
+        val info = readConfig(child(dir, config["llm_config"]?.jsonPrimitive?.content ?: "llm_config.json"))
+        return JsonObject(config + info)
+    }
+
+    private fun gemmaVisualOnly(config: JsonObject): Boolean =
+        config["model_type"]?.jsonPrimitive?.contentOrNull == "gemma4" &&
+            config["is_visual"]?.jsonPrimitive?.booleanOrNull == true &&
+            config["is_audio"]?.jsonPrimitive?.booleanOrNull == true
 
     /** 检查配置路径，未使用的 embedding_file 只检查边界，不误判为缺文件。
      * @param config 配置节点。@param dir 模型根目录。

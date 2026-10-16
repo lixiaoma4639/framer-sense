@@ -12,13 +12,15 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import java.io.File
 
-@Serializable enum class DownloadPhase { IDLE, RESOLVING, DOWNLOADING, VERIFYING, PAUSED, CANCELLING, DOWNLOADED, LOADING, READY, LOAD_FAILED, FAILED }
+@Serializable enum class DownloadPhase { IDLE, RESOLVING, DOWNLOADING, VERIFYING, PAUSED, CANCELLING, DOWNLOADED, LOADING, READY, LOAD_FAILED, FAILED, QUEUED }
 @Serializable data class DownloadSession(
     val source: String,
     val directory: String,
     val snapshot: HubSnapshot? = null,
     val allowMetered: Boolean = false,
-    val phase: DownloadPhase = DownloadPhase.RESOLVING
+    val phase: DownloadPhase = DownloadPhase.RESOLVING,
+    val modelId: String = com.framer.sense.feature.camera.vlm.market.MarketCatalog.DEFAULT_MODEL,
+    val repository: String = HubDownloadClient.MODEL
 )
 data class ModelDownloadState(
     val phase: DownloadPhase = DownloadPhase.IDLE,
@@ -26,7 +28,9 @@ data class ModelDownloadState(
     val allowMetered: Boolean = false,
     val downloaded: Long = 0,
     val total: Long = 0,
-    val error: String? = null
+    val error: String? = null,
+    val modelId: String = com.framer.sense.feature.camera.vlm.market.MarketCatalog.DEFAULT_MODEL,
+    val speedBytesPerSecond: Long = 0
 ) {
     val running: Boolean get() = phase in setOf(DownloadPhase.RESOLVING, DownloadPhase.DOWNLOADING, DownloadPhase.VERIFYING, DownloadPhase.CANCELLING)
 }
@@ -35,9 +39,11 @@ data class ModelDownloadState(
  * @param context 应用上下文。@param models 私有模型仓库。@param hub HTTP 下载实现。
  * @param networkAllowed 可选测试网络策略；生产默认读取系统网络状态。
  */
-class ModelDownloadRepository(private val context: Context, private val models: LocalModelStore, private val hub: HubDownloadClient = HubDownloadClient(), private val networkAllowed: ((Boolean) -> Boolean)? = null) {
+class ModelDownloadRepository(private val context: Context, private val models: LocalModelStore, private val hub: HubDownloadClient = HubDownloadClient(), private val networkAllowed: ((Boolean) -> Boolean)? = null,
+    private val modelId: String = com.framer.sense.feature.camera.vlm.market.MarketCatalog.DEFAULT_MODEL,
+    stateFileName: String = "vlm-download.json") {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-    private val stateFile = AtomicFile(File(context.noBackupFilesDir, "vlm-download.json"))
+    private val stateFile = AtomicFile(File(context.noBackupFilesDir, stateFileName))
     @Volatile private var session: DownloadSession? = restore()
     private val _state = MutableStateFlow(restoredState())
     val state: StateFlow<ModelDownloadState> = _state.asStateFlow()
@@ -65,12 +71,12 @@ class ModelDownloadRepository(private val context: Context, private val models: 
 
     /** 从实际文件计算恢复进度；无参数，不依赖上次进程的内存计数。 */
     private fun restoredState(): ModelDownloadState {
-        val current = session ?: return ModelDownloadState()
+        val current = session ?: return ModelDownloadState(modelId = modelId)
         val dir = ModelFiles.child(models.root, current.directory)
-        if (!dir.exists()) return ModelDownloadState(source = current.source, allowMetered = current.allowMetered)
+        if (!dir.exists()) return ModelDownloadState(source = current.source, allowMetered = current.allowMetered, modelId = current.modelId)
         return ModelDownloadState(current.phase, current.source, current.allowMetered,
             current.snapshot?.files?.sumOf { ModelFiles.child(dir, it.path).length().coerceAtMost(it.size) } ?: 0,
-            current.snapshot?.files?.sumOf { it.size } ?: 0)
+            current.snapshot?.files?.sumOf { it.size } ?: 0, modelId = current.modelId)
     }
 
     /** 是否存在保留的任务。无参数，供界面选择继续而不是更换任务来源。 */
@@ -81,12 +87,12 @@ class ModelDownloadRepository(private val context: Context, private val models: 
      * @param allowMetered 本次用户是否允许计费网络。
      */
     @OptIn(ExperimentalCoroutinesApi::class)
-    @Synchronized fun start(source: String, allowMetered: Boolean) {
+    @Synchronized fun start(source: String, allowMetered: Boolean, repository: String? = null) {
         if (task != null || _state.value.phase !in setOf(DownloadPhase.IDLE, DownloadPhase.PAUSED, DownloadPhase.FAILED)) return
         cancelling = false
         pauseReason = null
         _state.update { it.copy(phase = DownloadPhase.RESOLVING, allowMetered = allowMetered, error = null) }
-        task = scope.launch(start = CoroutineStart.ATOMIC) { runDownload(source, allowMetered) }
+        task = scope.launch(start = CoroutineStart.ATOMIC) { runDownload(source, allowMetered, repository) }
     }
 
     /** 暂停任务并保留断点。@param reason 需要显示的本地化说明，普通用户暂停传 null。 */
@@ -94,7 +100,8 @@ class ModelDownloadRepository(private val context: Context, private val models: 
 
     /** 取消并清理本次文件；无参数，已激活模型永不删除。 */
     @Synchronized fun cancel() {
-        if (_state.value.phase == DownloadPhase.LOADING || cancelling) return
+        if (_state.value.phase == DownloadPhase.LOADING || cancelling ||
+            session?.let { current -> models.installed.value.any { it.directory == current.directory } } == true) return
         cancelling = true
         _state.update { it.copy(phase = DownloadPhase.CANCELLING) }
         if (task != null) task?.cancel() else {
@@ -106,19 +113,21 @@ class ModelDownloadRepository(private val context: Context, private val models: 
     /** 执行单个下载会话，所有耗时 I/O 在仓库线程完成。
      * @param source 新会话源。@param allowMetered 是否允许计费网络。
      */
-    private suspend fun runDownload(source: String, allowMetered: Boolean) {
+    private suspend fun runDownload(source: String, allowMetered: Boolean, repository: String?) {
         var finalPhase = DownloadPhase.DOWNLOADED
         var failure: String? = null
         try {
             var current = session?.takeIf { File(models.root, it.directory).exists() }?.copy(allowMetered = allowMetered)
-                ?: DownloadSession(hub.normalizeSource(source), "download-${newVlmId()}", allowMetered = allowMetered)
+                ?: DownloadSession(hub.normalizeSource(source), "download-${newVlmId()}", allowMetered = allowMetered, modelId = modelId,
+                    repository = repository ?: if (hub.normalizeSource(source) == "https://modelscope.cn") "MNN/$modelId" else "taobao-mnn/$modelId")
             val dir = ModelFiles.child(models.root, current.directory).apply { mkdirs() }
             session = current
             _state.update { it.copy(source = current.source, allowMetered = current.allowMetered) }
             persist(current)
+            android.util.Log.i("VlmOffline", "模型下载开始 model=${current.modelId} source=${current.source} resume=${current.snapshot != null}")
             checkNetwork(allowMetered)
             if (current.snapshot == null) {
-                current = current.copy(snapshot = hub.snapshot(current.source))
+                current = current.copy(snapshot = hub.snapshot(current.source, current.repository))
                 session = current
                 persist(current)
             }
@@ -126,33 +135,45 @@ class ModelDownloadRepository(private val context: Context, private val models: 
             snapshot.files.forEach { ModelFiles.child(dir, it.path) }
             val total = snapshot.files.sumOf { it.size }
             ModelFiles.checkSpace(dir.usableSpace, snapshot.files.sumOf { (it.size - ModelFiles.child(dir, it.path).length()).coerceAtLeast(0) })
-            _state.value = ModelDownloadState(DownloadPhase.DOWNLOADING, current.source, allowMetered, total = total)
+            _state.value = ModelDownloadState(DownloadPhase.DOWNLOADING, current.source, allowMetered, total = total, modelId = current.modelId)
             persist(current.copy(phase = DownloadPhase.DOWNLOADING))
             var completed = 0L
             var reportedAt = 0L
+            val startedAt = System.nanoTime()
+            val initialBytes = snapshot.files.sumOf { ModelFiles.child(dir, it.path).length().coerceAtMost(it.size) }
             for (file in snapshot.files) {
                 currentCoroutineContext().ensureActive()
                 val base = completed
-                hub.download(current.source, snapshot.revision, file, ModelFiles.child(dir, file.path), { checkNetwork(allowMetered) }) { bytes ->
+                hub.download(current.source, snapshot.revision, file, ModelFiles.child(dir, file.path), { checkNetwork(allowMetered) }, { bytes ->
                     val now = System.nanoTime()
                     if (now - reportedAt > 200_000_000L || bytes == file.size) {
                         reportedAt = now
-                        _state.update { it.copy(downloaded = base + bytes) }
+                        _state.update { it.copy(downloaded = base + bytes, speedBytesPerSecond = ((base + bytes - initialBytes).coerceAtLeast(0).toDouble() * 1_000_000_000 / (now - startedAt).coerceAtLeast(1)).toLong()) }
                     }
-                }
+                }, current.repository)
                 completed += file.size
             }
             _state.update { it.copy(phase = DownloadPhase.VERIFYING, downloaded = total) }
+            android.util.Log.i("VlmOffline", "模型下载校验 model=${current.modelId} source=${current.source}")
             models.validateDirectory(dir)
             currentCoroutineContext().ensureActive()
-            if (models.activeDirectory() != dir) models.stage(dir)
+            synchronized(this@ModelDownloadRepository) {
+                if (cancelling || task?.isActive != true) throw CancellationException()
+                models.register(dir, current.modelId, current.source, current.repository, snapshot.revision)
+                if (models.activeDirectory() != dir) models.stage(dir)
+            }
+            android.util.Log.i("VlmOffline", "模型下载完成 model=${current.modelId} source=${current.source} validated=true inferenceVerified=false")
         } catch (cancel: CancellationException) {
             finalPhase = DownloadPhase.PAUSED
             failure = pauseReason
+            android.util.Log.i("VlmOffline", "模型下载结束 model=$modelId source=${session?.source} result=${if (cancelling) "取消" else "暂停"}")
         } catch (error: Exception) {
             val interrupted = !currentCoroutineContext().isActive
             finalPhase = if (interrupted || error is ModelStorageException && error.resource == R.string.vlm_download_network) DownloadPhase.PAUSED else DownloadPhase.FAILED
             failure = if (interrupted) pauseReason else models.errorMessage(error)
+            val validationReason = if (error is ModelStorageException && error.resource == R.string.vlm_model_visual) error.detail else "UNKNOWN"
+            val resource = (error as? ModelStorageException)?.let { context.resources.getResourceEntryName(it.resource) } ?: "UNKNOWN"
+            android.util.Log.w("VlmOffline", "模型下载失败 model=$modelId source=${session?.source} phase=$finalPhase error=${error::class.java.simpleName} resource=$resource validationReason=$validationReason")
         } finally {
             withContext(NonCancellable) { finish(finalPhase, failure) }
         }
@@ -175,7 +196,7 @@ class ModelDownloadRepository(private val context: Context, private val models: 
             } catch (failure: Exception) { finalPhase = DownloadPhase.FAILED; finalError = models.errorMessage(failure) }
             task = null
             cancelling = false
-            _state.value = if (finalPhase == DownloadPhase.IDLE) ModelDownloadState(source = _state.value.source)
+            _state.value = if (finalPhase == DownloadPhase.IDLE) ModelDownloadState(source = _state.value.source, modelId = modelId)
                 else _state.value.copy(phase = finalPhase, error = finalError)
         }
     }
@@ -199,7 +220,7 @@ class ModelDownloadRepository(private val context: Context, private val models: 
             session?.let { models.discard(ModelFiles.child(models.root, it.directory)) }
             session = null
             stateFile.delete()
-            _state.value = ModelDownloadState(source = _state.value.source)
+            _state.value = ModelDownloadState(source = _state.value.source, modelId = modelId)
         }
     }
 
@@ -227,7 +248,8 @@ class ModelDownloadRepository(private val context: Context, private val models: 
         val connectivity = context.getSystemService(ConnectivityManager::class.java)
         val network = connectivity.activeNetwork
         val capabilities = network?.let { connectivity.getNetworkCapabilities(it) }
-        if (capabilities == null || !capabilities.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_INTERNET) || (!allowMetered && connectivity.isActiveNetworkMetered))
+        if (capabilities == null || !capabilities.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_INTERNET) ||
+            (!allowMetered && ModelDownloadNetwork.requiresConfirmation(capabilities, connectivity.isActiveNetworkMetered)))
             throw ModelStorageException(R.string.vlm_download_network)
     }
 

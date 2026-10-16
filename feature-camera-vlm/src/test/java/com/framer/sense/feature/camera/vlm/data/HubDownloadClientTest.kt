@@ -73,6 +73,45 @@ class HubDownloadClientTest {
     }
 
     /** 协程取消必须调用底层 Call.cancel，且无需等待网络超时；无参数。 */
+    @Test fun modelScopeUsesOfficialFileApiAndVerifiesPinnedDigest() = runBlocking {
+        val bytes = "abcdef"
+        val digest = java.security.MessageDigest.getInstance("SHA-256").digest(bytes.toByteArray()).joinToString("") { "%02x".format(it) }
+        val repository = "MNN/Qwen3-VL-4B-Instruct-MNN"
+        val client = HubDownloadClient(OkHttpClient.Builder().addInterceptor { chain ->
+            val request = chain.request()
+            assertEquals("modelscope.cn", request.url.host)
+            if (request.url.encodedPath.endsWith("/files")) {
+                assertEquals("1", request.url.queryParameter("Recursive"))
+                reply(request, 200, """{"Success":true,"Data":{"Files":[{"Type":"blob","Path":"dir/weights.mnn","Size":6,"Revision":"fixed-revision","Sha256":"$digest"}]}}""")
+            } else {
+                assertEquals("/api/v1/models/$repository/repo", request.url.encodedPath)
+                assertEquals("dir/weights.mnn", request.url.queryParameter("FilePath"))
+                assertEquals("fixed-revision", request.url.queryParameter("Revision"))
+                reply(request, 200, bytes)
+            }
+        }.build())
+        val snapshot = client.snapshot("https://modelscope.cn", repository)
+        assertEquals(digest, snapshot.files.single().sha256)
+        val file = temporary.newFile()
+        client.download("https://modelscope.cn", snapshot.revision, snapshot.files.single(), file, {}, {}, repository)
+        assertEquals(bytes, file.readText())
+    }
+
+    @Test fun huggingFaceUsesSelectedModelRepositoryAndRejectsInvalidMetadata() = runBlocking {
+        val repository = "taobao-mnn/Qwen3-VL-8B-Instruct-MNN"
+        val client = HubDownloadClient(OkHttpClient.Builder().addInterceptor { chain ->
+            assertTrue(chain.request().url.encodedPath.contains(repository))
+            if (chain.request().url.encodedPath.endsWith("/revision/main")) reply(chain.request(), 200, """{"sha":"$revision"}""")
+            else reply(chain.request(), 200, """[{"type":"file","path":"config.json","size":2}]""")
+        }.build())
+        assertEquals(revision, client.snapshot(HubDownloadClient.DEFAULT_SOURCE, repository).revision)
+        assertTrue(runCatching { client.snapshot(HubDownloadClient.DEFAULT_SOURCE, "../secret") }.isFailure)
+        val invalid = HubDownloadClient(OkHttpClient.Builder().addInterceptor { reply(it.request(), 200,
+            """{"Success":true,"Data":{"Files":[{"Type":"blob","Path":"config.json","Size":2,"Sha256":"not-a-digest"}]}}""") }.build())
+        assertTrue(runCatching { invalid.snapshot("https://modelscope.cn", "MNN/model") }.isFailure)
+    }
+
+    /** 协程取消必须调用底层 Call.cancel，且无需等待网络超时；无参数。 */
     @Test fun coroutineCancellationCancelsSocketCall() = runBlocking {
         val entered = CountDownLatch(1)
         val cancelled = AtomicBoolean(false)

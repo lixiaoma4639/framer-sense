@@ -62,6 +62,8 @@ import com.framer.sense.feature.camera.vlm.R
 import com.framer.sense.feature.camera.vlm.agent.SceneDescriptionFormatting
 import com.framer.sense.feature.camera.vlm.agent.DirectorProgress
 import com.framer.sense.feature.camera.vlm.agent.CompositionIntentMapper
+import com.framer.sense.feature.camera.vlm.market.ModelMarketDialog
+import androidx.compose.runtime.saveable.rememberSaveable
 import com.framer.sense.feature.camera.vlm.data.ModelDownloadService
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
@@ -185,10 +187,11 @@ fun VlmCameraScreen(
         val controlsMaxHeight = (maxHeight - 48.dp).coerceAtLeast(0.dp)
         CameraPane(state, controller, permission, { permissionLauncher.launch(Manifest.permission.CAMERA) },
             onEvent, Modifier.fillMaxSize().padding(top = 48.dp, bottom = 84.dp))
-        CameraTopBar(state, onEvent, Modifier.align(Alignment.TopCenter), onExit = exitCamera)
         CameraBottomBar(state, onEvent, { latestCapture() }, permission,
             Modifier.align(Alignment.BottomCenter).heightIn(max = controlsMaxHeight))
         ArSupportControl(controller, state, permission, onEvent)
+        CameraTopBar(state, onEvent, Modifier.align(Alignment.TopCenter), onExit = exitCamera)
+        CompositionInstructionOverlay(state, onEvent, Modifier.fillMaxSize())
     }
     if (state.photoSettingsVisible) PhotoSettingsDialog(state, onEvent, { imageLauncher.launch("image/*") })
     if (state.compositionDetailsVisible && state.stage == VlmStage.SCAN_REVIEW) CompositionDetailsDialog(state, onEvent)
@@ -807,10 +810,17 @@ private fun facingLabel(yaw: Float): String = stringResource(when {
  * @param importDirectory 官方模型文件夹选择动作。
  */
 @Composable
-internal fun ModelSettingsDialog(state: VlmUiState, onEvent: (VlmIntent) -> Unit, importModel: () -> Unit, importDirectory: () -> Unit) {
+internal fun ModelSettingsDialog(state: VlmUiState, onEvent: (VlmIntent) -> Unit, importModel: () -> Unit, importDirectory: () -> Unit, marketContent: (@Composable (() -> Unit) -> Unit)? = null) {
+    var marketVisible by rememberSaveable { mutableStateOf(false) }
     var draft by remember(state.settings) { mutableStateOf(CloudModelConfig.applyQwenConfiguration(state.settings)) }
     val offlineState = rememberSaveableStateHolder()
-    AlertDialog(onDismissRequest = { if (!state.modelBusy) onEvent(VlmIntent.SettingsVisible(false)) }, title = { Text(stringResource(R.string.vlm_model_settings_title)) }, modifier = Modifier.testTag("vlm_model_settings_dialog"),
+    if (marketVisible) {
+        val closeMarket = { marketVisible = false }
+        if (marketContent != null) marketContent(closeMarket)
+        else ModelMarketDialog(closeMarket, { onEvent(VlmIntent.UseMarketModel(it)) },
+            { onEvent(VlmIntent.DeleteMarketModel(it)) }, state.modelBusy, state.settings.mode, state.error)
+    }
+    if (!marketVisible) AlertDialog(onDismissRequest = { if (!state.modelBusy) onEvent(VlmIntent.SettingsVisible(false)) }, title = { Text(stringResource(R.string.vlm_model_settings_title)) }, modifier = Modifier.testTag("vlm_model_settings_dialog"),
         text = {
             Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Row(Modifier.fillMaxWidth().height(IntrinsicSize.Min), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -878,8 +888,8 @@ internal fun ModelSettingsDialog(state: VlmUiState, onEvent: (VlmIntent) -> Unit
                 if (draft.mode == ModelMode.AUTO) HorizontalDivider(Modifier.testTag("vlm_cloud_offline_divider"))
                 if (draft.mode != ModelMode.CLOUD) {
                     offlineState.SaveableStateProvider("offline_model") {
-                        Column(Modifier.testTag("vlm_offline_configuration"), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                            OfflineModelPanel(state, onEvent, importDirectory, importModel)
+                        Column(Modifier.testTag("vlm_offline_configuration"), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            OfflineModelPanel(state, onEvent, importDirectory, importModel, { marketVisible = true })
                         }
                     }
                 }

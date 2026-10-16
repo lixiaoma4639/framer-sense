@@ -32,11 +32,13 @@ class VlmCameraViewModel @Inject constructor(
     private val local: MnnProvider,
     private val downloads: ModelDownloadRepository,
     savedStateHandle: SavedStateHandle,
-    private val sessions: PhotoSessionController
+    private val sessions: PhotoSessionController,
+    private val marketDownloads: com.framer.sense.feature.camera.vlm.market.MarketDownloadManager? = null
 ) : ViewModel() {
     private val initialPhotoPreferences = settingsStore.readPhotoPreferences()
     private val _state = MutableStateFlow(VlmUiState(settings = settingsStore.read(), modelStatus = modelDescription(),
         photoPreferences = initialPhotoPreferences, selectedAvatar = initialPhotoPreferences.avatar,
+        instructionHistory = settingsStore.readInstructionHistory(),
         faceVisible = initialPhotoPreferences.showFace,
         instruction = initialPhotoPreferences.instruction.ifBlank { models.message(R.string.vlm_photo_default_requirement) },
         selectedEthnicity = initialPhotoPreferences.ethnicity, modelBusy = local.loadState.value.phase == LocalModelPhase.LOADING,
@@ -71,6 +73,7 @@ class VlmCameraViewModel @Inject constructor(
     private var modelLoaded = local.loadState.value.phase == LocalModelPhase.READY
     private var maintenanceBusy = false
     private var attemptedPath: String? = null
+    private var failedAutoLoadPath: String? = null
     init {
         guideWork = viewModelScope.launch {
             for (sample in guideQueue) {
@@ -100,14 +103,17 @@ class VlmCameraViewModel @Inject constructor(
             }
         }
         savedStateHandle["vlm_started"] = true
-        viewModelScope.launch { downloads.state.collect { value -> _state.update { it.copy(download = value) } } }
+        viewModelScope.launch { (marketDownloads?.summary ?: downloads.state).collect { value -> _state.update { it.copy(download = value) } } }
         viewModelScope.launch { local.loadState.collect { value ->
             modelLoaded = value.phase == LocalModelPhase.READY
             value.path?.let { attemptedPath = it }
-            if (modelLoaded && downloads.state.value.phase == DownloadPhase.DOWNLOADED && models.pendingDirectory() == null)
+            if (modelLoaded && models.modelId() == downloads.state.value.modelId && downloads.state.value.phase == DownloadPhase.DOWNLOADED && models.pendingDirectory() == null)
                 downloads.loadingState(DownloadPhase.READY)
             _state.update { it.copy(modelBusy = maintenanceBusy || value.phase == LocalModelPhase.LOADING,
                 modelStatus = if (maintenanceBusy && value.phase != LocalModelPhase.LOADING) it.modelStatus else modelDescription(value)) }
+        } }
+        viewModelScope.launch { models.changes.collect { version ->
+            _state.update { it.copy(modelInventoryVersion = version, localModelName = models.activeDirectory()?.let { models.modelName() }) }
         } }
         viewModelScope.launch { state.collect { maybeAutoLoad() } }
     }
@@ -141,16 +147,11 @@ class VlmCameraViewModel @Inject constructor(
 
     /** 非指定云端模式在前台空闲时自动加载目录；失败或卸载后不循环重试。 */
     private fun maybeAutoLoad() {
-        if (_state.value.settings.mode == ModelMode.CLOUD || !foreground || busy()) return
-        val phase = downloads.state.value.phase
-        // 下载完成时优先尝试候选目录；导入/既有安装没有下载会话，直接加载当前安装。
-        val dir = if (phase == DownloadPhase.DOWNLOADED) {
-            models.pendingDirectory() ?: models.activeDirectory()
-        } else {
-            models.activeDirectory()
-        } ?: return
+        if (_state.value.settings.mode == ModelMode.CLOUD || !foreground || busy() || _state.value.instructionEditorVisible) return
+        // 候选指针只在下载校验完成后发布；队列中其他模型下载不影响已完成候选。
+        val dir = models.pendingDirectory() ?: models.activeDirectory() ?: return
         if (modelLoaded && local.loadState.value.path == dir.path) return
-        if (attemptedPath == dir.path) return
+        if (attemptedPath == dir.path || failedAutoLoadPath == dir.path) return
         attemptedPath = dir.path
         maintain(models.message(R.string.vlm_model_loading)) { loadDirectory(dir) }
     }
@@ -160,16 +161,24 @@ class VlmCameraViewModel @Inject constructor(
      */
     private suspend fun loadDirectory(dir: File) {
         modelLoaded = false
-        downloads.loadingState(DownloadPhase.LOADING)
+        val id = models.modelId(dir)
+        val legacyDownload = id == null || id.startsWith("local-") || id == downloads.state.value.modelId
+        if (legacyDownload) downloads.loadingState(DownloadPhase.LOADING)
         try {
-            if (models.activeDirectory() == dir) local.load() else local.install(dir)
+            if (models.activeDirectory() == dir) {
+                local.load()
+                if (models.pendingDirectory() == dir) models.activate(dir)
+            } else local.install(dir)
             modelLoaded = true
-            downloads.loadingState(DownloadPhase.READY)
+            failedAutoLoadPath = null
+            if (legacyDownload) downloads.loadingState(DownloadPhase.READY)
         } catch (cancel: CancellationException) {
-            withContext(NonCancellable) { downloads.loadingState(DownloadPhase.DOWNLOADED) }
+            withContext(NonCancellable) { if (legacyDownload) downloads.loadingState(DownloadPhase.DOWNLOADED) }
             throw cancel
         } catch (error: Exception) {
-            downloads.loadingState(DownloadPhase.LOAD_FAILED, models.message(R.string.vlm_model_load_failed))
+            modelLoaded = local.loadState.value.phase == LocalModelPhase.READY
+            failedAutoLoadPath = dir.path
+            if (legacyDownload) downloads.loadingState(DownloadPhase.LOAD_FAILED, models.message(R.string.vlm_model_load_failed))
             throw error
         }
     }
@@ -257,7 +266,7 @@ class VlmCameraViewModel @Inject constructor(
                 _state.update { it.copy(background = it.background.copy(status = BackgroundStatus.ALIGNED_MANUAL)) }
             is VlmIntent.UserMessage -> _state.update { it.copy(error = intent.message) }
             VlmIntent.StartComposition -> if (_state.value.stage in listOf(VlmStage.LIVE, VlmStage.FREEZING) && _state.value.cameraReady &&
-                !_state.value.modelBusy && !_state.value.saving && !_state.value.settingsVisible && !_state.value.photoSettingsVisible && _state.value.photoSample == null) {
+                !_state.value.modelBusy && !_state.value.saving && !_state.value.settingsVisible && !_state.value.photoSettingsVisible && !_state.value.instructionEditorVisible && _state.value.photoSample == null) {
                 cancelWork()
                 _state.update { it.copy(stage = VlmStage.FREEZING, error = null, notice = null, directorProgress = null,
                     scanSession = null, scanSnapshot = null, viewCandidates = emptyList(), selectedFrameId = null,
@@ -289,7 +298,7 @@ class VlmCameraViewModel @Inject constructor(
             }
             is VlmIntent.CameraModeSelected -> if (_state.value.framingUnlocked) switchCameraMode(intent.mode)
             is VlmIntent.PhotoSettingsVisible -> if (!intent.visible || !busy())
-                _state.update { it.copy(photoSettingsVisible = intent.visible) }
+                _state.update { it.copy(photoSettingsVisible = intent.visible, instructionEditorVisible = false) }
             is VlmIntent.CompositionDetailsVisible -> _state.update { it.copy(compositionDetailsVisible = intent.visible) }
             is VlmIntent.PreferredEthnicity -> if (!busy()) {
                 updatePhotoPreferences { it.copy(ethnicity = intent.ethnicity) }
@@ -298,7 +307,32 @@ class VlmCameraViewModel @Inject constructor(
             VlmIntent.CameraStopped -> _state.update { it.copy(cameraReady = false) }
             is VlmIntent.InstructionChanged -> if (!busy()) {
                 _state.update { it.copy(instruction = intent.text.take(2000)) }
-                updatePhotoPreferences { it.copy(instruction = intent.text.take(2000)) }
+                updatePhotoPreferences { it.copy(instruction = intent.text.take(2000), instructionFromRecommendation = false) }
+            }
+            is VlmIntent.InstructionEditorVisible -> if (!intent.visible || _state.value.canEditInstruction)
+                _state.update { it.copy(instructionEditorVisible = intent.visible, instructionDraft = it.instruction,
+                    instructionDraftFromRecommendation = it.photoPreferences.instructionFromRecommendation,
+                    instructionDraftRevision = it.instructionDraftRevision + 1) }
+            is VlmIntent.InstructionDraftChanged -> if (_state.value.instructionEditorVisible && _state.value.canEditInstruction && intent.text != _state.value.instructionDraft)
+                _state.update { it.copy(instructionDraft = intent.text.take(2000), instructionDraftFromRecommendation = false) }
+            is VlmIntent.InstructionRecommendationSelected -> if (_state.value.instructionEditorVisible && _state.value.canEditInstruction)
+                _state.update { it.copy(instructionDraft = intent.text.take(2000), instructionDraftFromRecommendation = true,
+                    instructionDraftRevision = it.instructionDraftRevision + 1) }
+            is VlmIntent.InstructionHistorySelected -> if (_state.value.instructionEditorVisible && _state.value.canEditInstruction && intent.text in _state.value.instructionHistory)
+                _state.update { it.copy(instructionDraft = intent.text, instructionDraftFromRecommendation = false,
+                    instructionDraftRevision = it.instructionDraftRevision + 1) }
+            is VlmIntent.DeleteInstructionHistory -> if (_state.value.instructionEditorVisible && _state.value.canEditInstruction) {
+                val history = _state.value.instructionHistory.filterNot { it == intent.text }
+                settingsStore.saveInstructionHistory(history)
+                _state.update { it.copy(instructionHistory = history) }
+            }
+            VlmIntent.SubmitInstruction -> if (_state.value.instructionEditorVisible && _state.value.canEditInstruction) {
+                val text = _state.value.instructionDraft.trim().take(2000)
+                val fromRecommendation = _state.value.instructionDraftFromRecommendation
+                val history = InstructionHistory.record(_state.value.instructionHistory, text, fromRecommendation)
+                settingsStore.saveInstructionHistory(history)
+                _state.update { it.copy(instruction = text, instructionDraft = text, instructionEditorVisible = false, instructionHistory = history) }
+                updatePhotoPreferences { it.copy(instruction = text, instructionFromRecommendation = fromRecommendation) }
             }
             is VlmIntent.AvatarSelected -> if (!busy()) {
                 updatePhotoPreferences { it.copy(avatar = intent.avatarId) }
@@ -335,7 +369,7 @@ class VlmCameraViewModel @Inject constructor(
                     normalZoom = CameraZoomPolicy.clamp(intent.zoom, it.camera.minZoom, it.camera.maxZoom),
                     reference = null, referencePlan = null, background = BackgroundGuidance()) }
             }
-            is VlmIntent.SettingsVisible -> if (_state.value.stage !in listOf(VlmStage.SCANNING, VlmStage.SCAN_PROCESSING, VlmStage.VIEW_SELECTING)) _state.update { it.copy(settingsVisible = intent.visible) }
+            is VlmIntent.SettingsVisible -> if (_state.value.stage !in listOf(VlmStage.SCANNING, VlmStage.SCAN_PROCESSING, VlmStage.VIEW_SELECTING)) _state.update { it.copy(settingsVisible = intent.visible, instructionEditorVisible = false) }
             is VlmIntent.SaveSettings -> {
                 cancelWork()
                 viewModelScope.launch {
@@ -375,8 +409,25 @@ class VlmCameraViewModel @Inject constructor(
                 local.unload(); modelLoaded = false
                 downloads.loadingState(DownloadPhase.DOWNLOADED)
             }
-            VlmIntent.DeleteModel -> if (!downloads.state.value.running) maintain(models.message(R.string.vlm_model_delete)) {
-                local.unload(); modelLoaded = false; models.delete(); downloads.forget(); attemptedPath = null
+            is VlmIntent.UseMarketModel -> {
+                val installed = models.installedModel(intent.id)
+                if (installed != null && (intent.id in com.framer.sense.feature.camera.vlm.market.MarketCatalog.compatibleIds || intent.id.startsWith("local-")) &&
+                    _state.value.settings.mode != ModelMode.CLOUD) maintain(models.message(R.string.vlm_model_loading)) {
+                    val dir = ModelFiles.child(models.root, installed.directory)
+                    attemptedPath = dir.path
+                    models.validateDirectory(dir)
+                    models.stage(dir)
+                    loadDirectory(dir)
+                }
+            }
+            is VlmIntent.DeleteMarketModel -> maintain(models.message(R.string.vlm_model_delete)) {
+                val targets = models.installed.value.filter { it.id == intent.id }
+                if (targets.any { ModelFiles.child(models.root, it.directory) == models.activeDirectory() }) {
+                    local.unload(); modelLoaded = false
+                }
+                targets.forEach { models.deleteDirectory(ModelFiles.child(models.root, it.directory)) }
+                marketDownloads?.forget(intent.id)
+                attemptedPath = models.pendingDirectory()?.path
             }
             VlmIntent.CheckGateway -> maintain("检查网关") {
                 val caps = GatewayProvider(_state.value.settings, ProviderId.QWEN).capabilities()
@@ -429,7 +480,7 @@ class VlmCameraViewModel @Inject constructor(
                     catch (e: Exception) { if (token == requestToken) _state.update { it.copy(stage = VlmStage.LIVE, error = if ((e as? ModelFailure)?.code == "LOCAL_PHOTO_INVALID_OUTPUT") models.message(R.string.vlm_photo_model_invalid) else e.message) } }
                 }
             }
-            VlmIntent.Capture -> if (_state.value.stage == VlmStage.LIVE && _state.value.cameraReady && !busy() && !_state.value.settingsVisible && !_state.value.photoSettingsVisible) {
+            VlmIntent.Capture -> if (_state.value.stage == VlmStage.LIVE && _state.value.cameraReady && !busy() && !_state.value.settingsVisible && !_state.value.photoSettingsVisible && !_state.value.instructionEditorVisible) {
                 val token = newVlmId()
                 captureToken = token
                 _state.update { it.copy(saving = true, error = null) }
@@ -960,7 +1011,7 @@ class VlmCameraViewModel @Inject constructor(
         guidanceEpoch++
         cancelWork()
         captureToken = null
-        _state.update { it.copy(cameraReady = false, saving = false, photoSettingsVisible = false, compositionDetailsVisible = false, stage = if (it.stage == VlmStage.SCAN_PROCESSING || it.stage == VlmStage.SCAN_REVIEW) it.stage else if (it.scanSnapshot != null && it.scene == null) VlmStage.SCAN_REVIEW else if (it.scene != null && it.stage != VlmStage.LIVE) { if (it.result == null) VlmStage.FROZEN else VlmStage.READY } else VlmStage.LIVE, directorProgress = null) }
+        _state.update { it.copy(cameraReady = false, saving = false, photoSettingsVisible = false, instructionEditorVisible = if (resetCameraMode) false else it.instructionEditorVisible, compositionDetailsVisible = false, stage = if (it.stage == VlmStage.SCAN_PROCESSING || it.stage == VlmStage.SCAN_REVIEW) it.stage else if (it.scanSnapshot != null && it.scene == null) VlmStage.SCAN_REVIEW else if (it.scene != null && it.stage != VlmStage.LIVE) { if (it.result == null) VlmStage.FROZEN else VlmStage.READY } else VlmStage.LIVE, directorProgress = null) }
     }
 
     override fun onCleared() {

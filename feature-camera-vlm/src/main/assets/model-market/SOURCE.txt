@@ -1,0 +1,6 @@
+Derived from Alibaba MNN Chat model_market.json and market filtering/download interfaces.
+Upstream: https://github.com/alibaba/MNN
+Commit: d407447ed56c4121a11ccbd266dc184ca1ead0c2
+Catalog version: 22
+Copyright Alibaba Group Holding Limited. Apache-2.0.
+Changes: retain Vision catalog entries; adapt UI to Compose and download/storage to Framer Sense.

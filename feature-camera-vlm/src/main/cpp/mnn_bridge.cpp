@@ -157,10 +157,12 @@ static void fail(JNIEnv* env, const char* message) {
  * @param env JNI 环境。
  * @param self Kotlin 单例（不持有）。
  * @param configPath 已校验的 config.json 路径。
+ * @param gemmaVisualOnly 经 Kotlin 校验的 Gemma 4 仅使用图文能力。
+ * @param qwen35NonThinking 仅 Qwen3.5 关闭思考模式以适配摄影短协议。
  * @return 模型句柄；失败抛出异常并返回 0。
  */
 extern "C" JNIEXPORT jlong JNICALL
-Java_com_framer_sense_feature_camera_vlm_data_MnnNative_load(JNIEnv* env, jobject self, jstring configPath) {
+Java_com_framer_sense_feature_camera_vlm_data_MnnNative_load(JNIEnv* env, jobject self, jstring configPath, jboolean gemmaVisualOnly, jboolean qwen35NonThinking) {
     try {
         const auto path = pathString(env, configPath);
         auto llm = std::unique_ptr<Llm>(Llm::createLLM(path));
@@ -168,6 +170,15 @@ Java_com_framer_sense_feature_camera_vlm_data_MnnNative_load(JNIEnv* env, jobjec
         // 当前导入的 Qwen3-VL-2B 包在 Galaxy S9 的 OpenCL 视觉预填充会无限停滞；
         // 默认 CPU 后端可稳定完成，且单次短协议避免旧实现的第二轮超时。
         llm->set_config(kCpuConfig);
+        if (gemmaVisualOnly == JNI_TRUE) {
+            // 仅作用于 Kotlin 校验过的 Gemma 4 图文包；不修改磁盘配置及 Qwen 参数。
+            if (!llm->set_config(R"({"is_audio":false})")) throw std::runtime_error("GEMMA_VISUAL_CONFIG_FAILED");
+            __android_log_print(ANDROID_LOG_INFO, "VlmOffline", "MNN Gemma 图文适配 audioEnabled=false sourceConfigUnchanged=true");
+        }
+        if (qwen35NonThinking == JNI_TRUE) {
+            if (!llm->set_config(R"({"jinja":{"context":{"enable_thinking":false}}})")) throw std::runtime_error("QWEN35_TEMPLATE_CONFIG_FAILED");
+            __android_log_print(ANDROID_LOG_INFO, "VlmOffline", "MNN Qwen3.5 摄影适配 thinkingEnabled=false sourceConfigUnchanged=true");
+        }
         // 必须先启用回调和 Session_Debug，再创建视觉/语言计算图。
         llm->setCancelCallback({});
         if (!llm->load()) throw std::runtime_error("MNN 模型加载失败，请检查权重和视觉组件");

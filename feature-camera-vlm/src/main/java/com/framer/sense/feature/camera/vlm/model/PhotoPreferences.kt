@@ -22,22 +22,17 @@ data class PhotoPreferences(
     val avatar: AvatarId = AvatarId.ADULT_FEMALE,
     val ethnicity: AvatarEthnicity = AvatarEthnicity.WHITE,
     val showFace: Boolean = false,
-    val instruction: String = ""
+    val instruction: String = "",
+    val instructionFromRecommendation: Boolean = false
 )
 
 object CameraZoomPolicy {
     fun clamp(value: Float, min: Float, max: Float): Float =
         if (!value.isFinite()) min else value.coerceIn(min, max.coerceAtLeast(min))
-    /** 镜头视角推算档位只在当前相机可执行范围内展示；缺失信息时提供 1×／2×。 */
-    fun presets(min: Float, max: Float, lensRatios: List<Float> = emptyList()): List<Float> {
-        val lenses = lensRatios.filter { it.isFinite() && it > 0f && kotlin.math.abs(it - 1f) > .04f }
-            .map { kotlin.math.round(it * 10f) / 10f }.filter { it in min..max }
-        val candidates = if (lenses.isEmpty()) listOf(1f, 2f) else listOf(1f) + lenses
-        return ((if (min < 1f) listOf(min) else emptyList()) + candidates)
-            .filter { it in min..max }.sorted().fold(mutableListOf<Float>()) { values, ratio ->
-                if (values.none { kotlin.math.abs(it - ratio) < .04f }) values.add(ratio)
-                values
-            }.ifEmpty { listOf(min) }
+    /** 常用快捷档位加设备实际最大倍率；档位不代表独立光学镜头。 */
+    fun presets(min: Float, max: Float): List<Float> {
+        require(min.isFinite() && max.isFinite() && min > 0f && max >= min)
+        return listOf(1f, 2f, 3f, max).filter { it in min..max }.distinct().sorted()
     }
 
     fun lensRatio(focalLength: Float, sensorWidth: Float, sensorHeight: Float,

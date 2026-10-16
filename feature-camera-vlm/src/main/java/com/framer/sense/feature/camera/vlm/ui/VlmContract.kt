@@ -45,6 +45,11 @@ data class VlmUiState(
     val cameraMode: CameraMode = CameraMode.NORMAL,
     val cameraEpoch: Int = 0,
     val photoSettingsVisible: Boolean = false,
+    val instructionEditorVisible: Boolean = false,
+    val instructionDraft: String = "",
+    val instructionDraftFromRecommendation: Boolean = false,
+    val instructionDraftRevision: Int = 0,
+    val instructionHistory: List<String> = emptyList(),
     val compositionDetailsVisible: Boolean = false,
     val instruction: String = "自然一些，保留环境主体",
     val result: CompositionResult? = null,
@@ -64,6 +69,8 @@ data class VlmUiState(
     val notice: String? = null,
     val modelStatus: String = "尚未导入离线模型",
     val modelBusy: Boolean = false,
+    val modelInventoryVersion: Long = 0,
+    val localModelName: String? = null,
     val download: ModelDownloadState = ModelDownloadState(),
     val saving: Boolean = false,
     val settingsVisible: Boolean = false,
@@ -75,7 +82,9 @@ data class VlmUiState(
         get() = modelBusy || saving || photoSample != null || stage in listOf(VlmStage.FREEZING,
             VlmStage.GENERATING, VlmStage.MODIFYING, VlmStage.SCANNING, VlmStage.SCAN_PROCESSING, VlmStage.VIEW_SELECTING)
     val framingUnlocked: Boolean
-        get() = stage == VlmStage.LIVE && !modelBusy && !saving && photoSample == null
+        get() = stage == VlmStage.LIVE && !modelBusy && !saving && photoSample == null && !instructionEditorVisible
+    val canEditInstruction: Boolean
+        get() = !operationBusy && !settingsVisible && !photoSettingsVisible
     val canCapture: Boolean
         get() = framingUnlocked && cameraReady && !settingsVisible && !photoSettingsVisible
     val canZoom: Boolean
@@ -83,9 +92,9 @@ data class VlmUiState(
 
     /** 重启业务允许取消生成／扫描，但不能打断模型管理、保存或样片资源操作。 */
     val canRestartScan: Boolean
-        get() = !modelBusy && !saving && !settingsVisible && !photoSettingsVisible && photoSample == null && (cameraReady || stage != VlmStage.LIVE)
+        get() = !modelBusy && !saving && !settingsVisible && !photoSettingsVisible && !instructionEditorVisible && photoSample == null && (cameraReady || stage != VlmStage.LIVE)
     val canGenerate: Boolean
-        get() = !modelBusy && !saving && !settingsVisible && !photoSettingsVisible && photoSample == null && scene != null &&
+        get() = !modelBusy && !saving && !settingsVisible && !photoSettingsVisible && !instructionEditorVisible && photoSample == null && scene != null &&
             stage in listOf(VlmStage.FROZEN, VlmStage.READY, VlmStage.GENERATING, VlmStage.MODIFYING)
 
     /** 实时画面不因离线模型加载而降帧；冻结分析时才降低后台绘制频率。 */
@@ -129,6 +138,12 @@ sealed interface VlmIntent {
     data class CompositionDetailsVisible(val visible: Boolean) : VlmIntent
     data class PreferredEthnicity(val ethnicity: AvatarEthnicity) : VlmIntent
     data class InstructionChanged(val text: String) : VlmIntent
+    data class InstructionEditorVisible(val visible: Boolean) : VlmIntent
+    data class InstructionDraftChanged(val text: String) : VlmIntent
+    data class InstructionRecommendationSelected(val text: String) : VlmIntent
+    data class InstructionHistorySelected(val text: String) : VlmIntent
+    data class DeleteInstructionHistory(val text: String) : VlmIntent
+    data object SubmitInstruction : VlmIntent
     data class AvatarSelected(val avatarId: AvatarId) : VlmIntent
     data object Generate : VlmIntent
     data object Revise : VlmIntent
@@ -154,7 +169,8 @@ sealed interface VlmIntent {
     data class CameraForeground(val visible: Boolean) : VlmIntent
     data object LoadModel : VlmIntent
     data object UnloadModel : VlmIntent
-    data object DeleteModel : VlmIntent
+    data class UseMarketModel(val id: String) : VlmIntent
+    data class DeleteMarketModel(val id: String) : VlmIntent
     data object CheckGateway : VlmIntent
     data object CheckQwen : VlmIntent
     data object CheckSeed : VlmIntent

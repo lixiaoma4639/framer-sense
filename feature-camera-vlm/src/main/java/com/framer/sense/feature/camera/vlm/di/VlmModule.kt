@@ -7,6 +7,7 @@ import com.framer.sense.feature.camera.vlm.agent.*
 import com.framer.sense.feature.camera.vlm.avatar.*
 import com.framer.sense.feature.camera.vlm.camera.SnapshotStore
 import com.framer.sense.feature.camera.vlm.data.*
+import com.framer.sense.feature.camera.vlm.market.*
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
@@ -21,6 +22,8 @@ object VlmModule {
     @Provides @Singleton fun modelStore(@ApplicationContext context: Context): LocalModelStore = LocalModelStore(context)
     /** 提供进程共享下载状态。@param context 应用上下文。@param store 私有模型目录仓库。 */
     @Provides @Singleton fun downloads(@ApplicationContext context: Context, store: LocalModelStore): ModelDownloadRepository = ModelDownloadRepository(context, store)
+    @Provides @Singleton fun marketCatalog(@ApplicationContext context: Context): ModelMarketRepository = ModelMarketRepository(context)
+    @Provides @Singleton fun marketDownloads(@ApplicationContext context: Context, store: LocalModelStore, legacy: ModelDownloadRepository): MarketDownloadManager = MarketDownloadManager(context, store, legacy)
     /** 提供安全设置仓库。@param context 应用上下文。 */
     @Provides @Singleton fun settings(@ApplicationContext context: Context): SettingsStore = SettingsStore(context)
     @Provides fun photoSession(@ApplicationContext context: Context) = com.framer.sense.feature.camera.vlm.scan.PhotoSessionController(context)

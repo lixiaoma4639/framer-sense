@@ -32,6 +32,7 @@ import kotlin.coroutines.resumeWithException
 /** 只负责平台相机资源；UI 销毁时必须解绑，不持有 ViewModel。 */
 class VlmCameraController(private val context: Context) {
     companion object {
+        private const val ZOOM_LOG_TAG = "VlmCameraZoom"
         // Tab／Activity 重建不能绕过上一控制器尚未完成的 CameraDevice.onClosed。
         @Volatile private var retiringAr: com.framer.sense.feature.camera.vlm.ar.ArSharedCameraController? = null
     }
@@ -141,6 +142,8 @@ class VlmCameraController(private val context: Context) {
         val state = camera!!.cameraInfo.zoomState.value
         val minimum = state?.minZoomRatio ?: 1f
         val maximum = state?.maxZoomRatio ?: 1f
+        android.util.Log.i(ZOOM_LOG_TAG, "变焦范围 config=$version zoomStatePresent=${state != null} min=$minimum max=$maximum requested=$initialZoom actual=${state?.zoomRatio}")
+        if (state == null) android.util.Log.w(ZOOM_LOG_TAG, "变焦范围读取为空，临时使用 1×，不能据此判断设备只有一个倍率 config=$version")
         zoomOperation = camera!!.cameraControl.setZoomRatio(initialZoom.coerceIn(minimum, maximum))
         awaitZoom()
         if (epoch != bindingEpoch || ar != null) throw kotlinx.coroutines.CancellationException("旧相机绑定已结束")
@@ -181,39 +184,105 @@ class VlmCameraController(private val context: Context) {
                 }
             }
         }
-        val lensRatios = deviceLensRatios(camera!!.cameraInfo)
-        val options = CameraZoomPolicy.presets(minimum, maximum, lensRatios)
-        android.util.Log.i("VlmCamera", "倍率快捷档 range=$minimum..$maximum lensEstimates=$lensRatios presets=$options")
+        val lensRatios = deviceLensRatios(camera!!.cameraInfo, instance.availableCameraInfos)
+        val options = CameraZoomPolicy.presets(minimum, maximum)
+        android.util.Log.i(ZOOM_LOG_TAG, "最终倍率按钮 config=$version range=$minimum..$maximum lensEstimates=$lensRatios buttons=$options actual=${camera!!.cameraInfo.zoomState.value?.zoomRatio} presetPolicy=ONE_TWO_THREE_AND_DEVICE_MAX lensMetadataDiagnosticOnly=true")
+        android.util.Log.i("VlmCamera", "倍率快捷档 camera=${Camera2CameraInfo.from(camera!!.cameraInfo).cameraId} range=$minimum..$maximum lensEstimates=$lensRatios presets=$options actual=${camera!!.cameraInfo.zoomState.value?.zoomRatio}")
         return CameraCapabilities(minimum, maximum, options)
     }
 
-    /** 仅查询当前逻辑相机的成员镜头，不把其他不可访问镜头登记为可切换档位。 */
+    /** 枚举全部公开后置相机及其成员用于诊断，不决定变焦快捷按钮。 */
     @androidx.annotation.OptIn(ExperimentalCamera2Interop::class)
-    private fun deviceLensRatios(info: CameraInfo): List<Float> = runCatching {
-        if (Build.VERSION.SDK_INT < 28) return@runCatching emptyList<Float>()
+    private fun deviceLensRatios(info: CameraInfo, available: List<CameraInfo>): List<Float> = runCatching {
+        android.util.Log.i(ZOOM_LOG_TAG, "镜头枚举开始 device=${Build.MANUFACTURER}/${Build.MODEL} sdk=${Build.VERSION.SDK_INT} cameraXAvailableCount=${available.size}")
+        logCamera2PublicInventory(available.mapNotNull { runCatching { Camera2CameraInfo.from(it).cameraId }.getOrNull() }.toSet())
         val camera2 = Camera2CameraInfo.from(info)
+        android.util.Log.i(ZOOM_LOG_TAG, "读取当前相机参数 camera=${camera2.cameraId}")
         val referenceFocal = camera2.getCameraCharacteristic(CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS)
-            ?.filter { it.isFinite() && it > 0f }?.minOrNull() ?: return@runCatching emptyList<Float>()
+            ?.filter { it.isFinite() && it > 0f }?.minOrNull()
         val referenceSize = camera2.getCameraCharacteristic(CameraCharacteristics.SENSOR_INFO_PHYSICAL_SIZE)
-            ?: return@runCatching emptyList<Float>()
-        val manager = context.getSystemService(Context.CAMERA_SERVICE) as android.hardware.camera2.CameraManager
-        val logical = manager.getCameraCharacteristics(camera2.cameraId)
-        logical.physicalCameraIds.flatMap { id ->
+        android.util.Log.i(ZOOM_LOG_TAG, "倍率参考 camera=${camera2.cameraId} focalMm=$referenceFocal sensorMm=$referenceSize")
+        if (referenceFocal == null || referenceSize == null)
+            android.util.Log.w(ZOOM_LOG_TAG, "倍率参考参数缺失，无法估算镜头倍率 camera=${camera2.cameraId} focalMissing=${referenceFocal == null} sensorMissing=${referenceSize == null}")
+        android.util.Log.i(ZOOM_LOG_TAG, "读取当前相机成员 camera=${camera2.cameraId}")
+        val members = info.physicalCameraInfos
+        val controllableIds = members.map { Camera2CameraInfo.from(it).cameraId }.toSet() + camera2.cameraId
+        android.util.Log.i(ZOOM_LOG_TAG, "当前相机成员 camera=${camera2.cameraId} physicalCount=${members.size} controllableIds=$controllableIds")
+        if (members.isEmpty()) android.util.Log.w(ZOOM_LOG_TAG, "当前相机未公开成员镜头，继续查询独立后置相机 camera=${camera2.cameraId}")
+        val backCameras = CameraSelector.DEFAULT_BACK_CAMERA.filter(available)
+        // 独立暴露的其他后置相机也记录，但不能仅因为数字变焦范围覆盖就假装已切换到它。
+        val exposed = (backCameras.flatMap { candidate ->
+            listOf(candidate) + runCatching { candidate.physicalCameraInfos.toList() }.getOrElse {
+                android.util.Log.w(ZOOM_LOG_TAG, "读取后置相机成员失败 camera=${Camera2CameraInfo.from(candidate).cameraId}", it)
+                emptyList()
+            }
+        } + members).distinctBy { Camera2CameraInfo.from(it).cameraId }
+        android.util.Log.i("VlmCamera", "公开后置镜头 current=${camera2.cameraId} cameraCount=${backCameras.size} exposedCount=${exposed.size} controllable=$controllableIds")
+        android.util.Log.i(ZOOM_LOG_TAG, "后置镜头枚举完成 current=${camera2.cameraId} backCameraIds=${backCameras.map { Camera2CameraInfo.from(it).cameraId }} exposedIds=${exposed.map { Camera2CameraInfo.from(it).cameraId }}")
+        exposed.flatMap { exposedInfo ->
             runCatching lens@ {
-                val physical = manager.getCameraCharacteristics(id)
-                val size = physical.get(CameraCharacteristics.SENSOR_INFO_PHYSICAL_SIZE)
-                    ?: return@lens emptyList<Float>()
-                val focalLengths = physical.get(CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS)
+                val physical = Camera2CameraInfo.from(exposedInfo)
+                android.util.Log.i(ZOOM_LOG_TAG, "读取公开镜头参数 id=${physical.cameraId}")
+                val size = physical.getCameraCharacteristic(CameraCharacteristics.SENSOR_INFO_PHYSICAL_SIZE)
+                if (size == null) {
+                    android.util.Log.w(ZOOM_LOG_TAG, "跳过公开镜头 id=${physical.cameraId} reason=MISSING_SENSOR_PHYSICAL_SIZE")
+                    return@lens emptyList<Float>()
+                }
+                val focalLengths = physical.getCameraCharacteristic(CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS)
                     ?: floatArrayOf()
-                focalLengths.toList().mapNotNull { focal ->
+                val ratios = if (referenceFocal != null && referenceSize != null) focalLengths.toList().mapNotNull { focal ->
                     CameraZoomPolicy.lensRatio(focal, size.width, size.height,
                         referenceFocal, referenceSize.width, referenceSize.height)
-                }
-            }.getOrDefault(emptyList())
+                } else emptyList()
+                val controllable = physical.cameraId in controllableIds
+                android.util.Log.i(ZOOM_LOG_TAG, "公开镜头参数 id=${physical.cameraId} focalMm=${focalLengths.toList()} sensorMm=${size.width}x${size.height} relativeZoom=$ratios currentCameraMember=$controllable")
+                if (ratios.isEmpty()) android.util.Log.w(ZOOM_LOG_TAG, "镜头倍率估算为空 id=${physical.cameraId} reason=${if (focalLengths.isEmpty()) "MISSING_FOCAL_LENGTHS" else if (referenceFocal == null || referenceSize == null) "MISSING_REFERENCE" else "INVALID_LENS_PARAMETERS"}")
+                if (!controllable) android.util.Log.i(ZOOM_LOG_TAG, "独立镜头不能由当前相机直接控制 id=${physical.cameraId} reason=REQUIRES_CAMERA_REBIND")
+                android.util.Log.i("VlmCamera", "公开镜头 id=${physical.cameraId} focalMm=${focalLengths.toList()} sensorMm=${size.width}x${size.height} relativeZoom=$ratios currentCameraMember=$controllable")
+                if (controllable) ratios else emptyList()
+            }.getOrElse {
+                android.util.Log.w(ZOOM_LOG_TAG, "读取公开镜头参数失败，跳过该镜头", it)
+                emptyList()
+            }
         }
     }.getOrElse {
-        android.util.Log.w("VlmCamera", "读取镜头倍率失败，使用范围内基础档位", it)
+        android.util.Log.w(ZOOM_LOG_TAG, "镜头枚举失败，快捷按钮仍按 ZoomState 实际范围生成", it)
         emptyList()
+    }
+
+    /** 只读对照原始 Camera2 目录，不尝试猜测隐藏 ID，也不打开或切换镜头。 */
+    private fun logCamera2PublicInventory(cameraXIds: Set<String>) {
+        runCatching {
+            val manager = context.getSystemService(Context.CAMERA_SERVICE) as android.hardware.camera2.CameraManager
+            val publicIds = manager.cameraIdList.toSet()
+            android.util.Log.i(ZOOM_LOG_TAG, "Camera2 原始枚举开始 publicIds=$publicIds cameraXIds=$cameraXIds onlyInCamera2=${publicIds - cameraXIds}")
+            fun read(id: String, parent: String?): CameraCharacteristics? = runCatching {
+                val metadata = manager.getCameraCharacteristics(id)
+                val facing = when (metadata.get(CameraCharacteristics.LENS_FACING)) {
+                    CameraCharacteristics.LENS_FACING_BACK -> "BACK"
+                    CameraCharacteristics.LENS_FACING_FRONT -> "FRONT"
+                    CameraCharacteristics.LENS_FACING_EXTERNAL -> "EXTERNAL"
+                    else -> "UNKNOWN"
+                }
+                val capabilities = metadata.get(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES)?.toList()
+                val physicalIds = if (Build.VERSION.SDK_INT >= 28) metadata.physicalCameraIds else emptySet()
+                val zoomRange = if (Build.VERSION.SDK_INT >= 30) metadata.get(CameraCharacteristics.CONTROL_ZOOM_RATIO_RANGE) else null
+                android.util.Log.i(ZOOM_LOG_TAG, "Camera2 原始镜头 id=$id parent=$parent facing=$facing listed=${id in publicIds} inCameraX=${id in cameraXIds} focalMm=${metadata.get(CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS)?.toList()} sensorMm=${metadata.get(CameraCharacteristics.SENSOR_INFO_PHYSICAL_SIZE)} zoomRange=$zoomRange maxDigitalZoom=${metadata.get(CameraCharacteristics.SCALER_AVAILABLE_MAX_DIGITAL_ZOOM)} physicalIds=$physicalIds capabilities=$capabilities")
+                metadata
+            }.getOrElse {
+                android.util.Log.w(ZOOM_LOG_TAG, "Camera2 公开参数读取失败 id=$id parent=$parent", it)
+                null
+            }
+            publicIds.forEach { id ->
+                val metadata = read(id, null)
+                if (Build.VERSION.SDK_INT >= 29) metadata?.physicalCameraIds?.filterNot { it in publicIds }?.forEach { physicalId ->
+                    read(physicalId, id)
+                }
+            }
+            android.util.Log.i(ZOOM_LOG_TAG, "Camera2 原始枚举完成 publicCount=${publicIds.size} source=READ_ONLY_METADATA")
+        }.onFailure {
+            android.util.Log.w(ZOOM_LOG_TAG, "Camera2 原始枚举失败，继续原 CameraX 流程", it)
+        }
     }
 
     private var pendingZoom: Float? = null
@@ -243,9 +312,20 @@ class VlmCameraController(private val context: Context) {
      * @param ratio 界面请求的倍率。
      */
     fun zoom(ratio: Float) {
+        if (!ratio.isFinite()) return
         val active = camera ?: return
         val limits = active.cameraInfo.zoomState.value ?: return
-        zoomOperation = active.cameraControl.setZoomRatio(ratio.coerceIn(limits.minZoomRatio, limits.maxZoomRatio))
+        val applied = ratio.coerceIn(limits.minZoomRatio, limits.maxZoomRatio)
+        val operation = active.cameraControl.setZoomRatio(applied)
+        zoomOperation = operation
+        operation.addListener({
+            try {
+                operation.get()
+            } catch (failure: Exception) {
+                if (camera === active && zoomOperation === operation)
+                    android.util.Log.w("VlmCamera", "倍率应用失败 requested=$ratio applied=$applied", failure)
+            }
+        }, executor)
     }
 
     /** 等待最近的倍率设置反映到相机请求；无参数，不取消共享 CameraControl 操作。 */

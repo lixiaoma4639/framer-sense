@@ -5,6 +5,13 @@ import org.junit.Assert.assertEquals
 import org.junit.Test
 
 class CameraNavigationTest {
+    @Test fun backClosesInstructionBeforeExitingOrResumingCamera() {
+        val state = VlmUiState(instructionEditorVisible = true)
+        assertEquals(CameraBackAction.CLOSE_INSTRUCTION, cameraBackAction(state, true))
+        assertEquals(CameraBackAction.CLOSE_INSTRUCTION, cameraBackAction(state.copy(stage = VlmStage.READY), true))
+        assertEquals(CameraBackAction.EXIT, cameraBackAction(state.copy(instructionEditorVisible = false), true))
+    }
+
     @Test fun liveExitsWhileExistingWorkflowBackBehaviorIsPreserved() {
         val live = VlmUiState()
         assertEquals(CameraBackAction.EXIT, cameraBackAction(live, true))
