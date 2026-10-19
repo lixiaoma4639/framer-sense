@@ -5,6 +5,7 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.MaterialTheme
@@ -45,7 +46,8 @@ internal fun BackgroundAlignmentOverlay(
         Column(
             Modifier.align(Alignment.TopCenter).padding(12.dp).widthIn(max = 480.dp)
                 .testTag("vlm_background_panel")
-                .background(Color.Black.copy(alpha = .65f)).padding(horizontal = 12.dp, vertical = 6.dp)
+                .background(Color.Black.copy(alpha = .65f), RoundedCornerShape(8.dp))
+                .padding(horizontal = 10.dp, vertical = 4.dp)
                 .verticalScroll(rememberScrollState()),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
@@ -57,22 +59,22 @@ internal fun BackgroundAlignmentOverlay(
                 modifier = Modifier.testTag("vlm_background_status")
             )
             if (searching) {
-                Spacer(Modifier.height(12.dp))
-                Column(
+                //Spacer(Modifier.height(2.dp))
+                Row(
                     Modifier.fillMaxWidth().testTag("vlm_background_confirmation_group"),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.spacedBy(2.dp)
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     Text(stringResource(R.string.vlm_background_searching),
-                        color = Color.White, textAlign = TextAlign.Center,
+                        color = Color.White, textAlign = TextAlign.Start,
                         style = MaterialTheme.typography.bodySmall,
-                        modifier = Modifier.testTag("vlm_background_instructions"))
+                        modifier = Modifier.weight(1f).testTag("vlm_background_instructions"))
                     OutlinedButton(onClick = { onEvent(VlmIntent.ConfirmBackground) },
                         shape = CircleShape,
                         border = BorderStroke(1.dp, Color.White),
                         colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.White),
-                        contentPadding = PaddingValues(horizontal = 18.dp, vertical = 0.dp),
-                        modifier = Modifier.defaultMinSize(minWidth = 64.dp, minHeight = 32.dp)
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp),
+                        modifier = Modifier.defaultMinSize(minWidth = 56.dp, minHeight = 28.dp)
                             .testTag("vlm_background_confirm")) {
                         Text(stringResource(R.string.vlm_background_confirm))
                     }

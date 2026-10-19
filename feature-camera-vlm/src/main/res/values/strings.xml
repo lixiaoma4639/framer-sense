@@ -203,7 +203,7 @@
     <string name="vlm_background_waiting">摄影师：正在自动对齐背景。</string>
     <string name="vlm_background_auto">背景已自动匹配，可以参考人像指导拍摄。</string>
     <string name="vlm_background_manual">背景已由你手动确认，可以参考人像指导拍摄。</string>
-    <string name="vlm_background_confirm">确认</string>
+    <string name="vlm_background_confirm">背景已对齐</string>
     <string name="vlm_background_reference">目标背景参考叠图</string>
     <string name="vlm_background_right">摄影师：向右转回目标背景。</string>
     <string name="vlm_background_left">摄影师：向左转回目标背景。</string>
