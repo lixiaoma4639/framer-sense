@@ -50,7 +50,6 @@ import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.viewinterop.AndroidView
-import androidx.compose.ui.window.Dialog
 import androidx.core.content.ContextCompat
 import androidx.core.view.doOnLayout
 import com.framer.sense.core.ui.MyApplicationTheme
@@ -183,26 +182,28 @@ fun VlmCameraScreen(
     CameraBackHandler(state, onEvent, exitCamera)
     val safeInsets = WindowInsets.displayCutout
         .union(WindowInsets.mandatorySystemGestures).asPaddingValues()
-    BoxWithConstraints(modifier.fillMaxSize().background(Color.Black).testTag("vlm_camera_screen").padding(safeInsets)) {
-        val controlsMaxHeight = (maxHeight - 48.dp).coerceAtLeast(0.dp)
-        CameraPane(state, controller, permission, { permissionLauncher.launch(Manifest.permission.CAMERA) },
-            onEvent, Modifier.fillMaxSize().padding(top = 48.dp, bottom = 84.dp))
-        CameraBottomBar(state, onEvent, { latestCapture() }, permission,
-            Modifier.align(Alignment.BottomCenter).heightIn(max = controlsMaxHeight))
-        ArSupportControl(controller, state, permission, onEvent)
-        CameraTopBar(state, onEvent, Modifier.align(Alignment.TopCenter), onExit = exitCamera)
-        CompositionInstructionOverlay(state, onEvent, Modifier.fillMaxSize())
+    CameraIconRotationScope {
+        BoxWithConstraints(modifier.fillMaxSize().background(Color.Black).testTag("vlm_camera_screen").padding(safeInsets)) {
+            val controlsMaxHeight = (maxHeight - 48.dp).coerceAtLeast(0.dp)
+            CameraPane(state, controller, permission, { permissionLauncher.launch(Manifest.permission.CAMERA) },
+                onEvent, Modifier.fillMaxSize().padding(top = 48.dp, bottom = 84.dp))
+            CameraBottomBar(state, onEvent, { latestCapture() }, permission,
+                Modifier.align(Alignment.BottomCenter).heightIn(max = controlsMaxHeight))
+            ArSupportControl(controller, state, permission, onEvent)
+            CameraTopBar(state, onEvent, Modifier.align(Alignment.TopCenter), onExit = exitCamera)
+            CompositionInstructionOverlay(state, onEvent, Modifier.fillMaxSize())
+        }
+        if (state.photoSettingsVisible) PhotoSettingsDialog(state, onEvent, { imageLauncher.launch("image/*") })
+        if (state.compositionDetailsVisible && state.stage == VlmStage.SCAN_REVIEW) CompositionDetailsDialog(state, onEvent)
+        if (state.settingsVisible) ModelSettingsDialog(state, onEvent, { modelLauncher.launch(arrayOf("application/zip", "application/octet-stream", "application/x-zip-compressed")) }, { directoryLauncher.launch(null) })
+        state.photoSample?.let { PhotoSampleDialog(it, onEvent) }
     }
-    if (state.photoSettingsVisible) PhotoSettingsDialog(state, onEvent, { imageLauncher.launch("image/*") })
-    if (state.compositionDetailsVisible && state.stage == VlmStage.SCAN_REVIEW) CompositionDetailsDialog(state, onEvent)
-    if (state.settingsVisible) ModelSettingsDialog(state, onEvent, { modelLauncher.launch(arrayOf("application/zip", "application/octet-stream", "application/x-zip-compressed")) }, { directoryLauncher.launch(null) })
-    state.photoSample?.let { PhotoSampleDialog(it, onEvent) }
 }
 
 /** 单独检查制作初稿，所有动作走 MVI；不伪造一个模型构图结果。 */
 @Composable
 internal fun PhotoSampleDialog(sample: PhotoSampleState, onEvent: (VlmIntent) -> Unit) {
-    Dialog(onDismissRequest = { onEvent(VlmIntent.ClosePhotoSample) }) {
+    CameraAdaptiveDialog(onDismissRequest = { onEvent(VlmIntent.ClosePhotoSample) }) {
         Surface(shape = MaterialTheme.shapes.large) {
             Column(Modifier.fillMaxWidth().heightIn(max = 700.dp).verticalScroll(rememberScrollState()).padding(16.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp), horizontalAlignment = Alignment.CenterHorizontally) {
@@ -820,9 +821,9 @@ internal fun ModelSettingsDialog(state: VlmUiState, onEvent: (VlmIntent) -> Unit
         else ModelMarketDialog(closeMarket, { onEvent(VlmIntent.UseMarketModel(it)) },
             { onEvent(VlmIntent.DeleteMarketModel(it)) }, state.modelBusy, state.settings.mode, state.error)
     }
-    if (!marketVisible) AlertDialog(onDismissRequest = { if (!state.modelBusy) onEvent(VlmIntent.SettingsVisible(false)) }, title = { Text(stringResource(R.string.vlm_model_settings_title)) }, modifier = Modifier.testTag("vlm_model_settings_dialog"),
+    if (!marketVisible) CameraAdaptiveAlertDialog(onDismissRequest = { if (!state.modelBusy) onEvent(VlmIntent.SettingsVisible(false)) }, title = { Text(stringResource(R.string.vlm_model_settings_title)) }, modifier = Modifier.testTag("vlm_model_settings_dialog"),
         text = {
-            Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Row(Modifier.fillMaxWidth().height(IntrinsicSize.Min), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                     ModelMode.entries.forEach { mode ->
                         val selected = draft.mode == mode

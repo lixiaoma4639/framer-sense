@@ -19,8 +19,6 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.res.colorResource
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.window.Dialog
-import androidx.compose.ui.window.DialogProperties
 import androidx.core.content.ContextCompat
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -28,6 +26,9 @@ import com.framer.sense.feature.camera.vlm.R
 import com.framer.sense.feature.camera.vlm.data.*
 import com.framer.sense.feature.camera.vlm.model.ModelMode
 import com.framer.sense.feature.camera.vlm.ui.downloadPhaseLabel
+import com.framer.sense.feature.camera.vlm.ui.CameraAdaptiveDialog
+import com.framer.sense.feature.camera.vlm.ui.CameraAdaptiveAlertDialog
+import com.framer.sense.feature.camera.vlm.ui.CameraAdaptiveBottomSheet
 
 @Composable
 internal fun ModelMarketDialog(onBack: () -> Unit, onApply: (String) -> Unit, onDelete: (String) -> Unit,
@@ -47,7 +48,7 @@ internal fun ModelMarketDialog(onBack: () -> Unit, onApply: (String) -> Unit, on
     val notification = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {
         requested?.let(start); requested = null
     }
-    Dialog(onDismissRequest = onBack, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+    CameraAdaptiveDialog(onDismissRequest = onBack, fullScreen = true) {
         Surface(Modifier.fillMaxSize()) {
             ModelMarketContent(state, modelBusy, savedMode, onBack, viewModel::setFilter, viewModel::setSource,
                 viewModel::refresh, { id, metered ->
@@ -85,97 +86,102 @@ internal fun ModelMarketContent(
             TextButton(onClick = onBack) { Text(stringResource(R.string.vlm_market_back)) }
         }, actions = { TextButton(onClick = onRefresh, enabled = !state.loading) { Text(stringResource(R.string.vlm_market_refresh)) } })
     }) { padding ->
-        Column(Modifier.fillMaxSize().padding(padding)) {
-            Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                MarketSource.entries.forEach { source ->
-                    FilterChip(state.source == source, { onSource(source) }, label = { Text(sourceLabel(source)) },
-                        modifier = Modifier.weight(1f).testTag("vlm_market_source_${source.name}"))
+        // 搜索与筛选也参与滚动，横屏或键盘出现时不会挤掉整个模型列表。
+        LazyColumn(Modifier.fillMaxSize().padding(padding).testTag("vlm_market_list"),
+            contentPadding = PaddingValues(bottom = 16.dp)) {
+            item(key = "sources") {
+                Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    MarketSource.entries.forEach { source ->
+                        FilterChip(state.source == source, { onSource(source) }, label = { Text(sourceLabel(source)) },
+                            modifier = Modifier.weight(1f).testTag("vlm_market_source_${source.name}"))
+                    }
                 }
             }
-            OutlinedTextField(state.filter.search, { applyFilter(state.filter.copy(search = it)) }, singleLine = true,
-                label = { Text(stringResource(R.string.vlm_market_search)) },
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp).testTag("vlm_market_search"))
-            LazyRow(Modifier.fillMaxWidth().padding(horizontal = 12.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                item { FilterChip(selected = state.filter.hasOptions, onClick = { filterVisible = true },
-                    label = { Text(stringResource(R.string.vlm_market_filter)) }, modifier = Modifier.testTag("vlm_market_filter_open")) }
-                item { FilterChip(state.filter.installedOnly, { onFilter(MarketFilter(installedOnly = !state.filter.installedOnly)) },
-                    label = { Text(stringResource(R.string.vlm_market_installed)) }, modifier = Modifier.testTag("vlm_market_installed")) }
-                items(listOf("Vision", "Video", "Think")) { tag ->
-                    FilterChip(tag in state.filter.tags, { applyFilter(state.filter.copy(tags =
-                        if (tag in state.filter.tags) state.filter.tags - tag else state.filter.tags + tag)) }, label = { Text(tagLabel(tag)) },
-                        modifier = Modifier.testTag("vlm_market_tag_$tag"))
+            item(key = "search") {
+                OutlinedTextField(state.filter.search, { applyFilter(state.filter.copy(search = it)) }, singleLine = true,
+                    label = { Text(stringResource(R.string.vlm_market_search)) },
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp).testTag("vlm_market_search"))
+            }
+            item(key = "filters") {
+                LazyRow(Modifier.fillMaxWidth().padding(horizontal = 12.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    item { FilterChip(selected = state.filter.hasOptions, onClick = { filterVisible = true },
+                        label = { Text(stringResource(R.string.vlm_market_filter)) }, modifier = Modifier.testTag("vlm_market_filter_open")) }
+                    item { FilterChip(state.filter.installedOnly, { onFilter(MarketFilter(installedOnly = !state.filter.installedOnly)) },
+                        label = { Text(stringResource(R.string.vlm_market_installed)) }, modifier = Modifier.testTag("vlm_market_installed")) }
+                    items(listOf("Vision", "Video", "Think")) { tag ->
+                        FilterChip(tag in state.filter.tags, { applyFilter(state.filter.copy(tags =
+                            if (tag in state.filter.tags) state.filter.tags - tag else state.filter.tags + tag)) }, label = { Text(tagLabel(tag)) },
+                            modifier = Modifier.testTag("vlm_market_tag_$tag"))
+                    }
                 }
             }
-            if (state.loading) LinearProgressIndicator(Modifier.fillMaxWidth())
-            state.error?.let { Text(stringResource(it), color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(12.dp)) }
-            serviceError?.let { Text(it, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(12.dp)) }
+            if (state.loading) item(key = "loading") { LinearProgressIndicator(Modifier.fillMaxWidth()) }
+            state.error?.let { item(key = "error") { Text(stringResource(it), color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(12.dp)) } }
+            serviceError?.let { item(key = "service_error") { Text(it, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(12.dp)) } }
             if (state.models.isEmpty() && !state.loading) {
-                Text(stringResource(R.string.vlm_market_empty), modifier = Modifier.padding(16.dp))
-                TextButton(onClick = { onFilter(MarketFilter()) }) { Text(stringResource(R.string.vlm_market_clear_filter)) }
+                item(key = "empty") { Text(stringResource(R.string.vlm_market_empty), modifier = Modifier.padding(16.dp)) }
+                item(key = "clear") { TextButton(onClick = { onFilter(MarketFilter()) }) { Text(stringResource(R.string.vlm_market_clear_filter)) } }
             }
-            LazyColumn(Modifier.weight(1f).testTag("vlm_market_list"), contentPadding = PaddingValues(bottom = 16.dp)) {
-                items(state.models, key = { it.id }) { model ->
-                    val installed = state.installed.any { it.id == model.id }
-                    val task = state.downloads[model.id]
-                    val phase = state.modelPhase(model.id)
-                    ElevatedCard(onClick = { detail = model },
-                        colors = if (installed) CardDefaults.elevatedCardColors(
-                            containerColor = colorResource(R.color.vlm_market_downloaded_background),
-                            contentColor = colorResource(R.color.vlm_market_downloaded_content)) else CardDefaults.elevatedCardColors(),
-                        modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 5.dp)
-                        .testTag("vlm_market_model_${model.id}")) {
-                        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                            Text(if (model.local) stringResource(R.string.vlm_market_local_title, model.id.takeLast(8)) else model.id, style = MaterialTheme.typography.titleSmall)
-                            if (!model.local) Text(stringResource(R.string.vlm_market_model_meta, model.vendor, model.parameters.toString(), model.bytes / 1048576),
-                                style = MaterialTheme.typography.bodySmall)
-                            Text(stringResource(compatibilityLabel(model)), style = MaterialTheme.typography.labelMedium)
-                            LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) { items(model.tags) { tag -> Text(tagText(tag), style = MaterialTheme.typography.labelSmall) } }
-                            if (state.activeModel == model.id) Text(stringResource(R.string.vlm_market_current), color = MaterialTheme.colorScheme.primary)
-                            if (phase != DownloadPhase.IDLE) {
-                                Text(stringResource(downloadPhaseLabel(phase)), modifier = Modifier.testTag("vlm_market_status_${model.id}"))
+            items(state.models, key = { it.id }) { model ->
+                val installed = state.installed.any { it.id == model.id }
+                val task = state.downloads[model.id]
+                val phase = state.modelPhase(model.id)
+                ElevatedCard(onClick = { detail = model },
+                    colors = if (installed) CardDefaults.elevatedCardColors(
+                        containerColor = colorResource(R.color.vlm_market_downloaded_background),
+                        contentColor = colorResource(R.color.vlm_market_downloaded_content)) else CardDefaults.elevatedCardColors(),
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 5.dp)
+                    .testTag("vlm_market_model_${model.id}")) {
+                    Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Text(if (model.local) stringResource(R.string.vlm_market_local_title, model.id.takeLast(8)) else model.id, style = MaterialTheme.typography.titleSmall)
+                        if (!model.local) Text(stringResource(R.string.vlm_market_model_meta, model.vendor, model.parameters.toString(), model.bytes / 1048576),
+                            style = MaterialTheme.typography.bodySmall)
+                        Text(stringResource(compatibilityLabel(model)), style = MaterialTheme.typography.labelMedium)
+                        LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) { items(model.tags) { tag -> Text(tagText(tag), style = MaterialTheme.typography.labelSmall) } }
+                        if (state.activeModel == model.id) Text(stringResource(R.string.vlm_market_current), color = MaterialTheme.colorScheme.primary)
+                        if (phase != DownloadPhase.IDLE) {
+                            Text(stringResource(downloadPhaseLabel(phase)), modifier = Modifier.testTag("vlm_market_status_${model.id}"))
+                        }
+                        if (task != null && task.phase != DownloadPhase.IDLE) {
+                            if (task.total > 0) {
+                                LinearProgressIndicator(progress = { (task.downloaded.toFloat() / task.total).coerceIn(0f, 1f) }, modifier = Modifier.fillMaxWidth())
+                                Text(stringResource(R.string.vlm_download_progress, task.downloaded / 1048576, task.total / 1048576))
                             }
-                            if (task != null && task.phase != DownloadPhase.IDLE) {
-                                if (task.total > 0) {
-                                    LinearProgressIndicator(progress = { (task.downloaded.toFloat() / task.total).coerceIn(0f, 1f) }, modifier = Modifier.fillMaxWidth())
-                                    Text(stringResource(R.string.vlm_download_progress, task.downloaded / 1048576, task.total / 1048576))
+                            if (task.speedBytesPerSecond > 0 && task.running) Text(stringResource(R.string.vlm_market_speed, task.speedBytesPerSecond / 1024))
+                            task.error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+                        }
+                        LazyRow(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                            if (!installed || task?.phase in setOf(DownloadPhase.RESOLVING, DownloadPhase.DOWNLOADING, DownloadPhase.VERIFYING,
+                                    DownloadPhase.QUEUED, DownloadPhase.PAUSED, DownloadPhase.FAILED)) item {
+                                TextButton(onClick = { requestDownload(model.id) },
+                                    modifier = Modifier.testTag("vlm_market_download_${model.id}"),
+                                    enabled = model.compatible && model.repository(state.source) != null &&
+                                        (task == null || task.phase in setOf(DownloadPhase.IDLE, DownloadPhase.PAUSED, DownloadPhase.FAILED))) {
+                                    Text(stringResource(if (task?.phase in setOf(DownloadPhase.PAUSED, DownloadPhase.FAILED)) R.string.vlm_download_resume else R.string.vlm_download_start))
                                 }
-                                if (task.speedBytesPerSecond > 0 && task.running) Text(stringResource(R.string.vlm_market_speed, task.speedBytesPerSecond / 1024))
-                                task.error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
                             }
-                            LazyRow(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                                if (!installed || task?.phase in setOf(DownloadPhase.RESOLVING, DownloadPhase.DOWNLOADING, DownloadPhase.VERIFYING,
-                                        DownloadPhase.QUEUED, DownloadPhase.PAUSED, DownloadPhase.FAILED)) item {
-                                    TextButton(onClick = { requestDownload(model.id) },
-                                        modifier = Modifier.testTag("vlm_market_download_${model.id}"),
-                                        enabled = model.compatible && model.repository(state.source) != null &&
-                                            (task == null || task.phase in setOf(DownloadPhase.IDLE, DownloadPhase.PAUSED, DownloadPhase.FAILED))) {
-                                        Text(stringResource(if (task?.phase in setOf(DownloadPhase.PAUSED, DownloadPhase.FAILED)) R.string.vlm_download_resume else R.string.vlm_download_start))
-                                    }
-                                }
-                                if (task?.running == true || task?.phase == DownloadPhase.QUEUED) item {
-                                    TextButton(onClick = { onPause(model.id) }) { Text(stringResource(R.string.vlm_download_pause)) }
-                                }
-                                if (task != null && task.phase in setOf(DownloadPhase.RESOLVING, DownloadPhase.DOWNLOADING, DownloadPhase.VERIFYING,
-                                        DownloadPhase.QUEUED, DownloadPhase.PAUSED, DownloadPhase.FAILED)) item {
-                                    TextButton(onClick = { onCancel(model.id) }) { Text(stringResource(R.string.vlm_download_cancel)) }
-                                }
-                                if (installed) {
-                                    item { TextButton(onClick = { onApply(model.id) }, enabled = model.compatible && !modelBusy && savedMode != ModelMode.CLOUD) {
-                                        Text(stringResource(R.string.vlm_market_use)) } }
-                                    item { TextButton(onClick = { deleteId = model.id }, enabled = !modelBusy && task?.running != true) {
-                                        Text(stringResource(R.string.vlm_model_delete)) } }
-                                }
-                                item { TextButton(onClick = { detail = model }) { Text(stringResource(R.string.vlm_market_details)) } }
+                            if (task?.running == true || task?.phase == DownloadPhase.QUEUED) item {
+                                TextButton(onClick = { onPause(model.id) }) { Text(stringResource(R.string.vlm_download_pause)) }
                             }
+                            if (task != null && task.phase in setOf(DownloadPhase.RESOLVING, DownloadPhase.DOWNLOADING, DownloadPhase.VERIFYING,
+                                    DownloadPhase.QUEUED, DownloadPhase.PAUSED, DownloadPhase.FAILED)) item {
+                                TextButton(onClick = { onCancel(model.id) }) { Text(stringResource(R.string.vlm_download_cancel)) }
+                            }
+                            if (installed) {
+                                item { TextButton(onClick = { onApply(model.id) }, enabled = model.compatible && !modelBusy && savedMode != ModelMode.CLOUD) {
+                                    Text(stringResource(R.string.vlm_market_use)) } }
+                                item { TextButton(onClick = { deleteId = model.id }, enabled = !modelBusy && task?.running != true) {
+                                    Text(stringResource(R.string.vlm_model_delete)) } }
+                            }
+                            item { TextButton(onClick = { detail = model }) { Text(stringResource(R.string.vlm_market_details)) } }
                         }
                     }
                 }
             }
         }
     }
-    if (filterVisible) ModalBottomSheet(
+    if (filterVisible) CameraAdaptiveBottomSheet(
         onDismissRequest = { filterVisible = false },
-        sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
         modifier = Modifier.testTag("vlm_market_filter_sheet")
     ) {
         Column(Modifier.fillMaxWidth().fillMaxHeight(0.85f).padding(horizontal = 20.dp, vertical = 12.dp)) {
@@ -216,8 +222,8 @@ internal fun ModelMarketContent(
             }
         }
     }
-    detail?.let { model -> AlertDialog(onDismissRequest = { detail = null }, title = { Text(if (model.local) stringResource(R.string.vlm_market_local_title, model.id.takeLast(8)) else model.id) }, text = {
-        Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+    detail?.let { model -> CameraAdaptiveAlertDialog(onDismissRequest = { detail = null }, title = { Text(if (model.local) stringResource(R.string.vlm_market_local_title, model.id.takeLast(8)) else model.id) }, text = {
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text(stringResource(compatibilityLabel(model)))
             if (model.description.isNotBlank()) Text(model.description)
             MarketSource.entries.forEach { source -> model.repository(source)?.let { repository ->
@@ -229,11 +235,11 @@ internal fun ModelMarketContent(
             Text(stringResource(if (model.local) R.string.vlm_market_local_hint else R.string.vlm_market_asset_notice))
         }
     }, confirmButton = { TextButton(onClick = { detail = null }) { Text(stringResource(R.string.vlm_market_done)) } }) }
-    deleteId?.let { id -> AlertDialog(onDismissRequest = { deleteId = null }, title = { Text(stringResource(R.string.vlm_model_delete)) },
+    deleteId?.let { id -> CameraAdaptiveAlertDialog(onDismissRequest = { deleteId = null }, title = { Text(stringResource(R.string.vlm_model_delete)) },
         text = { Text(stringResource(R.string.vlm_market_delete_confirm, id)) },
         confirmButton = { TextButton(onClick = { onDelete(id); deleteId = null }) { Text(stringResource(R.string.vlm_model_delete)) } },
         dismissButton = { TextButton(onClick = { deleteId = null }) { Text(stringResource(R.string.vlm_cancel)) } }) }
-    if (meteredModel != null) AlertDialog(onDismissRequest = { meteredModel = null },
+    if (meteredModel != null) CameraAdaptiveAlertDialog(onDismissRequest = { meteredModel = null },
         modifier = Modifier.testTag("vlm_market_mobile_confirmation"),
         title = { Text(stringResource(R.string.vlm_market_mobile_title)) },
         text = { Text(stringResource(R.string.vlm_market_mobile_body)) },

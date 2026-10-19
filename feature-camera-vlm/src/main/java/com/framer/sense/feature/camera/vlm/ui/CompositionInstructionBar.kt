@@ -19,6 +19,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.getValue
@@ -45,16 +46,19 @@ import com.framer.sense.feature.camera.vlm.R
 /** 原生键盘单独接收输入；相机区域的外部点击只收起编辑区，不穿透到拍照等控件。 */
 @Composable
 internal fun CompositionInstructionOverlay(state: VlmUiState, onEvent: (VlmIntent) -> Unit, modifier: Modifier = Modifier) {
-    Box(modifier.imePadding()) {
-        if (state.instructionEditorVisible) {
-            Box(Modifier.matchParentSize().testTag("vlm_ai_instruction_dismiss")
-                .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null,
-                    onClickLabel = stringResource(R.string.vlm_ai_instruction_dismiss)) {
-                    onEvent(VlmIntent.InstructionEditorVisible(false))
-                })
-        }
-        Box(Modifier.align(Alignment.TopCenter).padding(top = 48.dp)) {
-            CompositionInstructionBar(state, onEvent)
+    // 输入面板与原生键盘保持原固定方向，内部删除图标也随面板保持不动。
+    CompositionLocalProvider(LocalCameraIconAngle provides 0f) {
+        Box(modifier.imePadding()) {
+            if (state.instructionEditorVisible) {
+                Box(Modifier.matchParentSize().testTag("vlm_ai_instruction_dismiss")
+                    .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null,
+                        onClickLabel = stringResource(R.string.vlm_ai_instruction_dismiss)) {
+                        onEvent(VlmIntent.InstructionEditorVisible(false))
+                    })
+            }
+            Box(Modifier.align(Alignment.TopCenter).padding(top = 48.dp)) {
+                CompositionInstructionBar(state, onEvent)
+            }
         }
     }
 }
@@ -147,7 +151,8 @@ private fun InstructionChoices(state: VlmUiState, onEvent: (VlmIntent) -> Unit) 
                         style = MaterialTheme.typography.bodyMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
                     IconButton(enabled = enabled, onClick = { onEvent(VlmIntent.DeleteInstructionHistory(text)) },
                         modifier = Modifier.testTag("vlm_ai_history_delete_$index")) {
-                        Icon(Icons.Default.DeleteOutline, stringResource(R.string.vlm_ai_instruction_delete_history), tint = Color.White.copy(alpha = .8f))
+                        Icon(Icons.Default.DeleteOutline, stringResource(R.string.vlm_ai_instruction_delete_history),
+                            tint = Color.White.copy(alpha = .8f), modifier = Modifier.cameraIconRotation())
                     }
                 }
             }
