@@ -35,7 +35,7 @@ class ScanCollector(val session: ScanSession) {
     @Synchronized fun frames(): List<ScanFrame> = retained.toList()
     @Synchronized fun add(frame: ScanFrame, duplicateId: String?): ScanFrame? {
         require(frame.scanId == session.id)
-        val duplicate = retained.firstOrNull { it.id == duplicateId }
+        val duplicate = retained.firstOrNull { it.id == duplicateId && it.config.orientation.deviceRotation == frame.config.orientation.deviceRotation }
         if (duplicate != null && (duplicate.preferred || frame.quality <= duplicate.quality * 1.05f)) return frame
         val replacement = duplicate ?: if (retained.size >= ScanLimits.MAX_FRAMES)
             retained.filterNot { it.preferred }.minByOrNull { old ->
@@ -70,7 +70,8 @@ class ScanCollector(val session: ScanSession) {
 
 private fun viewDistance(a: ScanFrame, b: ScanFrame): Float {
     val x = a.pose; val y = b.pose
-    return if (x?.heading != null && y?.heading != null && x.basisId == y.basisId)
+    val orientationDistance = if (a.config.orientation.deviceRotation == b.config.orientation.deviceRotation) 0f else 90f
+    return orientationDistance + if (x?.heading != null && y?.heading != null && x.basisId == y.basisId)
         hypot(angleDelta(x.heading, y.heading), x.pitch - y.pitch)
     else (abs(a.receivedNs - b.receivedNs) / 1_000_000_000f).coerceAtMost(180f)
 }

@@ -19,19 +19,21 @@ import androidx.compose.ui.semantics.semantics
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
+import com.framer.sense.feature.camera.vlm.model.PhotoOrientation
 
 internal val LocalCameraIconAngle = compositionLocalOf { 0f }
 internal val CameraIconDegrees = SemanticsPropertyKey<Float>("CameraIconDegrees")
 
-/** 页面保持进入时的方向，设备方向只驱动控件内容的四档转向；退出时恢复宿主原有方向策略。 */
+/** 页面保持进入时的方向；四档方向驱动控件内容并上报采集方向，退出恢复宿主策略。 */
 @Composable
-internal fun CameraIconRotationScope(content: @Composable () -> Unit) {
+internal fun CameraIconRotationScope(onOrientation: (PhotoOrientation) -> Unit = {}, content: @Composable () -> Unit) {
     val context = LocalContext.current
     val view = LocalView.current
     val lifecycle = LocalLifecycleOwner.current.lifecycle
     val pageRotation = remember { view.display?.rotation ?: Surface.ROTATION_0 }
     val activity = remember(context) { context.cameraHostActivity() }
     var angle by remember { mutableFloatStateOf(0f) }
+    val latestOrientation by rememberUpdatedState(onOrientation)
 
     DisposableEffect(activity) {
         val previous = activity?.requestedOrientation
@@ -40,9 +42,16 @@ internal fun CameraIconRotationScope(content: @Composable () -> Unit) {
         onDispose { if (previous != null) activity?.requestedOrientation = previous }
     }
     DisposableEffect(context, lifecycle, pageRotation) {
+        latestOrientation(PhotoOrientation(pageRotation, pageRotation))
         val tracker = CameraIconAngle(pageRotation)
         val listener = object : OrientationEventListener(context.applicationContext) {
-            override fun onOrientationChanged(orientation: Int) { angle = tracker.update(orientation) }
+            override fun onOrientationChanged(orientation: Int) {
+                val next = tracker.update(orientation)
+                if (next != angle) {
+                    angle = next
+                    latestOrientation(PhotoOrientation((pageRotation + next.toInt() / 90) % 4, pageRotation))
+                }
+            }
         }
         fun updateListening() {
             if (lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED) && listener.canDetectOrientation()) listener.enable()

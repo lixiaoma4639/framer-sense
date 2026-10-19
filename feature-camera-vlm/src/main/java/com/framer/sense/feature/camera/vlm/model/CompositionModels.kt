@@ -152,7 +152,9 @@ val VlmJson = Json { encodeDefaults = true; explicitNulls = true }
     val currentZoom: Float,
     val imagePath: String,
     val modelImagePath: String,
-    @kotlinx.serialization.Transient val arBinding: PhotoViewBinding? = null
+    @kotlinx.serialization.Transient val arBinding: PhotoViewBinding? = null,
+    /** 仅供 App 把转正照片映回固定预览；不进入模型网关协议。 */
+    @kotlinx.serialization.Transient val orientation: PhotoOrientation = PhotoOrientation()
 )
 @Serializable data class CameraCapabilities(
     val minZoom: Float = 1f,

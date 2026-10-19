@@ -138,7 +138,7 @@ internal fun ArCameraSurface(controller: VlmCameraController, state: VlmUiState,
     SideEffect { ar.update(ArSharedCameraController.Request(target, state.scanSession?.startedNs?.takeIf { state.stage == VlmStage.SCANNING },
         state.cameraReady && (state.stage == VlmStage.SCANNING && !state.scanProgress.paused || live && target != null),
         plan, plan != null && (plan.viewBinding == null || state.background.status != BackgroundStatus.SEARCHING),
-        state.requiresLivePreview)) }
+        state.requiresLivePreview, state.scene?.orientation ?: state.photoOrientation)) }
     AndroidView(modifier = modifier.clipToBounds(), factory = { ctx -> ArPreviewSurfaceView(ctx).apply {
         view = this
         setZOrderOnTop(false)

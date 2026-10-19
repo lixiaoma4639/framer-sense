@@ -20,7 +20,8 @@ object ScanLimits {
 @Serializable data class ScanCameraConfig(val version: Int, val rotation: Int, val zoom: Float,
     val crop: CropRect, val realtimeTimestamp: Boolean,
     val arSessionId: String? = null, val cameraIntrinsics: List<Float> = emptyList(),
-    val arCameraPose: List<Float> = emptyList())
+    val arCameraPose: List<Float> = emptyList(),
+    val orientation: PhotoOrientation = PhotoOrientation())
 data class ScanSession(val id: String, val startedNs: Long, val endedNs: Long? = null)
 data class ScanFrame(val id: String, val scanId: String, val timestampNs: Long, val receivedNs: Long,
     val config: ScanCameraConfig, val pose: ScanPose?, val quality: Float, val scene: SceneSnapshot,

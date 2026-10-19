@@ -82,6 +82,7 @@ class VlmCameraViewModel @Inject constructor(
                 val scene = s.scene ?: continue
                 if (s.ar.source == com.framer.sense.feature.camera.vlm.ar.ArSource.SHARED_CAMERA && s.ar.tracking in listOf(com.framer.sense.feature.camera.vlm.ar.ArTrackingState.LOST, com.framer.sense.feature.camera.vlm.ar.ArTrackingState.PAUSED)) continue
                 if (!foreground || s.photoSample != null || sample.receivedNs < foregroundSinceNs || s.stage != VlmStage.LIVE || sample.targetId != guidanceTarget(plan) || sample.config.version != s.cameraConfigVersion) continue
+                if (sample.config.orientation.deviceRotation != s.photoOrientation.deviceRotation) continue
                 val token = requestToken
                 val epoch = guidanceEpoch
                 try {
@@ -207,6 +208,13 @@ class VlmCameraViewModel @Inject constructor(
      */
     fun onIntent(intent: VlmIntent) {
         when (intent) {
+            is VlmIntent.PhotoOrientationChanged -> {
+                if (intent.orientation == _state.value.photoOrientation) return
+                // 方向不是相机重绑：保留扫描、已冻结照片、请求令牌及生成结果。
+                guidanceEpoch++
+                sessions.resetReference()
+                _state.update { it.copy(photoOrientation = intent.orientation, background = BackgroundGuidance()) }
+            }
             VlmIntent.OpenPhotoSample -> if (!busy() && !_state.value.settingsVisible &&
                 _state.value.stage in listOf(VlmStage.LIVE, VlmStage.FROZEN, VlmStage.READY)) requestSample(ExpressionId.SMILE)
             VlmIntent.ClosePhotoSample -> closeSample()
@@ -724,7 +732,7 @@ class VlmCameraViewModel @Inject constructor(
         if (event.token != requestToken) { event.bitmap.recycle(); return }
         work = viewModelScope.launch {
             try {
-                val saved = snapshots.save(event.bitmap, event.zoom)
+                val saved = snapshots.save(event.bitmap, event.zoom, event.orientation)
                 val scene = saved.copy(arBinding = event.arConfig?.let { PhotoViewBinding("ar:${it.arSessionId}", saved.id, it.version, it.arSessionId) })
                 if (event.token == requestToken) {
                     _state.update { it.copy(scene = scene, stage = VlmStage.FROZEN, result = null, diagnostics = null, previews = emptyMap(), reference = null, selectedId = null, fromImportedImage = false, directorProgress = null, facePreview = null, availableActions = emptyMap(), availableExpressions = emptyMap()) }

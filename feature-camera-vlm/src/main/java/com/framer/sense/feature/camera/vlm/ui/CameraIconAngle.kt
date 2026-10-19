@@ -2,7 +2,7 @@ package com.framer.sense.feature.camera.vlm.ui
 
 import kotlin.math.abs
 
-/** 将设备方向归为四档，只计算控件相对进入页面时的转角，不参与相机或图片坐标计算。 */
+/** 将设备方向归为四档；控件和采集共用相同档位，避免各自跨档的时机不同。 */
 internal class CameraIconAngle(private val pageRotation: Int) {
     private var deviceRotation = pageRotation
     var degrees: Float = 0f

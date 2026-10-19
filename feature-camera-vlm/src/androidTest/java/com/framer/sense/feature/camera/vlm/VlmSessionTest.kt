@@ -22,6 +22,82 @@ import java.util.UUID
 
 /** 验证相机事件门控，不调用摄像头、网络、GPU 或原生模型。 */
 class VlmSessionTest {
+    @Test fun turningDuringGenerationPreservesCapturedOrientationAndRenderSize() = runBlocking {
+        withContext(Dispatchers.Main) {
+            val entered = CompletableDeferred<Unit>()
+            val released = CompletableDeferred<Unit>()
+            val captured = PhotoOrientation(1, 0)
+            val sizes = mutableListOf<Pair<Int, Int>>()
+            val provider = object : VisionModelProvider {
+                override suspend fun step(call: ModelCall): StepReply {
+                    assertEquals(captured, call.input.scene.orientation)
+                    assertEquals(80, call.input.scene.width); assertEquals(60, call.input.scene.height)
+                    entered.complete(Unit); released.await()
+                    return reply(call.input.scene.id)
+                }
+            }
+            val renderer = object : AvatarRenderer {
+                override suspend fun render(plan: CompositionPlan, width: Int, height: Int, warmth: Float, brightness: Float): AvatarPreview {
+                    sizes += width to height
+                    return AvatarPreview(Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888),
+                        CropRect(.4f, .5f, .6f, .92f), plan.avatar.copy(projectionCalibrated = true))
+                }
+            }
+            val vm = viewModel(provider = provider, renderer = renderer)
+            val events = mutableListOf<VlmEffect>()
+            val listener = launch(start = CoroutineStart.UNDISPATCHED) { vm.effects.collect { events += it } }
+            try {
+                vm.onIntent(VlmIntent.PhotoOrientationChanged(captured))
+                val token = startGenerating(vm, events)
+                val epoch = vm.state.value.cameraEpoch
+                vm.onIntent(VlmIntent.FrameReady(token, Bitmap.createBitmap(80, 60, Bitmap.Config.ARGB_8888), 1f,
+                    orientation = captured))
+                withTimeout(5_000) { entered.await() }
+                listOf(2, 3, 0).forEach { vm.onIntent(VlmIntent.PhotoOrientationChanged(PhotoOrientation(it, 0))) }
+                assertEquals(VlmStage.GENERATING, vm.state.value.stage)
+                assertEquals(captured, vm.state.value.scene!!.orientation)
+                assertEquals(epoch, vm.state.value.cameraEpoch)
+                released.complete(Unit)
+                val ready = withTimeout(5_000) { vm.state.first { it.stage == VlmStage.READY } }
+                assertTrue(sizes.isNotEmpty()); assertTrue(sizes.all { it == (80 to 60) })
+                assertTrue(ready.previews.isNotEmpty())
+                assertTrue(ready.previews.values.all { it.avatar.width == 80 && it.avatar.height == 60 })
+                assertEquals(captured, ready.scene!!.orientation)
+                assertEquals(1, events.filterIsInstance<VlmEffect.Freeze>().size)
+            } finally { released.complete(Unit); listener.cancel(); vm.onLeave() }
+        }
+    }
+
+    @Test fun mixedOrientationScanDoesNotRestartOrDiscardEarlierFrames() = runBlocking {
+        withContext(Dispatchers.Main) {
+            val vm = viewModel()
+            try {
+                vm.onIntent(VlmIntent.CameraReady(CameraCapabilities(1f, 3f)))
+                vm.onIntent(VlmIntent.CameraConfigured(7)); vm.onIntent(VlmIntent.StartScan)
+                val started = withTimeout(5_000) { vm.state.first { it.scanSession != null } }
+                val scan = started.scanSession!!
+                listOf(0, 1, 3, 2).forEachIndexed { index, rotation ->
+                    val direction = PhotoOrientation(rotation, 0)
+                    vm.onIntent(VlmIntent.PhotoOrientationChanged(direction))
+                    val buffer = ByteArray(64 * 48 * 3 / 2) { if (it < 64 * 48) 100 else 128.toByte() }
+                    vm.onIntent(VlmIntent.AnalysisReceived(com.framer.sense.feature.camera.vlm.scan.AnalysisSample(
+                        scan.id, 1, android.os.SystemClock.elapsedRealtimeNanos(),
+                        ScanCameraConfig(7, direction.uprightDegrees(90), 1f, CropRect(), false, orientation = direction),
+                        null, 64, 48, buffer)))
+                    val current = withTimeout(10_000) { vm.state.first { it.scanProgress.frames == index + 1 } }
+                    assertEquals(scan.id, current.scanSession!!.id)
+                    assertEquals(started.cameraEpoch, current.cameraEpoch)
+                    assertEquals(7, current.cameraConfigVersion)
+                    assertEquals(VlmStage.SCANNING, current.stage)
+                }
+                // 后台中断沿用已有“保留扫描待人工分析”，避免测试访问真实选景模型。
+                vm.onIntent(VlmIntent.CameraForeground(false)); vm.onIntent(VlmIntent.StopScan)
+                val done = withTimeout(10_000) { vm.state.first { it.stage == VlmStage.SCAN_REVIEW } }
+                assertEquals(listOf(0, 1, 3, 2), done.scanSnapshot!!.frames.map { it.scene.orientation.deviceRotation })
+            } finally { vm.onIntent(VlmIntent.CancelScan); vm.onLeave() }
+        }
+    }
+
     @Test fun recommendationEditsAndHistorySelectionHaveDistinctRecordingRules() = runBlocking {
         withContext(Dispatchers.Main) {
             val vm = viewModel()

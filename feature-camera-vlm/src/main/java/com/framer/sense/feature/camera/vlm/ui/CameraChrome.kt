@@ -182,10 +182,14 @@ internal fun Controls(state: VlmUiState, onEvent: (VlmIntent) -> Unit, importIma
         if (state.stage in listOf(VlmStage.READY, VlmStage.LIVE) && state.result != null && state.compositionDetailsVisible) {
             Surface(Modifier.weight(1f, fill = false).fillMaxWidth().testTag("vlm_composition_details_panel"),
                 shape = MaterialTheme.shapes.medium) {
-                key(state.selectedId) {
-                    Column(Modifier.verticalScroll(rememberScrollState()).padding(12.dp),
-                        verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                        CompositionDetailsContent(state, onEvent)
+                CameraRotatingViewport(Modifier.fillMaxSize().testTag("vlm_composition_details_content"),
+                    preservePhotoDirection = true) {
+                    key(state.selectedId) {
+                        Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(12.dp)
+                            .testTag("vlm_composition_details_scroll"),
+                            verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                            CompositionDetailsContent(state, onEvent)
+                        }
                     }
                 }
             }
@@ -284,21 +288,29 @@ internal fun CompositionCards(state: VlmUiState, onEvent: (VlmIntent) -> Unit) {
             val preview = state.previews[plan.id]?.composite
             val imageHeight = if (landscape) 48.dp else 84.dp
             val ratio = preview?.let { it.width.toFloat() / it.height }
+                ?: state.scene?.let { it.width.toFloat() / it.height }
                 ?: state.photoPreferences.aspectRatio.ratio(landscape)
+            val photoDegrees = state.scene?.orientation?.previewDegrees ?: 0
+            val displayedRatio = if (photoDegrees % 180 == 0) ratio else 1f / ratio
             Card(onClick = { onEvent(VlmIntent.Select(plan.id)) }, enabled = !state.operationBusy,
                 shape = RectangleShape,
                 colors = CardDefaults.cardColors(containerColor = Color(0xFF202126)),
                 modifier = Modifier.border(if (plan.id == state.selectedId) 2.dp else 0.dp, Color.White, RectangleShape)
                     .testTag("vlm_composition_${plan.id}")) {
-                Box(Modifier.padding(2.dp).size(imageHeight * ratio, imageHeight)) {
-                    preview?.let {
-                        Image(it.asImageBitmap(), stringResource(R.string.vlm_selected_composition),
-                            Modifier.fillMaxSize(), contentScale = ContentScale.Fit)
+                Box(Modifier.padding(2.dp).size(imageHeight * displayedRatio, imageHeight)) {
+                    CameraRotatingViewport(Modifier.fillMaxSize().testTag("vlm_composition_content_${plan.id}"),
+                        preservePhotoDirection = true) {
+                        preview?.let {
+                            CameraPhotoViewport(photoDegrees, Modifier.fillMaxSize()) {
+                                Image(it.asImageBitmap(), stringResource(R.string.vlm_selected_composition),
+                                    Modifier.fillMaxSize(), contentScale = ContentScale.Fit)
+                            }
+                        }
+                        Text(stringResource(R.string.vlm_composition_plan_number, index + 1), color = Color.White,
+                            modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth()
+                                .background(Color.Black.copy(alpha = .55f)).padding(2.dp),
+                            maxLines = 1, style = MaterialTheme.typography.labelSmall)
                     }
-                    Text(stringResource(R.string.vlm_composition_plan_number, index + 1), color = Color.White,
-                        modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth()
-                            .background(Color.Black.copy(alpha = .55f)).padding(2.dp),
-                        maxLines = 1, style = MaterialTheme.typography.labelSmall)
                 }
             }
         }
@@ -356,7 +368,8 @@ private fun CompositionDetailsContent(state: VlmUiState, onEvent: (VlmIntent) ->
             plan.uncertainties.filterNot { it == com.framer.sense.feature.camera.vlm.agent.CompositionIntentMapper.SCENE_FALLBACK_MARKER }
                 .forEach { Text(it, style = MaterialTheme.typography.bodySmall) }
             OutlinedTextField(state.instruction, { onEvent(VlmIntent.InstructionChanged(it)) }, enabled = !state.operationBusy,
-                label = { Text(stringResource(R.string.vlm_director_revision_request)) }, modifier = Modifier.fillMaxWidth(), maxLines = 3)
+                label = { Text(stringResource(R.string.vlm_director_revision_request)) },
+                modifier = Modifier.fillMaxWidth().testTag("vlm_director_revision_input"), maxLines = 3)
             Button(onClick = { onEvent(VlmIntent.CompositionDetailsVisible(false)); onEvent(VlmIntent.Revise) }, enabled = !state.operationBusy && state.instruction.isNotBlank()) {
                 Text(stringResource(R.string.vlm_director_revise))
             }

@@ -53,7 +53,9 @@ class PreviewStore(private val renderer: AvatarRenderer) : PreviewInspector {
      */
     suspend fun preview(scene: SceneSnapshot, plan: CompositionPlan): PlanPreview = mutex.withLock {
         val resolved = renderer.resolve(plan)
-        val key = key(scene.id, resolved)
+        // 图片方向和尺寸属于冻结来源，不取当前设备方向，也不能与旧方向的缓存混用。
+        val sceneKey = "${scene.id}:${scene.width}x${scene.height}:${scene.orientation}"
+        val key = key(sceneKey, resolved)
         cache[key]?.let {
             // 描述不影响渲染缓存，但必须跟随本次方案，不能被旧缓存方案覆盖。
             return@withLock it.copy(appliedPlan = it.appliedPlan.copy(sceneDescription = resolved.sceneDescription))
@@ -86,7 +88,7 @@ class PreviewStore(private val renderer: AvatarRenderer) : PreviewInspector {
             val result = PlanPreview(composite, human.bitmap, human.bounds, applied)
             cache[key] = result
             // 请求和实际采用值共享同一张图，避免提交校准结果后再渲染、再次缩小。
-            cache[key(scene.id, applied)] = result
+            cache[key(sceneKey, applied)] = result
             while (cache.size > 6) cache.remove(cache.keys.first())
             result
         } finally { background.recycle() }

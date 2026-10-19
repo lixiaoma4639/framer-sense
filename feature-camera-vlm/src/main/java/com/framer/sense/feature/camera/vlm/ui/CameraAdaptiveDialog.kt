@@ -37,8 +37,8 @@ internal val CameraDialogDegrees = SemanticsPropertyKey<Float>("CameraDialogDegr
 
 /**
  * Compose UI 1.10.3 的新速度算法使用 originalEventPosition（窗口坐标），没有转换到
- * 旋转后的内容坐标，导致拖动正确但松手惯性方向错误。弹窗存续时使用按局部位移累计的
- * 兼容算法；最后一个弹窗退出后恢复原值。计数处理嵌套弹窗及其任意销毁顺序。
+ * 旋转后的内容坐标，导致拖动正确但松手惯性方向错误。旋转视口存续时使用局部位移累计的
+ * 兼容算法；最后一个视口退出后恢复原值。计数处理弹窗／面板及其任意销毁顺序。
  * 升级 Compose 后需核对 DefaultVelocityTracker.addPointerInputChangeWithFix 再移除此兼容。
  */
 @OptIn(ExperimentalComposeUiApi::class)
@@ -58,15 +58,17 @@ private object CameraDialogVelocityCompatibility {
     }
 }
 
-/** 仅转动弹窗自己的内容坐标，不修改 Activity 方向和背后的预览。 */
+/** 在原区域内转动弹窗／面板内容，不修改 Activity 方向和背后的预览。 */
 @Composable
-internal fun CameraRotatingViewport(modifier: Modifier = Modifier, content: @Composable BoxScope.() -> Unit) {
+internal fun CameraRotatingViewport(modifier: Modifier = Modifier, preservePhotoDirection: Boolean = false,
+    content: @Composable BoxScope.() -> Unit) {
     DisposableEffect(Unit) {
         CameraDialogVelocityCompatibility.acquire()
         onDispose { CameraDialogVelocityCompatibility.release() }
     }
     val target = LocalCameraDialogAngle.current ?: LocalCameraIconAngle.current
     val angle = remember { Animatable(target) }
+    val photoRotation = remember(target) { CameraPhotoParentRotation(target.toInt()) { angle.value } }
     LaunchedEffect(target) {
         val current = angle.value
         angle.animateTo(current + shortestIconRotation(current, target), tween(300, easing = FastOutSlowInEasing))
@@ -85,6 +87,7 @@ internal fun CameraRotatingViewport(modifier: Modifier = Modifier, content: @Com
         }
         Layout(modifier = Modifier.fillMaxSize().semantics { this[CameraDialogDegrees] = angle.value }, content = {
             CompositionLocalProvider(LocalConfiguration provides configuration,
+                LocalCameraPhotoParentRotation provides if (preservePhotoDirection) photoRotation else null,
                 LocalCameraDialogAngle provides target, LocalCameraIconAngle provides 0f) {
                 Box(Modifier.fillMaxSize(), content = content)
             }

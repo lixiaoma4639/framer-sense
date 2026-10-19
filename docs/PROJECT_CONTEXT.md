@@ -154,6 +154,10 @@ MyApplication
 
 2026-10-19 弹窗滚动兼容：Compose UI 1.10.3 的 `DefaultVelocityTracker.addPointerInputChangeWithFix` 使用窗口 `originalEventPosition`，旋转层内拖动与松手速度不在同一坐标系。`CameraRotatingViewport` 存续期间将全局实验开关 `VelocityTrackerAddPointsFix` 暂设为 false，使用局部位移累计速度；按存活视口计数，最后一个退出时恢复进入前的值，避免嵌套弹窗提前恢复。升级 Compose 时需核对上游实现再决定移除此兼容；不永久修改全局配置。设备回归增加普通滚动与懒列表四方向真实拖动／惯性延续／静置位置，以及开关恢复测试，未运行。
 
+2026-10-19 照片方向第3步：四档方向监听同时上报 `PhotoOrientationChanged`，只更新采集方向与背景确认，不改变主取景布局、窗口方向、相机 epoch、扫描会话或生成令牌。`PhotoOrientationHistory` 保留有界历史，REALTIME 分析帧按曝光时间取方向，未知时钟按接收时间取；CameraX／AR 保持原预览几何，先按原视口裁切，再按该帧握持方向转正。`ScanCameraConfig.orientation → SceneSnapshot.orientation` 随冻结来源保存，混合方向不互当重复帧；模型大图与缩略图像素已转正，导演和 Filament 均以选中照片的宽高／坐标生成。缓存加入照片方向及尺寸。按用户选择，结果保持拍摄时方向：`CameraPhotoViewport` 将缩略图、冻结图、整张构图和透明参考层统一映回拍摄时的固定取景坐标，不跟随之后的握持方向；内层拖动仍使用照片坐标。AR 自动落点先从构图裁切映回整张照片，再旋转到固定预览坐标，真实空间人像继续使用 AR 重力投影。普通快门保留 CameraX 原 JPEG 保存链，仅按请求开始时方向修正 EXIF，避免解码重压；AR 快门锁定 JPEG 方向及交换后的裁切比例。系统导入图片继续按自身 EXIF 转正。新增方向映射／延迟帧／混合扫描、像素与模型尺寸／预览合成、MVI 生成期间转向、固定结果与拖动映射及真实 GLB 横向输出回归代码，未执行 Gradle、Android 测试或 GPU 验证。
+
+2026-10-19 构图区域原位转正：按用户确认，三张构图卡片各自的内容和构图详情跟随当前设备四档方向，复用 `CameraRotatingViewport` 的 300ms 最短路径动画；卡片外框、排列、详情所在区域及底部操作位置保持固定，不旋转整组布局。方向变化不修改选中方案、修改要求或重建滚动状态。`preservePhotoDirection` 让内层照片抵消父层实时动画角度，照片与人像仍保持第3步拍摄方向，避免双重旋转；未生成缩略图时沿用所选照片比例。速度兼容开关按所有存活旋转视口计数，覆盖弹窗与内嵌面板，最后一个退出时恢复原值。补充 `CompositionOrientationUiTest` 与照片像素补偿回归代码，未运行 Gradle／Android 测试。
+
 2026-10-16 相机控件四方向转正：相机页使用 `SCREEN_ORIENTATION_LOCKED` 保持进入时的当前显示方向，退出恢复原方向策略；不指定横屏／竖屏、不启用 FULL_SENSOR，也不旋转整页。原布局、尺寸和按钮命中区域保持不变；返回、模型设置（含 AR 标记）、拍照设置、AI 构图、构图展开、输入历史删除图案，以及顶部取景比例标签、全部快捷变焦倍率标签在自身中心转正，其余文字保持原方向。独立 OrientationEventListener 提供握持方向，归为 0°／90°／180°／270° 四档；45° 边界增加 10° 回差防止跳向，档位之间采用最短路径的 300ms 缓入缓出动画，不逐度跟随，平放保留最近方向；前台监听、后台停止，不受系统自动旋转开关影响。CameraX、AR、采集和人像渲染链路保持原实现。本次已实现图标旋转并补充自动化测试代码，仅进行源码检查，未执行 Gradle／Android 测试；弹窗适配见第2步，照片／人像方向一致性留第3步。
 
 
@@ -357,7 +361,7 @@ bash feature-camera-vlm/scripts/prepare_mnn.sh
 
 ### P3＋P4 数据流、依赖与验证补充
 
-拍照仍采用 MVI：`CameraX ImageAnalysis → 独立 YUV 缓冲 → 有界串行 ScanCollector/PhotoSessionController → 不可变 ScanSnapshot → ScanViewAgent → DirectorAgent → ResolvedPhotoSpec/预览 → 背景确认 → 人像参考 → 手动拍照`。扫描期关闭构图/渲染/拍照/倍率调整；后台中断保留帧，旋转重绑建立新配置。只有 REALTIME 时间源才与光轴姿态关联。扫描来源只在 App 内保存，统一校验最终方案、预览缓存和应用参考。
+拍照仍采用 MVI：`CameraX ImageAnalysis → 独立 YUV 缓冲 → 有界串行 ScanCollector/PhotoSessionController → 不可变 ScanSnapshot → ScanViewAgent → DirectorAgent → ResolvedPhotoSpec/预览 → 背景确认 → 人像参考 → 手动拍照`。扫描期关闭构图/渲染/拍照/倍率调整；后台中断保留帧。握持方向切换不重绑或创建新配置；真正的模式／取景比例／窗口配置变化仍建立新配置。只有 REALTIME 时间源才与光轴姿态关联。扫描来源只在 App 内保存，统一校验最终方案、预览缓存和应用参考。
 
 每个扫描的云端请求共同限制 6 次调用、12 MiB 上传，云端选景累计两次；离线选景和构图不读取或消耗这些额度，即使云端预算耗尽，离线仍可继续。云端最多 8 张/3 MiB；强制离线使用 `OfflineScanViewAgent → MnnProvider.compareViews → MnnNative.inferImages`，最多 4 张独立视觉输入，一次短协议选景后自动冻结并调用一次原离线三构图，不查询网关、零上传。4 张是应用限制；JPEG 副本长边最多 448，保留到原生任务退出后删除，编号严格绑定本次提交帧。旧网关/未声明多图保留主动展开的手动选帧与 v1 构图。背景 ORB/RANSAC 每秒最多 5 次，不上传；自动和人工确认分别记录，未验收真人姿势。P5/P6 尚未实施。
 

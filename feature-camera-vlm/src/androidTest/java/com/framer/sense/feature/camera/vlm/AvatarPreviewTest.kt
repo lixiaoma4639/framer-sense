@@ -13,6 +13,22 @@ class AvatarPreviewTest {
     private fun plan() = CompositionPlan("p1", "全身", ShotType.FULL, CropRect(), 1f,
         AvatarPlacement(height = .8f, poseDirective = AvatarPoseDirective()), "自然站立", "背景保留")
 
+    /** 需 ARM64 真机/OpenGL；横向输出中的站立人像仍沿照片纵轴，不能侧倒 90°。 */
+    @Test fun realGlbStaysUprightInPortraitAndLandscapePhotoSizes() = runBlocking {
+        val renderer = FilamentAvatarRenderer(InstrumentationRegistry.getInstrumentation().targetContext)
+        val resolved = renderer.resolve(plan())
+        listOf(384 to 512, 512 to 384, 288 to 512, 512 to 288).forEach { (width, height) ->
+            val rendered = renderer.render(resolved, width, height, 0f, .6f)
+            try {
+                assertEquals(width, rendered.bitmap.width); assertEquals(height, rendered.bitmap.height)
+                val b = rendered.bounds
+                assertTrue("${width}x$height 人像应直立于照片纵轴",
+                    (b.bottom - b.top) * height > (b.right - b.left) * width)
+                assertTrue(b.top >= -.02f && b.bottom <= 1.02f)
+            } finally { rendered.bitmap.recycle() }
+        }
+    }
+
     @Test fun calibratedPreviewIsReusedAndInspectorReturnsAppliedPlacement() = runBlocking {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         val snapshots = SnapshotStore(context)

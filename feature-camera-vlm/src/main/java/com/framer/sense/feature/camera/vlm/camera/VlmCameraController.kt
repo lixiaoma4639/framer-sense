@@ -26,8 +26,12 @@ import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.asExecutor
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
+
+data class FrozenCameraFrame(val bitmap: Bitmap, val zoom: Float,
+    val orientation: PhotoOrientation, val arConfig: ScanCameraConfig? = null)
 
 /** 只负责平台相机资源；UI 销毁时必须解绑，不持有 ViewModel。 */
 class VlmCameraController(private val context: Context) {
@@ -60,7 +64,13 @@ class VlmCameraController(private val context: Context) {
         }
     }
     private var closingCameraInfo: CameraInfo? = null
-    fun installAr(value: com.framer.sense.feature.camera.vlm.ar.ArSharedCameraController) { check(ar == null && camera == null); ar = value }
+    fun installAr(value: com.framer.sense.feature.camera.vlm.ar.ArSharedCameraController) {
+        check(ar == null && camera == null)
+        value.photoOrientationAt = orientations::at
+        ar = value
+    }
+    private val orientations = PhotoOrientationHistory()
+    fun orientation(value: PhotoOrientation) { orientations.record(SystemClock.elapsedRealtimeNanos(), value) }
     private val ownershipScope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + Dispatchers.Main.immediate)
     fun removeAr(value: com.framer.sense.feature.camera.vlm.ar.ArSharedCameraController) {
         if (ar === value) ownershipScope.launch { value.closeAndAwait(); if (ar === value) ar = null }
@@ -167,8 +177,10 @@ class VlmCameraController(private val context: Context) {
                     val w = image.width; val h = image.height
                     val bytes = Yuv420Copy.toNv21(w, h, image.planes.map { Yuv420Copy.Plane(it.buffer, it.rowStride, it.pixelStride) })
                     val r = image.cropRect
-                    val config = ScanCameraConfig(version, image.imageInfo.rotationDegrees, camera?.cameraInfo?.zoomState?.value?.zoomRatio ?: initialZoom,
-                        CropRect(r.left.toFloat() / w, r.top.toFloat() / h, r.right.toFloat() / w, r.bottom.toFloat() / h), realtime)
+                    val orientation = orientations.at(if (realtime) captured else received)
+                    val config = ScanCameraConfig(version, orientation.uprightDegrees(image.imageInfo.rotationDegrees), camera?.cameraInfo?.zoomState?.value?.zoomRatio ?: initialZoom,
+                        CropRect(r.left.toFloat() / w, r.top.toFloat() / h, r.right.toFloat() / w, r.bottom.toFloat() / h), realtime,
+                        orientation = orientation)
                     sample = AnalysisSample(targetId, captured, received, config, if (realtime) poses.at(captured) else null, w, h, bytes)
                 } catch (failure: Exception) {
                     android.util.Log.w("VlmCamera", "分析帧复制失败", failure)
@@ -352,10 +364,16 @@ class VlmCameraController(private val context: Context) {
     }
 
     /** 拍摄一帧供冻结，不写入系统相册；无参数。
-     * @return 已按预览裁剪并转正的独立 Bitmap 与拍摄倍率，由调用方回收 Bitmap。
+     * @return 按固定视口裁切、按拍摄方向转正的独立 Bitmap、倍率及方向，由调用方回收 Bitmap。
      */
-    suspend fun freeze(requestedZoom: Float? = null): Pair<Bitmap, Float> {
-        ar?.let { return it.freeze() }
+    suspend fun freeze(requestedZoom: Float? = null): FrozenCameraFrame {
+        ar?.let {
+            val (bitmap, zoom) = it.freeze()
+            val config = requireNotNull(it.lastFrozenConfig)
+            return FrozenCameraFrame(bitmap, zoom, config.orientation, config)
+        }
+        // 在请求开始时锁定方向；等待变焦或 JPEG 回调期间再转手机不能改变这次照片。
+        val orientation = orientations.at(SystemClock.elapsedRealtimeNanos())
         val active = capture ?: error("相机尚未准备完成")
         flushZoom(requestedZoom)
         awaitZoom()
@@ -369,11 +387,11 @@ class VlmCameraController(private val context: Context) {
                         val decoded = image.toBitmap()
                         val rect = image.cropRect
                         val cropped = Bitmap.createBitmap(decoded, rect.left, rect.top, rect.width(), rect.height())
-                        val matrix = Matrix().apply { postRotate(image.imageInfo.rotationDegrees.toFloat()) }
+                        val matrix = Matrix().apply { postRotate(orientation.uprightDegrees(image.imageInfo.rotationDegrees).toFloat()) }
                         val upright = Bitmap.createBitmap(cropped, 0, 0, cropped.width, cropped.height, matrix, true)
                         if (cropped !== decoded && cropped !== upright) cropped.recycle()
                         if (decoded !== upright) decoded.recycle()
-                        continuation.resume(upright to ratio) { _, abandoned, _ -> abandoned.first.recycle() }
+                        continuation.resume(FrozenCameraFrame(upright, ratio, orientation)) { _, abandoned, _ -> abandoned.bitmap.recycle() }
                     } catch (e: Exception) {
                         if (continuation.isActive) continuation.resumeWithException(e)
                     } finally { image.close() }
@@ -392,6 +410,7 @@ class VlmCameraController(private val context: Context) {
     suspend fun capturePhoto(requestedZoom: Float? = null): Uri? {
         ar?.let { return it.capturePhoto() }
         val active = capture ?: error("相机尚未准备完成")
+        val orientation = orientations.at(SystemClock.elapsedRealtimeNanos())
         flushZoom(requestedZoom)
         awaitZoom()
         val values = ContentValues().apply {
@@ -400,18 +419,28 @@ class VlmCameraController(private val context: Context) {
             if (Build.VERSION.SDK_INT >= 29) put(MediaStore.Images.Media.RELATIVE_PATH, "Pictures/FramerSense")
         }
         val options = ImageCapture.OutputFileOptions.Builder(context.contentResolver, MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values).build()
-        return suspendCancellableCoroutine { continuation ->
+        val uri = suspendCancellableCoroutine<Uri?> { continuation ->
             active.takePicture(options, executor, object : ImageCapture.OnImageSavedCallback {
-                /** 保存完成后回传 URI。@param outputFileResults CameraX 保存结果。 */
                 override fun onImageSaved(outputFileResults: ImageCapture.OutputFileResults) {
                     if (continuation.isActive) continuation.resume(outputFileResults.savedUri)
                 }
-                /** 保存失败后回传错误。@param exception 相机或存储异常。 */
                 override fun onError(exception: ImageCaptureException) {
                     if (continuation.isActive) continuation.resumeWithException(exception)
                 }
             })
         }
+        // CameraX 继续负责 JPEG、裁切及元数据；只修正快门时的 EXIF，不解码和重压照片。
+        if (uri != null && orientation.previewDegrees != 0) {
+            withContext(Dispatchers.IO) {
+                context.contentResolver.openFileDescriptor(uri, "rw")?.use { file ->
+                    androidx.exifinterface.media.ExifInterface(file.fileDescriptor).apply {
+                        rotate(-orientation.previewDegrees)
+                        saveAttributes()
+                    }
+                } ?: error(context.getString(com.framer.sense.feature.camera.vlm.R.string.vlm_photo_orientation_failed))
+            }
+        }
+        return uri
     }
 
     /** 解绑本实例使用的相机用例；无参数，不解绑其他模块的相机资源。 */

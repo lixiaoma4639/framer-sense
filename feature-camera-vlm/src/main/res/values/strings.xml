@@ -448,4 +448,5 @@
     <string name="vlm_market_vendor_gemma">Gemma</string>
     <string name="vlm_market_vendor_gpt">GPT</string>
     <string name="vlm_market_mobile_confirm">允许本次下载</string>
+    <string name="vlm_photo_orientation_failed">无法保存照片方向，请重试。</string>
 </resources>

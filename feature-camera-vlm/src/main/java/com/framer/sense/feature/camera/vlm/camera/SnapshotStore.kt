@@ -19,7 +19,7 @@ class SnapshotStore(private val context: Context) {
      * @param zoom 拍摄该图片时的真实界面倍率。
      * @return 图片及模型缩略图的私有路径。
      */
-    suspend fun save(bitmap: Bitmap, zoom: Float): SceneSnapshot = withContext(Dispatchers.IO) {
+    suspend fun save(bitmap: Bitmap, zoom: Float, orientation: PhotoOrientation = PhotoOrientation()): SceneSnapshot = withContext(Dispatchers.IO) {
         val id = newVlmId()
         val dir = File(root, id).apply { mkdirs() }
         val display = File(dir, "scene.jpg")
@@ -30,7 +30,7 @@ class SnapshotStore(private val context: Context) {
             val small = Bitmap.createScaledBitmap(bitmap, (bitmap.width * scale).roundToInt().coerceAtLeast(1), (bitmap.height * scale).roundToInt().coerceAtLeast(1), true)
             try { model.outputStream().use { check(small.compress(Bitmap.CompressFormat.JPEG, 85, it)) } }
             finally { if (small !== bitmap) small.recycle() }
-            SceneSnapshot(id, bitmap.width, bitmap.height, zoom, display.path, model.path)
+            SceneSnapshot(id, bitmap.width, bitmap.height, zoom, display.path, model.path, orientation = orientation)
         } catch (failure: Throwable) {
             dir.deleteRecursively()
             throw failure

@@ -33,6 +33,7 @@ data class VlmUiState(
     val comparedFrames: Int = 0,
     val manualScanSelectionVisible: Boolean = false,
     val cameraConfigVersion: Int = 0,
+    val photoOrientation: PhotoOrientation = PhotoOrientation(),
     val background: BackgroundGuidance = BackgroundGuidance(),
     val scene: SceneSnapshot? = null,
     val settings: ModelSettings = ModelSettings(),
@@ -108,6 +109,7 @@ data class VlmUiState(
 }
 
 sealed interface VlmIntent {
+    data class PhotoOrientationChanged(val orientation: PhotoOrientation) : VlmIntent
     data class ArUpdated(val state: com.framer.sense.feature.camera.vlm.ar.ArUiState, val epoch: Int? = null) : VlmIntent
     data object OpenPhotoSample : VlmIntent
     data object ClosePhotoSample : VlmIntent
@@ -126,7 +128,8 @@ sealed interface VlmIntent {
     data class AnalysisReceived(val sample: com.framer.sense.feature.camera.vlm.scan.AnalysisSample, val epoch: Int? = null) : VlmIntent
     data object ConfirmBackground : VlmIntent
     data object StartComposition : VlmIntent
-    data class FrameReady(val token: String, val bitmap: Bitmap, val zoom: Float, val arConfig: ScanCameraConfig? = null) : VlmIntent
+    data class FrameReady(val token: String, val bitmap: Bitmap, val zoom: Float, val arConfig: ScanCameraConfig? = null,
+        val orientation: PhotoOrientation = arConfig?.orientation ?: PhotoOrientation()) : VlmIntent
     data class PlatformFailed(val token: String?, val message: String) : VlmIntent
     data class CameraReady(val capabilities: CameraCapabilities, val epoch: Int? = null) : VlmIntent
     data object CameraStopped : VlmIntent

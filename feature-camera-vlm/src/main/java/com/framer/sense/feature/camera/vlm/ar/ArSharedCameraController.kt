@@ -93,10 +93,11 @@ class ArSharedCameraController(private val context: Context,
     private fun phase(name: String) { startupStep = name; Log.i("VlmAr", "启动节点 phase=$name generation=$generation session=${sessionId.take(8)} elapsedMs=${(SystemClock.elapsedRealtimeNanos()-openStartedNs)/1_000_000}") }
 
     @Volatile var lastFrozenConfig: ScanCameraConfig? = null; private set
+    @Volatile var photoOrientationAt: (Long) -> PhotoOrientation = { PhotoOrientation() }
     @Volatile private var request: Request = Request()
     data class Request(val targetId: String? = null, val startedNs: Long? = null,
         val sampling: Boolean = false, val plan: CompositionPlan? = null, val backgroundConfirmed: Boolean = false,
-        val render: Boolean = true)
+        val render: Boolean = true, val photoOrientation: PhotoOrientation = PhotoOrientation())
     fun update(request: Request) {
         val old = this.request
         this.request = request
@@ -345,7 +346,7 @@ class ArSharedCameraController(private val context: Context,
                         } else if (wanted.plan != null) {
                             if (anchor?.trackingState == TrackingState.STOPPED) invalidateAnchor()
                             if (anchor == null && placementRetry.shouldAttempt(SystemClock.elapsedRealtimeNanos())) {
-                                val foot = ArGeometry.suggestedGround(wanted.plan)
+                                val foot = ArGeometry.suggestedGround(wanted.plan)?.let(wanted.photoOrientation::toPreview)
                                 val placed = foot?.let { place(current, it.x * width, it.y * height, false, wanted.plan) } == true
                                 if (!placed && (placementRetry.attempts == 1 || placementRetry.attempts % 5 == 0))
                                     Log.i("VlmAr", "等待地面落点 plan=$planKey attempt=${placementRetry.attempts} reason=${if (foot == null) "FOOT_OUTSIDE_VIEW" else "NO_VALID_GROUND"} screenReference=true")
@@ -417,9 +418,10 @@ class ArSharedCameraController(private val context: Context,
         val xs = listOf(corners[0], corners[2], corners[4], corners[6]); val ys = listOf(corners[1], corners[3], corners[5], corners[7])
         val crop = CropRect(xs.min().coerceIn(0f,1f), ys.min().coerceIn(0f,1f), xs.max().coerceIn(0f,1f), ys.max().coerceIn(0f,1f))
         val intrinsics = current.camera.imageIntrinsics
-        return ScanCameraConfig(configVersion, (cameraRotation - rotation * 90 + 360) % 360, 1f, crop, realtime,
+        val orientation = photoOrientationAt(if (realtime) image.timestamp else SystemClock.elapsedRealtimeNanos())
+        return ScanCameraConfig(configVersion, orientation.uprightDegrees((cameraRotation - rotation * 90 + 360) % 360), 1f, crop, realtime,
             sessionId, intrinsics.focalLength.toList() + intrinsics.principalPoint.toList() + intrinsics.imageDimensions.map(Int::toFloat),
-            if (current.camera.trackingState == TrackingState.TRACKING) current.camera.pose.translation.toList() + current.camera.pose.rotationQuaternion.toList() else emptyList())
+            if (current.camera.trackingState == TrackingState.TRACKING) current.camera.pose.translation.toList() + current.camera.pose.rotationQuaternion.toList() else emptyList(), orientation)
     }
     private fun copy(image: Image, current: Frame, target: String, now: Long): AnalysisSample {
         val w = image.width; val h = image.height
@@ -477,12 +479,16 @@ class ArSharedCameraController(private val context: Context,
         }
     }
     @Volatile private var photoViewportRatio = 3f / 4f
+    private var photoJpegRotation = 0
     @Suppress("DEPRECATION")
     private fun beginPhoto(continuation: CancellableContinuation<ByteArray>) {
         if (!continuation.isActive) return
         if (capturing || closing || !running || jpeg == null) { continuation.resumeWithException(IllegalStateException("AR_PHOTO_UNAVAILABLE")); return }
         try {
-            photoViewportRatio = width.toFloat() / height.coerceAtLeast(1)
+            val orientation = photoOrientationAt(SystemClock.elapsedRealtimeNanos())
+            val ratio = width.toFloat() / height.coerceAtLeast(1)
+            photoViewportRatio = if (orientation.previewDegrees % 180 == 0) ratio else 1f / ratio
+            photoJpegRotation = orientation.uprightDegrees((cameraRotation - rotation * 90 + 360) % 360)
             capturing = true; pendingPhoto = continuation; session?.pause(); running = false
             handler.removeCallbacks(tick); invalidateAnchor(); frame = null
             photoTimeout = Runnable { finishPhoto(null, IllegalStateException("AR_PHOTO_TIMEOUT")) }.also { handler.postDelayed(it, 15_000) }
@@ -498,7 +504,7 @@ class ArSharedCameraController(private val context: Context,
     private fun takeStill() {
         try {
             val builder = device!!.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE)
-            builder.addTarget(jpeg!!.surface); builder.set(CaptureRequest.JPEG_ORIENTATION, (cameraRotation - rotation * 90 + 360) % 360)
+            builder.addTarget(jpeg!!.surface); builder.set(CaptureRequest.JPEG_ORIENTATION, photoJpegRotation)
             captureSession!!.capture(builder.build(), object : CameraCaptureSession.CaptureCallback() {
                 override fun onCaptureFailed(session: CameraCaptureSession, request: CaptureRequest, failure: CaptureFailure) { finishPhoto(null, IllegalStateException("AR_PHOTO_CAPTURE_FAILED")) }
             }, handler)

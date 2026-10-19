@@ -162,8 +162,8 @@ fun VlmCameraScreen(
                     } else startDownload(effect)
                 }
                 is VlmEffect.Freeze -> try {
-                    val (bitmap, zoom) = controller.freeze(viewModel.state.value.zoom)
-                    onEvent(VlmIntent.FrameReady(effect.token, bitmap, zoom, controller.ar?.lastFrozenConfig))
+                    val frozen = controller.freeze(viewModel.state.value.zoom)
+                    onEvent(VlmIntent.FrameReady(effect.token, frozen.bitmap, frozen.zoom, frozen.arConfig, frozen.orientation))
                 } catch (cancel: CancellationException) { throw cancel }
                 catch (e: Exception) { onEvent(VlmIntent.PlatformFailed(effect.token, e.message ?: "无法冻结画面")) }
                 is VlmEffect.Capture -> try {
@@ -182,7 +182,10 @@ fun VlmCameraScreen(
     CameraBackHandler(state, onEvent, exitCamera)
     val safeInsets = WindowInsets.displayCutout
         .union(WindowInsets.mandatorySystemGestures).asPaddingValues()
-    CameraIconRotationScope {
+    CameraIconRotationScope(onOrientation = {
+        controller.orientation(it)
+        onEvent(VlmIntent.PhotoOrientationChanged(it))
+    }) {
         BoxWithConstraints(modifier.fillMaxSize().background(Color.Black).testTag("vlm_camera_screen").padding(safeInsets)) {
             val controlsMaxHeight = (maxHeight - 48.dp).coerceAtLeast(0.dp)
             CameraPane(state, controller, permission, { permissionLauncher.launch(Manifest.permission.CAMERA) },
@@ -293,27 +296,29 @@ private fun CameraPane(state: VlmUiState, controller: VlmCameraController, permi
                 } else if (scene != null) {
                     val preview = selected?.let { state.previews[it.id] }
                     if (preview != null) {
-                        Image(preview.composite.asImageBitmap(), stringResource(R.string.vlm_selected_composition), Modifier.fillMaxSize().testTag("vlm_selected_preview")
-                            .pointerInput(selected.id, state.stage) {
-                                if (state.stage == VlmStage.READY) awaitEachGesture {
-                                    val first = awaitFirstDown(requireUnconsumed = false)
-                                    var multiple = false
-                                    do {
-                                        val event = awaitPointerEvent()
-                                        if (event.changes.count { it.pressed } > 1) multiple = true
-                                        val change = event.changes.firstOrNull { it.id == first.id }
-                                        if (!multiple && change?.pressed == true) {
-                                            val amount = change.positionChange()
-                                            change.consume()
-                                            if (amount != androidx.compose.ui.geometry.Offset.Zero) {
-                                                val imageSize = fitCaptureViewport(size.width.toFloat(), size.height.toFloat(),
-                                                    preview.composite.width.toFloat() / preview.composite.height)
-                                                onEvent(VlmIntent.Move(amount.x / imageSize.width, amount.y / imageSize.height))
+                        CameraPhotoViewport(scene.orientation.previewDegrees, Modifier.fillMaxSize()) {
+                            Image(preview.composite.asImageBitmap(), stringResource(R.string.vlm_selected_composition), Modifier.fillMaxSize().testTag("vlm_selected_preview")
+                                .pointerInput(selected.id, state.stage) {
+                                    if (state.stage == VlmStage.READY) awaitEachGesture {
+                                        val first = awaitFirstDown(requireUnconsumed = false)
+                                        var multiple = false
+                                        do {
+                                            val event = awaitPointerEvent()
+                                            if (event.changes.count { it.pressed } > 1) multiple = true
+                                            val change = event.changes.firstOrNull { it.id == first.id }
+                                            if (!multiple && change?.pressed == true) {
+                                                val amount = change.positionChange()
+                                                change.consume()
+                                                if (amount != androidx.compose.ui.geometry.Offset.Zero) {
+                                                    val imageSize = fitCaptureViewport(size.width.toFloat(), size.height.toFloat(),
+                                                        preview.composite.width.toFloat() / preview.composite.height)
+                                                    onEvent(VlmIntent.Move(amount.x / imageSize.width, amount.y / imageSize.height))
+                                                }
                                             }
-                                        }
-                                    } while (event.changes.any { it.pressed })
-                                }
-                            }, contentScale = ContentScale.Fit)
+                                        } while (event.changes.any { it.pressed })
+                                    }
+                                }, contentScale = ContentScale.Fit)
+                        }
                     } else FrozenSceneImage(scene, Modifier.fillMaxSize())
                 }
                 if (state.stage in listOf(VlmStage.FREEZING, VlmStage.GENERATING, VlmStage.MODIFYING)) {
@@ -327,8 +332,10 @@ private fun CameraPane(state: VlmUiState, controller: VlmCameraController, permi
 /** 尚未选景时保留已保存的扫描画面；选景状态由流程状态管理。 */
 @Composable
 internal fun FrozenSceneImage(scene: SceneSnapshot, modifier: Modifier = Modifier) {
-    AsyncImage(File(scene.imagePath), stringResource(R.string.vlm_scan_frame),
-        modifier.fillMaxSize().testTag("vlm_frozen_scene"), contentScale = ContentScale.Fit)
+    CameraPhotoViewport(scene.orientation.previewDegrees, modifier.fillMaxSize()) {
+        AsyncImage(File(scene.imagePath), stringResource(R.string.vlm_scan_frame),
+            Modifier.fillMaxSize().testTag("vlm_frozen_scene"), contentScale = ContentScale.Fit)
+    }
 }
 
 /** 展示冻结或导演执行时的当前步骤；不保留已经完成的历史步骤。 */
@@ -524,8 +531,10 @@ internal fun LiveReferenceAvatar(state: VlmUiState, modifier: Modifier) {
     }
     if (mode != ReferencePresentation.SCREEN || !previewCurrent || preview == null) return
     Box(modifier) {
-        Image(preview.avatar.asImageBitmap(), stringResource(R.string.vlm_reference_avatar),
-            Modifier.fillMaxSize().testTag("vlm_live_reference_avatar"), contentScale = ContentScale.Fit, alpha = .65f)
+        CameraPhotoViewport(state.scene?.orientation?.previewDegrees ?: 0, Modifier.fillMaxSize()) {
+            Image(preview.avatar.asImageBitmap(), stringResource(R.string.vlm_reference_avatar),
+                Modifier.fillMaxSize().testTag("vlm_live_reference_avatar"), contentScale = ContentScale.Fit, alpha = .65f)
+        }
         if (state.ar.source == com.framer.sense.feature.camera.vlm.ar.ArSource.SHARED_CAMERA) {
             Text(stringResource(R.string.vlm_screen_reference_short),
                 color = Color.White, style = MaterialTheme.typography.labelMedium,
@@ -553,8 +562,12 @@ private fun BackgroundReference(state: VlmUiState, modifier: Modifier) {
             }
         }
     }
-    bitmap?.let { Image(it.asImageBitmap(), stringResource(R.string.vlm_background_reference), modifier,
-        contentScale = ContentScale.Fit, alpha = .30f) }
+    bitmap?.let { image ->
+        CameraPhotoViewport(scene.orientation.previewDegrees, modifier) {
+            Image(image.asImageBitmap(), stringResource(R.string.vlm_background_reference), Modifier.fillMaxSize(),
+                contentScale = ContentScale.Fit, alpha = .30f)
+        }
+    }
 }
 
 @Composable
@@ -567,7 +580,11 @@ internal fun ScanViews(state: VlmUiState, busy: Boolean, onEvent: (VlmIntent) ->
                 value = withContext(Dispatchers.IO) { BitmapFactory.decodeFile(frame.scene.modelImagePath, BitmapFactory.Options().apply { inSampleSize = 4 }) }
             }
             Column(Modifier.width(112.dp)) {
-                bitmap?.let { Image(it.asImageBitmap(), stringResource(R.string.vlm_scan_frame), Modifier.size(112.dp, 84.dp), contentScale = ContentScale.Crop) }
+                bitmap?.let { image ->
+                    CameraPhotoViewport(frame.scene.orientation.previewDegrees, Modifier.size(112.dp, 84.dp)) {
+                        Image(image.asImageBitmap(), stringResource(R.string.vlm_scan_frame), Modifier.fillMaxSize(), contentScale = ContentScale.Fit)
+                    }
+                }
                 val label = state.viewCandidates.firstOrNull { it.frameId == frame.id }?.subject?.takeIf { it.isNotBlank() }
                     ?: stringResource(R.string.vlm_scan_view_number, frames.indexOf(frame) + 1)
                 FilterChip(selected = state.selectedFrameId == frame.id, enabled = !busy,

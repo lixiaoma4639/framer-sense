@@ -71,6 +71,7 @@ class PhotoSessionController(context: Context, private val vision: OpenCvSceneTo
             val retained = active.frames()
             // 姿态不可用时也只用强视觉验证合并，不仅凭图像哈希认定相同背景。
             val duplicate = retained.asReversed().firstOrNull { old ->
+                old.config.orientation.deviceRotation == sample.config.orientation.deviceRotation &&
                 (sample.pose == null && old.pose == null || sameDirection(old.pose, sample.pose)) &&
                     vision.match(features[old.id], feature)?.let(BackgroundMatchPolicy::aligned) == true
             }
@@ -78,7 +79,7 @@ class PhotoSessionController(context: Context, private val vision: OpenCvSceneTo
             if (!active.accepts(sample.targetId, sample.timestampNs, sample.receivedNs, sample.config)) return@withLock active.progress(sample.receivedNs)
             val id = newVlmId(); val dir = File(root, "${active.session.id}/$id").apply { mkdirs() }
             try {
-                val scene = save(bitmap, sample.config.zoom, id, dir)
+                val scene = save(bitmap, sample.config.zoom, id, dir).copy(orientation = sample.config.orientation)
                 val bytes = dir.listFiles().orEmpty().sumOf { it.length() }
                 val frame = ScanFrame(id, active.session.id, sample.timestampNs, sample.receivedNs, sample.config, sample.pose, feature?.quality ?: 0f, scene, bytes)
                 if (!active.accepts(sample.targetId, sample.timestampNs, sample.receivedNs, sample.config)) {
