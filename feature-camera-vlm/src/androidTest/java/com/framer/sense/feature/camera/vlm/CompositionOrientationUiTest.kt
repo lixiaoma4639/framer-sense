@@ -26,6 +26,37 @@ class CompositionOrientationUiTest {
             CompositionPlan("p$it", "测试方案$it", ShotType.FULL, CropRect(), 1f, AvatarPlacement(), "自然站立", "保留建筑")
         }, emptyList(), emptyList(), emptyList()))
 
+    @Test fun applyFloatsFifteenDpAboveThePanelBottomAndStaysClickableWhileScrolling() {
+        val phone = mutableFloatStateOf(0f)
+        val events = mutableListOf<VlmIntent>()
+        compose.setContent { MaterialTheme {
+            CompositionLocalProvider(LocalCameraIconAngle provides phone.floatValue) {
+                CameraRotatingViewport(Modifier.size(300.dp, 420.dp), preservePhotoDirection = true) {
+                    CompositionDetailsPanel(fixtureState(), events::add, Modifier.fillMaxSize())
+                }
+            }
+        } }
+        listOf(0f, 90f, 180f, 270f).forEach { direction ->
+            compose.runOnIdle { phone.floatValue = direction }
+            val panel = compose.onNodeWithTag("vlm_composition_details_overlay").getUnclippedBoundsInRoot()
+            val button = compose.onNodeWithTag("vlm_apply")
+            button.assertIsDisplayed()
+            val beforeScroll = button.getUnclippedBoundsInRoot()
+            val bottomGap = when (direction) {
+                90f -> beforeScroll.left - panel.left
+                180f -> beforeScroll.top - panel.top
+                270f -> panel.right - beforeScroll.right
+                else -> panel.bottom - beforeScroll.bottom
+            }
+            assertEquals("$direction 度面板底边距", 15f, bottomGap.value, .1f)
+            compose.onNodeWithTag("vlm_director_revision_input").performScrollTo()
+            assertEquals(beforeScroll, button.getUnclippedBoundsInRoot())
+            // 正文已滚到面板下方，点击仍必须由悬浮按钮接收。
+            button.assertIsDisplayed().performTouchInput { click() }
+        }
+        assertEquals(List(4) { VlmIntent.Apply }, events)
+    }
+
     @Test fun cardsAndDetailsTurnInPlaceAndKeepSelectionAndClickTargets() {
         val phone = mutableFloatStateOf(0f)
         val state = mutableStateOf(fixtureState())
@@ -55,7 +86,7 @@ class CompositionOrientationUiTest {
             }
             compose.onNodeWithTag("vlm_composition_p3").performTouchInput { click() }
             compose.runOnIdle { assertEquals("p3", state.value.selectedId) }
-            compose.onNodeWithTag("vlm_apply").performScrollTo().performTouchInput { click() }
+            compose.onNodeWithTag("vlm_apply").assertIsDisplayed().performTouchInput { click() }
         }
         assertEquals(5, events.count { it is VlmIntent.Select && it.id == "p3" })
         assertEquals(5, events.count { it == VlmIntent.Apply })

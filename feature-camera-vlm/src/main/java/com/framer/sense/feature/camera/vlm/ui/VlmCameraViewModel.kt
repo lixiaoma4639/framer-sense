@@ -70,6 +70,7 @@ class VlmCameraViewModel @Inject constructor(
     private var foregroundSinceNs = 0L
     private var guidanceEpoch = 0
     private var lastGuidanceLogNs = 0L
+    private var lastGuidanceRejectedLogNs = 0L
     private var modelLoaded = local.loadState.value.phase == LocalModelPhase.READY
     private var maintenanceBusy = false
     private var attemptedPath: String? = null
@@ -80,9 +81,25 @@ class VlmCameraViewModel @Inject constructor(
                 val s = _state.value
                 val plan = s.referencePlan ?: continue
                 val scene = s.scene ?: continue
-                if (s.ar.source == com.framer.sense.feature.camera.vlm.ar.ArSource.SHARED_CAMERA && s.ar.tracking in listOf(com.framer.sense.feature.camera.vlm.ar.ArTrackingState.LOST, com.framer.sense.feature.camera.vlm.ar.ArTrackingState.PAUSED)) continue
-                if (!foreground || s.photoSample != null || sample.receivedNs < foregroundSinceNs || s.stage != VlmStage.LIVE || sample.targetId != guidanceTarget(plan) || sample.config.version != s.cameraConfigVersion) continue
-                if (sample.config.orientation.deviceRotation != s.photoOrientation.deviceRotation) continue
+                val rejection = when {
+                    s.ar.source == com.framer.sense.feature.camera.vlm.ar.ArSource.SHARED_CAMERA && s.ar.tracking in listOf(com.framer.sense.feature.camera.vlm.ar.ArTrackingState.LOST, com.framer.sense.feature.camera.vlm.ar.ArTrackingState.PAUSED) -> "tracking"
+                    !foreground -> "background"
+                    s.photoSample != null -> "photoSample"
+                    sample.receivedNs < foregroundSinceNs -> "oldFrame"
+                    s.stage != VlmStage.LIVE -> "stage"
+                    sample.targetId != guidanceTarget(plan) -> "target"
+                    sample.config.version != s.cameraConfigVersion -> "config"
+                    sample.config.orientation.deviceRotation != s.photoOrientation.deviceRotation -> "orientation"
+                    else -> null
+                }
+                if (rejection != null) {
+                    val now = SystemClock.elapsedRealtimeNanos()
+                    if (now - lastGuidanceRejectedLogNs >= 2_000_000_000L) {
+                        Log.i("VlmScan", "背景对齐帧未接收 reason=$rejection frameConfig=${sample.config.version} activeConfig=${s.cameraConfigVersion} frameDirection=${sample.config.orientation.deviceRotation} activeDirection=${s.photoOrientation.deviceRotation}")
+                        lastGuidanceRejectedLogNs = now
+                    }
+                    continue
+                }
                 val token = requestToken
                 val epoch = guidanceEpoch
                 try {
@@ -96,11 +113,17 @@ class VlmCameraViewModel @Inject constructor(
                     }
                     _state.update { current ->
                         if (!foreground || epoch != guidanceEpoch || token != requestToken || current.referencePlan != plan || current.cameraConfigVersion != sample.config.version || current.stage != VlmStage.LIVE) current
-                        else current.copy(background = if (current.background.status == BackgroundStatus.ALIGNED_MANUAL && (aligned.headingError == null || kotlin.math.abs(aligned.headingError) < 12f) && (aligned.pitchError == null || kotlin.math.abs(aligned.pitchError) < 12f))
-                            aligned.copy(status = BackgroundStatus.ALIGNED_MANUAL) else aligned)
+                        else current.copy(background = mergeBackgroundAlignment(current.background, aligned))
+                    }
+                    if (s.background.status != BackgroundStatus.ALIGNED_AUTO && aligned.status == BackgroundStatus.ALIGNED_AUTO) {
+                        val committed = _state.value
+                        Log.i("VlmScan", "自动对齐结果提交 observed=${aligned.status} applied=${committed.background.status} sameReference=${committed.referencePlan == plan} sameEpoch=${epoch == guidanceEpoch} sameRequest=${token == requestToken} foreground=$foreground stage=${committed.stage} referenceReady=${committed.reference?.appliedPlan == plan} presentation=${referencePresentation(committed.referencePlan, committed.background.status, committed.ar)}")
                     }
                 } catch (cancel: CancellationException) { throw cancel }
-                catch (_: Exception) { if (token == requestToken) _state.update { it.copy(background = BackgroundGuidance()) } }
+                catch (failure: Exception) {
+                    Log.w("VlmScan", "背景对齐处理失败", failure)
+                    if (token == requestToken) _state.update { it.copy(background = BackgroundGuidance()) }
+                }
             }
         }
         savedStateHandle["vlm_started"] = true
@@ -270,8 +293,11 @@ class VlmCameraViewModel @Inject constructor(
                 if (_state.value.stage == VlmStage.SCANNING) scanQueue?.trySend(intent.sample)
                 else if (_state.value.stage == VlmStage.LIVE) guideQueue.trySend(intent.sample)
             }
-            VlmIntent.ConfirmBackground -> if (_state.value.stage == VlmStage.LIVE && _state.value.referencePlan?.viewBinding != null)
+            VlmIntent.ConfirmBackground -> if (_state.value.stage == VlmStage.LIVE && _state.value.referencePlan?.viewBinding != null) {
                 _state.update { it.copy(background = it.background.copy(status = BackgroundStatus.ALIGNED_MANUAL)) }
+                val confirmed = _state.value
+                Log.i("VlmScan", "手动对齐结果提交 applied=${confirmed.background.status} referenceReady=${confirmed.reference != null && confirmed.reference.appliedPlan == confirmed.referencePlan} presentation=${referencePresentation(confirmed.referencePlan, confirmed.background.status, confirmed.ar)}")
+            }
             is VlmIntent.UserMessage -> _state.update { it.copy(error = intent.message) }
             VlmIntent.StartComposition -> if (_state.value.stage in listOf(VlmStage.LIVE, VlmStage.FREEZING) && _state.value.cameraReady &&
                 !_state.value.modelBusy && !_state.value.saving && !_state.value.settingsVisible && !_state.value.photoSettingsVisible && !_state.value.instructionEditorVisible && _state.value.photoSample == null) {
@@ -949,9 +975,9 @@ class VlmCameraViewModel @Inject constructor(
         if (errors.isNotEmpty()) { _state.update { it.copy(error = if (errors.any { error -> "RESOLVED_SPEC_MISMATCH" in error || "VIEW_BINDING_MISMATCH" in error }) models.message(R.string.vlm_photo_spec_invalid) else errors.joinToString("\n")) }; return }
         cancelWork()
         val token = requestToken
+        _state.update { it.copy(stage = VlmStage.MODIFYING, compositionDetailsVisible = false, notice = null) }
         work = viewModelScope.launch {
             try {
-                _state.update { it.copy(stage = VlmStage.MODIFYING) }
                 val projectionErrors = previews.inspect(plan, scene).errors
                 check(projectionErrors.isEmpty()) { projectionErrors.joinToString("\n") }
                 val currentPreview = previews.preview(scene, plan)
@@ -959,10 +985,16 @@ class VlmCameraViewModel @Inject constructor(
                 val appliedPlans = result.plans.map { if (it.id == applied.id) applied else it }
                 check(PlanValidator().validate(appliedPlans, inputFor(s, result.plans, s.selectedId)).isEmpty()) { models.message(R.string.vlm_avatar_invalid_resolution) }
                 if (token == requestToken) Log.i("VlmAr", "应用参考 source=${s.ar.source} plan=${applied.id} revision=${applied.revision} frame=${applied.viewBinding?.frameId} requiresBackgroundConfirmation=${applied.viewBinding != null}")
-                if (token == requestToken) _state.update { it.copy(stage = VlmStage.LIVE, result = result.copy(plans = appliedPlans), reference = currentPreview, referencePlan = applied, background = BackgroundGuidance(), zoom = if (s.cameraMode == CameraMode.AR) 1f else applied.zoom, notice = if (applied.needsRetake || s.fromImportedImage) models.message(R.string.vlm_reference_retake) else models.message(R.string.vlm_reference_applied)) }
+                if (token == requestToken) _state.update { it.copy(stage = VlmStage.LIVE, result = result.copy(plans = appliedPlans),
+                    reference = currentPreview, referencePlan = applied, background = BackgroundGuidance(),
+                    compositionDetailsVisible = false,
+                    zoom = if (s.cameraMode == CameraMode.AR) 1f else applied.zoom,
+                    notice = null) }
                 if (token == requestToken) requestFace()
             } catch (cancel: CancellationException) { throw cancel }
-            catch (e: Exception) { if (token == requestToken) _state.update { it.copy(stage = VlmStage.READY, error = if ((e as? ModelFailure)?.code == "LOCAL_PHOTO_INVALID_OUTPUT") models.message(R.string.vlm_photo_model_invalid) else e.message) } }
+            catch (e: Exception) { if (token == requestToken) _state.update { it.copy(stage = VlmStage.READY,
+                compositionDetailsVisible = s.compositionDetailsVisible,
+                error = if ((e as? ModelFailure)?.code == "LOCAL_PHOTO_INVALID_OUTPUT") models.message(R.string.vlm_photo_model_invalid) else e.message) } }
         }
     }
 

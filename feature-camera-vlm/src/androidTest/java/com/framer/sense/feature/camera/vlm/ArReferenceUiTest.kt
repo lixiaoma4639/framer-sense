@@ -1,7 +1,7 @@
 package com.framer.sense.feature.camera.vlm
 
 import android.graphics.Bitmap
-import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.*
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.*
 import androidx.compose.ui.platform.LocalContext
@@ -43,11 +43,16 @@ class ArReferenceUiTest {
         val state = mutableStateOf(VlmUiState(referencePlan = plan,
             reference = PlanPreview(bitmap, bitmap, CropRect(), plan),
             ar = ArUiState(ArSource.SHARED_CAMERA, ArTrackingState.NEEDS_GROUND)))
-        compose.setContent { MaterialTheme { LiveReferenceAvatar(state.value, Modifier.size(128.dp)) } }
+        compose.setContent { MaterialTheme {
+            Box(Modifier.size(280.dp, 360.dp)) {
+                LiveReferenceAvatar(state.value, Modifier.fillMaxSize())
+                BackgroundAlignmentOverlay(state.value, {})
+            }
+        } }
         compose.onNodeWithTag("vlm_live_reference_avatar").assertDoesNotExist()
         compose.runOnIdle { state.value = state.value.copy(background = BackgroundGuidance(BackgroundStatus.ALIGNED_AUTO)) }
         compose.onNodeWithTag("vlm_live_reference_avatar").assertExists()
-        compose.onNodeWithTag("vlm_ar_screen_reference").assertExists()
+        compose.onNodeWithTag("vlm_ar_screen_reference").assertDoesNotExist()
         compose.runOnIdle { state.value = state.value.copy(background = BackgroundGuidance(BackgroundStatus.ALIGNED_MANUAL)) }
         compose.onNodeWithTag("vlm_live_reference_avatar").assertExists()
         compose.runOnIdle { state.value = state.value.copy(ar = state.value.ar.copy(

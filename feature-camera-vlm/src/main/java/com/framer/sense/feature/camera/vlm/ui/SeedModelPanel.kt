@@ -6,7 +6,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import com.framer.sense.feature.camera.vlm.R
 import com.framer.sense.feature.camera.vlm.model.*
@@ -27,9 +26,8 @@ internal fun SeedModelPanel(draft: ModelSettings, update: (ModelSettings) -> Uni
             OutlinedTextField(CloudModelConfig.seedBaseUrl, {}, readOnly = true, enabled = !busy,
                 label = { Text(stringResource(R.string.vlm_seed_base_url)) }, singleLine = true,
                 modifier = Modifier.fillMaxWidth().testTag("vlm_seed_base_url"))
-            OutlinedTextField(draft.seedApiKey, { update(draft.copy(seedApiKey = it)) }, enabled = !busy,
-                label = { Text(stringResource(R.string.vlm_seed_api_key)) }, singleLine = true,
-                visualTransformation = PasswordVisualTransformation(), modifier = Modifier.fillMaxWidth().testTag("vlm_seed_api_key"))
+            SecretKeyField(draft.seedApiKey, { update(draft.copy(seedApiKey = it)) },
+                R.string.vlm_seed_api_key, "vlm_seed_api_key", Modifier.fillMaxWidth(), enabled = !busy)
             OutlinedTextField(CloudModelConfig.seedModel, {}, readOnly = true, enabled = !busy,
                 label = { Text(stringResource(R.string.vlm_seed_model)) }, singleLine = true,
                 modifier = Modifier.fillMaxWidth().testTag("vlm_seed_model"))

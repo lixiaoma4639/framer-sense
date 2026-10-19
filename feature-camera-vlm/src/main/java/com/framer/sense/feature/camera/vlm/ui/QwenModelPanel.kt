@@ -6,7 +6,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import com.framer.sense.feature.camera.vlm.R
 import com.framer.sense.feature.camera.vlm.model.CloudModelConfig
@@ -29,9 +28,8 @@ internal fun QwenModelPanel(draft: ModelSettings, update: (ModelSettings) -> Uni
             OutlinedTextField(CloudModelConfig.qwenBaseUrl, {}, readOnly = true, enabled = !busy,
                 label = { Text(stringResource(R.string.vlm_qwen_base_url)) }, singleLine = true,
                 modifier = Modifier.fillMaxWidth().testTag("vlm_qwen_base_url"))
-            OutlinedTextField(draft.qwenApiKey, { update(draft.copy(qwenApiKey = it)) }, enabled = !busy,
-                label = { Text(stringResource(R.string.vlm_qwen_api_key)) }, singleLine = true,
-                visualTransformation = PasswordVisualTransformation(), modifier = Modifier.fillMaxWidth().testTag("vlm_qwen_api_key"))
+            SecretKeyField(draft.qwenApiKey, { update(draft.copy(qwenApiKey = it)) },
+                R.string.vlm_qwen_api_key, "vlm_qwen_api_key", Modifier.fillMaxWidth(), enabled = !busy)
             OutlinedTextField(CloudModelConfig.qwenModel, {}, readOnly = true, enabled = !busy,
                 label = { Text(stringResource(R.string.vlm_qwen_model)) }, singleLine = true,
                 modifier = Modifier.fillMaxWidth().testTag("vlm_qwen_model"))

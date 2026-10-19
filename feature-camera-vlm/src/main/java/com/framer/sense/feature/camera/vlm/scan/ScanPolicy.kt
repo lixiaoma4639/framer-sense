@@ -117,7 +117,7 @@ object ViewSelectionValidator {
 data class MatchMetrics(val matches: Int, val inliers: Int, val coverage: Float, val quadrants: Int,
     val cornerError: Float, val rotation: Float, val scale: Float, val valid: Boolean)
 object BackgroundMatchPolicy {
-    const val STABLE_NS = 700_000_000L
+    const val STABLE_NS = 500_000_000L
     const val LONG_SIDE = 640
     const val MAX_FEATURES = 800
     const val ANALYSIS_INTERVAL_NS = 200_000_000L
@@ -128,19 +128,90 @@ object BackgroundMatchPolicy {
     const val MIN_INLIER_RATIO = .5f
     const val MIN_COVERAGE = .20f
     const val MIN_QUADRANTS = 3
+    // 扫描去重仍要求画面足够接近，避免合并有价值的不同视角。
     const val MAX_CORNER_ERROR = .03f
     const val MAX_ROTATION = 3f
     const val MAX_SCALE_ERROR = .08f
+    // 实时找回背景容许手持的小幅位移、旋转与距离偏差。
+    const val MAX_GUIDANCE_CORNER_ERROR = .06f
+    const val MAX_GUIDANCE_ROTATION = 6f
+    const val MAX_GUIDANCE_SCALE_ERROR = .15f
+    // 构图裁剪及人像排除会减少背景分布，局部分布须由更强的匹配证据补足。
+    const val MIN_PARTIAL_MATCHES = 45
+    const val MIN_PARTIAL_INLIERS = 30
+    const val MIN_PARTIAL_INLIER_RATIO = .65f
+    const val MIN_PARTIAL_COVERAGE = .15f
+    const val MIN_PARTIAL_QUADRANTS = 2
+    const val MAX_BRIEF_CORNER_ERROR = .08f
+    const val MAX_BRIEF_ROTATION = 8f
+    const val MAX_BRIEF_SCALE_ERROR = .18f
+    const val MAX_CANDIDATE_GAP_NS = 500_000_000L
+    const val MIN_STABLE_FRAMES = 3
     fun confident(m: MatchMetrics) = m.valid && m.matches >= MIN_MATCHES && m.inliers >= MIN_INLIERS &&
         m.inliers.toFloat() / m.matches >= MIN_INLIER_RATIO && m.coverage >= MIN_COVERAGE && m.quadrants >= MIN_QUADRANTS
     fun aligned(m: MatchMetrics) = confident(m) && m.cornerError <= MAX_CORNER_ERROR && abs(m.rotation) <= MAX_ROTATION && abs(m.scale - 1f) <= MAX_SCALE_ERROR
+    fun confidentForGuidance(m: MatchMetrics) = confident(m) || m.valid && m.matches >= MIN_PARTIAL_MATCHES &&
+        m.inliers >= MIN_PARTIAL_INLIERS && m.inliers.toFloat() / m.matches >= MIN_PARTIAL_INLIER_RATIO &&
+        m.coverage >= MIN_PARTIAL_COVERAGE && m.quadrants >= MIN_PARTIAL_QUADRANTS
+    fun alignedForGuidance(m: MatchMetrics) = confidentForGuidance(m) && m.cornerError <= MAX_GUIDANCE_CORNER_ERROR &&
+        abs(m.rotation) <= MAX_GUIDANCE_ROTATION && abs(m.scale - 1f) <= MAX_GUIDANCE_SCALE_ERROR
+    /** 只容忍候选过程中的单帧小幅抖动，本帧不能据此触发确认。 */
+    fun canBridgeGuidance(m: MatchMetrics) = confidentForGuidance(m) && m.cornerError <= MAX_BRIEF_CORNER_ERROR &&
+        abs(m.rotation) <= MAX_BRIEF_ROTATION && abs(m.scale - 1f) <= MAX_BRIEF_SCALE_ERROR
+
+    /** 仅用于诊断，不参与修改判定结果或放宽任何门限。 */
+    fun guidanceRejection(m: MatchMetrics): String? = when {
+        !m.valid -> "INVALID_GEOMETRY"
+        m.matches < MIN_MATCHES -> "MATCH_COUNT"
+        m.inliers < MIN_INLIERS -> "INLIER_COUNT"
+        m.inliers.toFloat() / m.matches < MIN_INLIER_RATIO -> "INLIER_RATIO"
+        m.coverage < MIN_PARTIAL_COVERAGE -> "COVERAGE"
+        m.quadrants < MIN_PARTIAL_QUADRANTS -> "QUADRANTS"
+        !confidentForGuidance(m) -> "PARTIAL_EVIDENCE"
+        !m.cornerError.isFinite() || !m.rotation.isFinite() || !m.scale.isFinite() -> "NON_FINITE_GEOMETRY"
+        m.cornerError > MAX_GUIDANCE_CORNER_ERROR -> "CORNER_OFFSET"
+        abs(m.rotation) > MAX_GUIDANCE_ROTATION -> "ROTATION"
+        abs(m.scale - 1f) > MAX_GUIDANCE_SCALE_ERROR -> "SCALE"
+        else -> null
+    }
 }
 class BackgroundStability {
     private var since: Long? = null
-    fun update(aligned: Boolean, atNs: Long): Boolean {
-        if (!aligned) { since = null; return false }
+    private var lastGoodNs: Long? = null
+    private var pendingBriefFrame = false
+    var candidateFrames: Int = 0; private set
+    var stableNs: Long = 0; private set
+    var resetCount: Int = 0; private set
+    var briefGaps: Int = 0; private set
+    fun update(aligned: Boolean, atNs: Long, allowBriefGap: Boolean = false): Boolean {
+        val previousGood = lastGoodNs
+        val recentGood = previousGood != null && atNs >= previousGood &&
+            atNs - previousGood <= BackgroundMatchPolicy.MAX_CANDIDATE_GAP_NS
+        if (!aligned) {
+            if (allowBriefGap && recentGood && !pendingBriefFrame) {
+                pendingBriefFrame = true
+                briefGaps++
+                return false
+            }
+            reset()
+            return false
+        }
+        // 相隔太久的两帧不能拼成一次稳定确认。
+        if (since != null && !recentGood) reset()
         if (since == null) since = atNs
-        return atNs - since!! >= BackgroundMatchPolicy.STABLE_NS
+        lastGoodNs = atNs
+        pendingBriefFrame = false
+        candidateFrames++
+        stableNs = atNs - since!!
+        return stableNs >= BackgroundMatchPolicy.STABLE_NS && candidateFrames >= BackgroundMatchPolicy.MIN_STABLE_FRAMES
     }
-    fun reset() { since = null }
+    fun reset() {
+        if (since != null) resetCount++
+        since = null
+        lastGoodNs = null
+        pendingBriefFrame = false
+        candidateFrames = 0
+        stableNs = 0
+        briefGaps = 0
+    }
 }

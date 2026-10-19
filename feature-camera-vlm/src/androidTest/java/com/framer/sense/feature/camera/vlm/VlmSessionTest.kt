@@ -22,6 +22,125 @@ import java.util.UUID
 
 /** 验证相机事件门控，不调用摄像头、网络、GPU 或原生模型。 */
 class VlmSessionTest {
+    /** 回放真实 NV21 → ORB → 稳定确认 → MVI，不用人工确认冒充自动结果。 */
+    @Test fun stableCameraFramesAutomaticallyReachTheSameReferenceStateAsManualConfirmation() = runBlocking {
+        withContext(Dispatchers.Main) {
+            val provider = object : VisionModelProvider {
+                override suspend fun step(call: ModelCall): StepReply {
+                    val decision = DirectorDecision(ActionKind.FINAL,
+                        plans().map { it.copy(viewBinding = call.input.viewBinding) }, imageId = call.input.scene.id)
+                    return StepReply("fake", VlmJson.encodeToString(decision), decision)
+                }
+            }
+            val renderer = object : AvatarRenderer {
+                override suspend fun render(plan: CompositionPlan, width: Int, height: Int, warmth: Float, brightness: Float) =
+                    AvatarPreview(Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888), CropRect(.4f, .5f, .6f, .92f),
+                        plan.avatar.copy(projectionCalibrated = true))
+            }
+            val width = 480
+            val height = 640
+            val texture = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+            val canvas = android.graphics.Canvas(texture).apply { drawColor(android.graphics.Color.GRAY) }
+            val random = kotlin.random.Random(237)
+            val paint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG)
+            repeat(600) {
+                val gray = random.nextInt(30, 225)
+                paint.color = android.graphics.Color.rgb(gray, gray, gray)
+                canvas.drawCircle(random.nextFloat() * width, random.nextFloat() * height,
+                    random.nextFloat() * 9f + 3f, paint)
+            }
+            val pixels = IntArray(width * height)
+            texture.getPixels(pixels, 0, width, 0, 0, width, height)
+            val nv21 = ByteArray(width * height * 3 / 2) { 128.toByte() }
+            pixels.forEachIndexed { i, pixel -> nv21[i] = (16 + (pixel and 255) * 219 / 255).toByte() }
+            val vm = viewModel(provider = provider, renderer = renderer)
+            val effects = mutableListOf<VlmEffect>()
+            val listener = launch(start = CoroutineStart.UNDISPATCHED) { vm.effects.collect { effects += it } }
+            var sampling: Job? = null
+            try {
+                val token = startGenerating(vm, effects)
+                val config = ScanCameraConfig(7, 0, 1f, CropRect(), false, arSessionId = "test-source")
+                vm.onIntent(VlmIntent.FrameReady(token, texture, 1f, arConfig = config))
+                withTimeout(5_000) { vm.state.first { it.stage == VlmStage.READY } }
+                vm.onIntent(VlmIntent.Apply)
+                val applied = withTimeout(5_000) { vm.state.first { it.stage == VlmStage.LIVE && it.reference != null } }
+                val plan = requireNotNull(applied.referencePlan)
+                assertNotNull(plan.viewBinding)
+                vm.onIntent(VlmIntent.CameraConfigured(7))
+                vm.onIntent(VlmIntent.CameraForeground(true))
+                val target = "guide:${plan.viewBinding!!.frameId}:${plan.id}:${plan.revision}"
+                val sampleJob = launch {
+                    while (isActive) {
+                        val now = android.os.SystemClock.elapsedRealtimeNanos()
+                        vm.onIntent(VlmIntent.AnalysisReceived(com.framer.sense.feature.camera.vlm.scan.AnalysisSample(
+                            target, now, now, config, null, width, height, nv21)))
+                        delay(200)
+                    }
+                }
+                sampling = sampleJob
+                val automatic = withTimeout(15_000) { vm.state.first { it.background.status == BackgroundStatus.ALIGNED_AUTO } }
+                sampleJob.cancelAndJoin()
+                assertTrue(automatic.background.matched)
+                assertEquals(VlmStage.LIVE, automatic.stage)
+                assertEquals(ReferencePresentation.SCREEN, referencePresentation(plan, automatic.background.status, automatic.ar))
+                assertEquals(plan, automatic.reference!!.appliedPlan)
+                vm.onIntent(VlmIntent.ConfirmBackground)
+                val manual = vm.state.value
+                assertEquals(BackgroundStatus.ALIGNED_MANUAL, manual.background.status)
+                assertEquals(automatic.reference, manual.reference)
+                assertEquals(automatic.referencePlan, manual.referencePlan)
+                assertEquals(automatic.canCapture, manual.canCapture)
+                assertEquals(referencePresentation(plan, automatic.background.status, automatic.ar),
+                    referencePresentation(plan, manual.background.status, manual.ar))
+            } finally {
+                sampling?.cancelAndJoin()
+                listener.cancel()
+                vm.onLeave()
+                if (!texture.isRecycled) texture.recycle()
+            }
+        }
+    }
+
+    @Test fun applyingRetakePlanShowsAlignmentAndHidesItWhenEditingReopens() = runBlocking {
+        withContext(Dispatchers.Main) {
+            val provider = object : VisionModelProvider {
+                override suspend fun step(call: ModelCall): StepReply {
+                    val decision = DirectorDecision(ActionKind.FINAL,
+                        plans().map { it.copy(needsRetake = true, viewBinding = call.input.viewBinding) }, imageId = call.input.scene.id)
+                    return StepReply("fake", VlmJson.encodeToString(decision), decision)
+                }
+            }
+            val renderer = object : AvatarRenderer {
+                override suspend fun render(plan: CompositionPlan, width: Int, height: Int, warmth: Float, brightness: Float) =
+                    AvatarPreview(Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888), CropRect(.4f, .5f, .6f, .92f),
+                        plan.avatar.copy(projectionCalibrated = true))
+            }
+            val vm = viewModel(provider = provider, renderer = renderer)
+            val effects = mutableListOf<VlmEffect>()
+            val listener = launch(start = CoroutineStart.UNDISPATCHED) { vm.effects.collect { effects += it } }
+            try {
+                val token = startGenerating(vm, effects)
+                vm.onIntent(VlmIntent.FrameReady(token, Bitmap.createBitmap(60, 80, Bitmap.Config.ARGB_8888), 1f,
+                    arConfig = ScanCameraConfig(1, 0, 1f, CropRect(), false, arSessionId = "test-source")))
+                withTimeout(5_000) { vm.state.first { it.stage == VlmStage.READY } }
+                assertTrue(vm.state.value.compositionDetailsVisible)
+                vm.onIntent(VlmIntent.Apply)
+                assertFalse(vm.state.value.compositionDetailsVisible)
+                val applied = withTimeout(5_000) { vm.state.first { it.stage == VlmStage.LIVE } }
+                assertTrue(applied.referencePlan!!.needsRetake)
+                assertNotNull(applied.reference)
+                assertNull(applied.notice)
+                assertTrue(applied.showBackgroundAlignmentControls)
+                vm.onIntent(VlmIntent.CompositionDetailsVisible(true))
+                assertFalse(vm.state.value.showBackgroundAlignmentControls)
+                vm.onIntent(VlmIntent.CompositionDetailsVisible(false))
+                assertTrue(vm.state.value.showBackgroundAlignmentControls)
+                vm.onIntent(VlmIntent.ConfirmBackground)
+                assertEquals(BackgroundStatus.ALIGNED_MANUAL, vm.state.value.background.status)
+            } finally { listener.cancel(); vm.onLeave() }
+        }
+    }
+
     @Test fun turningDuringGenerationPreservesCapturedOrientationAndRenderSize() = runBlocking {
         withContext(Dispatchers.Main) {
             val entered = CompletableDeferred<Unit>()
@@ -554,9 +673,13 @@ class VlmSessionTest {
                 assertEquals(.4f, final.avatar.height, .0001f)
                 assertEquals(final, vm.state.value.previews.getValue("p1").appliedPlan)
                 vm.onIntent(VlmIntent.Apply)
+                assertFalse(vm.state.value.compositionDetailsVisible)
                 withTimeout(5000) { vm.state.first { it.stage == VlmStage.LIVE } }
                 assertEquals(final, vm.state.value.referencePlan)
                 assertNotNull(vm.state.value.reference)
+                assertNull(vm.state.value.notice)
+                assertFalse(vm.state.value.compositionDetailsVisible)
+                assertFalse(vm.state.value.showBackgroundAlignmentControls)
             } finally { release.complete(Unit); listener.cancel(); vm.onLeave() }
         }
     }

@@ -43,7 +43,6 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.selected
@@ -293,6 +292,7 @@ private fun CameraPane(state: VlmUiState, controller: VlmCameraController, permi
                         BackgroundReference(state, Modifier.fillMaxSize())
                     }
                     LiveReferenceAvatar(state, Modifier.fillMaxSize())
+                    BackgroundAlignmentOverlay(state, onEvent, Modifier.fillMaxSize())
                 } else if (scene != null) {
                     val preview = selected?.let { state.previews[it.id] }
                     if (preview != null) {
@@ -321,7 +321,8 @@ private fun CameraPane(state: VlmUiState, controller: VlmCameraController, permi
                         }
                     } else FrozenSceneImage(scene, Modifier.fillMaxSize())
                 }
-                if (state.stage in listOf(VlmStage.FREEZING, VlmStage.GENERATING, VlmStage.MODIFYING)) {
+                if (state.stage in listOf(VlmStage.SCAN_PROCESSING, VlmStage.VIEW_SELECTING,
+                        VlmStage.FREEZING, VlmStage.GENERATING, VlmStage.MODIFYING)) {
                     VlmLoadingOverlay(state.stage, state.directorProgress, { onEvent(VlmIntent.Cancel) }, Modifier.align(Alignment.Center))
                 }
             }
@@ -338,7 +339,7 @@ internal fun FrozenSceneImage(scene: SceneSnapshot, modifier: Modifier = Modifie
     }
 }
 
-/** 展示冻结或导演执行时的当前步骤；不保留已经完成的历史步骤。 */
+/** 扫描收尾、选景和构图共用黑色进度面板，跟随设备方向转正。 */
 @Composable
 internal fun VlmLoadingOverlay(
     stage: VlmStage,
@@ -346,18 +347,29 @@ internal fun VlmLoadingOverlay(
     onCancel: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    Column(
-        modifier.background(Color.Black.copy(alpha = .72f)).padding(16.dp),
-        horizontalAlignment = Alignment.CenterHorizontally
-    ) {
-        CircularProgressIndicator()
-        Text(
-            if (stage == VlmStage.FREEZING) stringResource(R.string.vlm_camera_freezing)
-            else directorProgressLabel(progress),
-            color = Color.White,
-            modifier = Modifier.testTag("vlm_director_progress")
-        )
-        TextButton(onClick = onCancel) { Text(stringResource(R.string.vlm_action_cancel)) }
+    CameraRotatingViewport(modifier.fillMaxSize().testTag("vlm_loading_viewport")) {
+        Column(
+            Modifier.align(Alignment.Center).padding(16.dp).widthIn(max = 360.dp)
+                .background(Color.Black.copy(alpha = .72f)).padding(16.dp)
+                .verticalScroll(rememberScrollState()).testTag("vlm_loading_panel"),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            CircularProgressIndicator(color = Color.White, trackColor = Color.White.copy(alpha = .2f),
+                modifier = Modifier.testTag("vlm_loading_spinner"))
+            Text(
+                when (stage) {
+                    VlmStage.FREEZING -> stringResource(R.string.vlm_camera_freezing)
+                    VlmStage.SCAN_PROCESSING -> stringResource(R.string.vlm_scan_finishing)
+                    VlmStage.VIEW_SELECTING -> stringResource(R.string.vlm_scan_selecting)
+                    else -> directorProgressLabel(progress)
+                },
+                color = Color.White,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.testTag("vlm_director_progress")
+            )
+            TextButton(onClick = onCancel, colors = ButtonDefaults.textButtonColors(contentColor = Color.White),
+                modifier = Modifier.testTag("vlm_loading_cancel")) { Text(stringResource(R.string.vlm_action_cancel)) }
+        }
     }
 }
 
@@ -534,12 +546,6 @@ internal fun LiveReferenceAvatar(state: VlmUiState, modifier: Modifier) {
         CameraPhotoViewport(state.scene?.orientation?.previewDegrees ?: 0, Modifier.fillMaxSize()) {
             Image(preview.avatar.asImageBitmap(), stringResource(R.string.vlm_reference_avatar),
                 Modifier.fillMaxSize().testTag("vlm_live_reference_avatar"), contentScale = ContentScale.Fit, alpha = .65f)
-        }
-        if (state.ar.source == com.framer.sense.feature.camera.vlm.ar.ArSource.SHARED_CAMERA) {
-            Text(stringResource(R.string.vlm_screen_reference_short),
-                color = Color.White, style = MaterialTheme.typography.labelMedium,
-                modifier = Modifier.align(Alignment.TopCenter).background(Color.Black.copy(alpha = .65f))
-                    .padding(6.dp).testTag("vlm_ar_screen_reference"))
         }
     }
 }
@@ -896,7 +902,8 @@ internal fun ModelSettingsDialog(state: VlmUiState, onEvent: (VlmIntent) -> Unit
                             if (showQwen || showSeed) HorizontalDivider()
                             Column(Modifier.testTag("vlm_gateway_configuration"), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                                 OutlinedTextField(draft.gateway, { draft = draft.copy(gateway = it) }, label = { Text(stringResource(R.string.vlm_model_gateway)) }, singleLine = true)
-                                OutlinedTextField(draft.gatewayToken, { draft = draft.copy(gatewayToken = it) }, label = { Text(stringResource(R.string.vlm_model_gateway_token)) }, visualTransformation = PasswordVisualTransformation(), singleLine = true)
+                                SecretKeyField(draft.gatewayToken, { draft = draft.copy(gatewayToken = it) },
+                                    R.string.vlm_model_gateway_token, "vlm_gateway_token")
                                 Text(stringResource(R.string.vlm_model_gateway_hint), style = MaterialTheme.typography.labelSmall)
                                 TextButton(onClick = { onEvent(VlmIntent.CheckGateway) }, enabled = !state.modelBusy) { Text(stringResource(R.string.vlm_model_check_gateway)) }
                             }

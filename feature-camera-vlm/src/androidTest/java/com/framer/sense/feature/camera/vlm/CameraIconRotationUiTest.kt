@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.toPixelMap
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.testTag
@@ -51,15 +52,22 @@ class CameraIconRotationUiTest {
         val textTags = listOf("vlm_aspect_ratio", "vlm_zoom_1.0", "vlm_zoom_2.0", "vlm_zoom_3.0", "vlm_zoom_8.0")
         val originalText = textTags.associateWith { compose.onNodeWithTag(it).fetchSemanticsNode()
             .config[SemanticsProperties.Text].single().text }
+        val backIcon = compose.onNodeWithTag("vlm_camera_exit_icon", useUnmergedTree = true)
+        fun backIconPixels() = backIcon.captureToImage().toPixelMap().let { pixels ->
+            List(pixels.width * pixels.height) { pixels[it % pixels.width, it / pixels.width] }
+        }
+        val originalBackIcon = backIconPixels()
         listOf(90f, 180f, 270f, 0f).forEach { degrees ->
             compose.runOnIdle { angle.floatValue = degrees }
-            listOf("vlm_camera_exit_icon", "vlm_model_settings_icon", "vlm_photo_settings_icon", "vlm_ai_instruction_icon",
+            listOf("vlm_model_settings_icon", "vlm_photo_settings_icon", "vlm_ai_instruction_icon",
                 "vlm_aspect_ratio_label", "vlm_zoom_label_1.0", "vlm_zoom_label_2.0", "vlm_zoom_label_3.0", "vlm_zoom_label_8.0")
                 .forEach { tag ->
                     compose.onNodeWithTag(tag, useUnmergedTree = true).assert(SemanticsMatcher("控件内容四方向转正") {
                         kotlin.math.abs(shortestIconRotation(it.config[CameraIconDegrees], degrees)) < .1f
                     })
                 }
+            backIcon.assert(!SemanticsMatcher.keyIsDefined(CameraIconDegrees))
+            assertEquals(originalBackIcon, backIconPixels())
             buttons.forEach { assertEquals(originalBounds[it], compose.onNodeWithTag(it).getUnclippedBoundsInRoot()) }
             originalText.forEach { (tag, text) -> compose.onNodeWithTag(tag).assertTextContains(text) }
             compose.onNodeWithTag("vlm_ai_instruction_toggle").assertTextContains(aiLabel)

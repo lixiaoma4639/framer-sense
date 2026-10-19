@@ -16,6 +16,8 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.ui.Modifier
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.test.assertTextContains
+import androidx.compose.ui.test.assert
+import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
@@ -301,6 +303,7 @@ class VlmCameraScreenTest {
         composeRule.onNodeWithTag("vlm_qwen_base_url").assertTextContains(CloudModelConfig.qwenBaseUrl)
         composeRule.onNodeWithTag("vlm_qwen_model").assertTextContains(CloudModelConfig.qwenModel)
         composeRule.onNodeWithTag("vlm_qwen_api_key").performScrollTo().performTextReplacement("sk-fake-qwen-key")
+        assertKeyCanBeRevealedAndMasked("vlm_qwen_api_key", "sk-fake-qwen-key")
         composeRule.onNodeWithText("保存").performClick()
         assertEquals(listOf(VlmIntent.SaveSettings(CloudModelConfig.applyQwenConfiguration(initial).copy(qwenApiKey = "sk-fake-qwen-key"))), events)
         composeRule.onNodeWithTag("vlm_qwen_check").performScrollTo().performClick()
@@ -323,6 +326,7 @@ class VlmCameraScreenTest {
         composeRule.onNodeWithTag("vlm_seed_base_url").assertTextContains(CloudModelConfig.seedBaseUrl)
         composeRule.onNodeWithTag("vlm_seed_model").assertTextContains(CloudModelConfig.seedModel)
         composeRule.onNodeWithTag("vlm_seed_api_key").performScrollTo().performTextReplacement("fake-seed-key")
+        assertKeyCanBeRevealedAndMasked("vlm_seed_api_key", "fake-seed-key")
         composeRule.onNodeWithText("保存").performClick()
         assertEquals(listOf(VlmIntent.SaveSettings(initial.copy(seedApiKey = "fake-seed-key"))), events)
         composeRule.onNodeWithTag("vlm_seed_check").performScrollTo().performClick()
@@ -330,6 +334,28 @@ class VlmCameraScreenTest {
         composeRule.onNodeWithTag("vlm_seed_access_GATEWAY").performScrollTo().performClick()
         composeRule.onNodeWithTag("vlm_seed_official_configuration").assertDoesNotExist()
         composeRule.onNodeWithTag("vlm_gateway_configuration").assertExists()
+    }
+
+    @Test fun gatewayTokenVisibilityDoesNotChangeTheSavedValue() {
+        val initial = ModelSettings(mode = ModelMode.CLOUD, region = Region.GLOBAL, preferred = ProviderId.GPT,
+            gatewayToken = "fake-gateway-token")
+        val events = mutableListOf<VlmIntent>()
+        composeRule.setContent { MaterialTheme {
+            ModelSettingsDialog(VlmUiState(settings = initial), events::add, {}, {})
+        } }
+        assertKeyCanBeRevealedAndMasked("vlm_gateway_token", initial.gatewayToken)
+        composeRule.onNodeWithText("保存").performClick()
+        assertEquals(listOf(VlmIntent.SaveSettings(CloudModelConfig.applyQwenConfiguration(initial))), events)
+    }
+
+    private fun assertKeyCanBeRevealedAndMasked(tag: String, value: String) {
+        val field = composeRule.onNodeWithTag(tag)
+        val password = SemanticsMatcher.keyIsDefined(SemanticsProperties.Password)
+        field.performScrollTo().assert(password)
+        composeRule.onNodeWithTag("${tag}_visibility").performScrollTo().performClick()
+        field.assert(!password).assertTextContains(value)
+        composeRule.onNodeWithTag("${tag}_visibility").performClick()
+        field.assert(password)
     }
 
     @Test fun autoModeShowsBothOfficialProvidersAndOfflineWithoutRequiringGateway() {
@@ -594,7 +620,7 @@ class VlmCameraScreenTest {
         composeRule.onNodeWithTag("vlm_composition_p3").performClick()
         composeRule.onNodeWithText("测试标题3", substring = true).assertExists()
         composeRule.onNodeWithText("测试标题1", substring = true).assertDoesNotExist()
-        composeRule.onNodeWithTag("vlm_apply").performScrollTo().performClick()
+        composeRule.onNodeWithTag("vlm_apply").assertIsDisplayed().performClick()
         assertEquals(listOf(VlmIntent.Select("p3"), VlmIntent.Apply), events)
         composeRule.onNodeWithTag("vlm_details").performClick()
         composeRule.onNodeWithTag("vlm_composition_choices").assertDoesNotExist()

@@ -16,6 +16,8 @@ data class SceneFeatures(val points: List<Point2>, val descriptors: ByteArray, v
 
 /** 所有 Mat 在本次操作退出时释放；保留的特征只有小型 JVM 数据。 */
 class OpenCvSceneTools {
+    var lastMatchRejection: String? = null
+        private set
     private val available by lazy { runCatching { OpenCVLoader.initLocal() }.getOrDefault(false) }
     fun extract(bitmap: Bitmap, excluded: CropRect? = null): SceneFeatures? {
         if (!available) return null
@@ -51,7 +53,11 @@ class OpenCvSceneTools {
     }
 
     fun match(reference: SceneFeatures?, current: SceneFeatures?): MatchMetrics? {
-        if (!available || reference == null || current == null || reference.points.size < BackgroundMatchPolicy.MIN_MATCHES || current.points.size < BackgroundMatchPolicy.MIN_MATCHES) return null
+        lastMatchRejection = null
+        if (!available) return rejected("OPENCV_UNAVAILABLE")
+        if (reference == null || current == null) return rejected("NO_FEATURES")
+        if (reference.points.size < BackgroundMatchPolicy.MIN_MATCHES || current.points.size < BackgroundMatchPolicy.MIN_MATCHES)
+            return rejected("INSUFFICIENT_FEATURES")
         val a = Mat(reference.points.size, 32, CvType.CV_8UC1); val b = Mat(current.points.size, 32, CvType.CV_8UC1)
         val matcher = BFMatcher.create(Core.NORM_HAMMING, false)
         val matches = mutableListOf<MatOfDMatch>(); val src = MatOfPoint2f(); val dst = MatOfPoint2f(); val inliers = Mat()
@@ -62,18 +68,18 @@ class OpenCvSceneTools {
             matcher.knnMatch(a, b, matches, 2)
             val pairs = matches.mapNotNull { row -> row.toArray().takeIf { it.size >= 2 && it[0].distance < BackgroundMatchPolicy.RATIO_TEST * it[1].distance }?.first() }
                 .sortedBy { it.distance }.distinctBy { it.trainIdx }
-            if (pairs.size < BackgroundMatchPolicy.MIN_MATCHES) return null
+            if (pairs.size < BackgroundMatchPolicy.MIN_MATCHES) return rejected("DESCRIPTOR_MATCHES_${pairs.size}")
             src.fromList(pairs.map { reference.points[it.queryIdx].let { p -> Point((p.x * reference.width).toDouble(), (p.y * reference.height).toDouble()) } })
             dst.fromList(pairs.map { current.points[it.trainIdx].let { p -> Point((p.x * current.width).toDouble(), (p.y * current.height).toDouble()) } })
             val h = Calib3d.findHomography(src, dst, Calib3d.RANSAC, BackgroundMatchPolicy.RANSAC_PIXELS, inliers)
             homography = h
-            if (h.empty()) return null
+            if (h.empty()) return rejected("HOMOGRAPHY_FAILED")
             corners.fromArray(Point(0.0, 0.0), Point(reference.width.toDouble(), 0.0), Point(reference.width.toDouble(), reference.height.toDouble()), Point(0.0, reference.height.toDouble()))
             Core.perspectiveTransform(corners, mapped, h)
             val transformed = mapped.toArray()
             val mask = ByteArray(pairs.size); inliers.get(0, 0, mask)
             val retained = pairs.indices.filter { mask[it].toInt() != 0 }.map { reference.points[pairs[it].queryIdx] }
-            if (retained.isEmpty()) return null
+            if (retained.isEmpty()) return rejected("NO_INLIERS")
             val coverage = (retained.maxOf { it.x } - retained.minOf { it.x }) * (retained.maxOf { it.y } - retained.minOf { it.y })
             val quadrants = retained.map { (if (it.x > .5f) 1 else 0) + (if (it.y > .5f) 2 else 0) }.distinct().size
             val originals = arrayOf(Point(0.0, 0.0), Point(current.width.toDouble(), 0.0), Point(current.width.toDouble(), current.height.toDouble()), Point(0.0, current.height.toDouble()))
@@ -87,5 +93,10 @@ class OpenCvSceneTools {
             listOf(a, b, src, dst, inliers, corners, mapped).forEach { it.release() }
             homography?.release(); matches.forEach { it.release() }; matcher.clear()
         }
+    }
+
+    private fun rejected(reason: String): MatchMetrics? {
+        lastMatchRejection = reason
+        return null
     }
 }

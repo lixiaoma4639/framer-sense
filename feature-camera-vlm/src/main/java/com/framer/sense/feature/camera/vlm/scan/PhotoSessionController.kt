@@ -40,6 +40,8 @@ class PhotoSessionController(context: Context, private val vision: OpenCvSceneTo
     var budget = PhotoSessionBudget(); private set
     private var referenceId: String? = null
     private var referenceFeatures: SceneFeatures? = null
+    private var lastAlignmentLogNs = 0L
+    private var lastAlignmentStatus = BackgroundStatus.SEARCHING
     private val stability = BackgroundStability()
     @Volatile private var latestConfig = 0
     private val referenceEpoch = AtomicInteger()
@@ -102,8 +104,15 @@ class PhotoSessionController(context: Context, private val vision: OpenCvSceneTo
 
     suspend fun align(sample: AnalysisSample, plan: CompositionPlan, scene: SceneSnapshot, targetPose: ScanPose?): BackgroundGuidance =
         withContext(processingDispatcher) { mutex.withLock {
-            if (sample.config.version != latestConfig) return@withLock BackgroundGuidance()
-            val key = "${scene.id}:${plan.revision}:${plan.crop}:${plan.avatar}:${sample.config.version}:${referenceEpoch.get()}"
+            if (sample.config.version != latestConfig) {
+                val now = android.os.SystemClock.elapsedRealtimeNanos()
+                if (now - lastAlignmentLogNs >= 2_000_000_000L) {
+                    android.util.Log.i("VlmScan", "背景对齐判定 reason=SESSION_CONFIG frameConfig=${sample.config.version} sessionConfig=$latestConfig")
+                    lastAlignmentLogNs = now
+                }
+                return@withLock BackgroundGuidance()
+            }
+            val key = "${scene.id}:${plan.id}:${plan.revision}:${plan.crop}:${sample.config.version}:${referenceEpoch.get()}"
             if (referenceId != key) {
                 val original = requireNotNull(BitmapFactory.decodeFile(scene.imagePath))
                 val r = plan.crop
@@ -112,21 +121,32 @@ class PhotoSessionController(context: Context, private val vision: OpenCvSceneTo
                 val cropped = Bitmap.createBitmap(original, x, y,
                     ((r.right - r.left) * original.width).toInt().coerceIn(1, original.width - x), ((r.bottom - r.top) * original.height).toInt().coerceIn(1, original.height - y))
                 try {
-                    val a = plan.avatar
-                    val exclude = CropRect((a.foot.x - a.height * .3f).coerceIn(0f, 1f), (a.foot.y - a.height).coerceIn(0f, 1f),
-                        (a.foot.x + a.height * .3f).coerceIn(0f, 1f), a.foot.y.coerceIn(0f, 1f))
-                    referenceFeatures = vision.extract(cropped, exclude)
+                    // 模型参考图与相机分析帧都是未叠加虚拟人像的原图。
+                    // 不按虚拟人像尺寸遮掉背景，实际遮挡由 RANSAC 与空间分布校验剔除。
+                    referenceFeatures = vision.extract(cropped)
                     referenceId = key; stability.reset()
+                    android.util.Log.i("VlmScan", "背景对齐参考重建 plan=${plan.id} shot=${plan.shot} image=${scene.id.take(12)} revision=${plan.revision} config=${sample.config.version} referenceEpoch=${referenceEpoch.get()} referenceSize=${cropped.width}x${cropped.height} crop=${plan.crop} sceneZoom=${scene.currentZoom} targetZoom=${plan.zoom} photoDirection=${scene.orientation.deviceRotation} avatarHeight=${plan.avatar.height} avatarFoot=${plan.avatar.foot} featureSource=RAW_BACKGROUND avatarMask=NONE excludedArea=0 referencePoints=${referenceFeatures?.points?.size ?: 0}")
                 } finally { if (cropped !== original) cropped.recycle(); original.recycle() }
             }
             val bitmap = sample.bitmap()
-            val metrics = try { vision.match(referenceFeatures, vision.extract(bitmap)) } finally { bitmap.recycle() }
-            val aligned = stability.update(metrics?.let(BackgroundMatchPolicy::aligned) == true, sample.receivedNs)
+            val currentFeatures = try { vision.extract(bitmap) } finally { bitmap.recycle() }
+            val metrics = vision.match(referenceFeatures, currentFeatures)
+            val geometryAccepted = metrics?.let(BackgroundMatchPolicy::alignedForGuidance) == true
+            val aligned = stability.update(geometryAccepted, sample.receivedNs,
+                allowBriefGap = metrics?.let(BackgroundMatchPolicy::canBridgeGuidance) == true)
+            val status = if (aligned) BackgroundStatus.ALIGNED_AUTO else BackgroundStatus.SEARCHING
+            val now = android.os.SystemClock.elapsedRealtimeNanos()
+            if (status != lastAlignmentStatus || now - lastAlignmentLogNs >= 2_000_000_000L) {
+                val rejection = metrics?.let(BackgroundMatchPolicy::guidanceRejection) ?: vision.lastMatchRejection
+                android.util.Log.i("VlmScan", "背景对齐判定 status=$status reason=${rejection ?: if (aligned) "CONFIRMED" else "WAIT_STABLE"} referencePoints=${referenceFeatures?.points?.size ?: 0} currentPoints=${currentFeatures?.points?.size ?: 0} metrics=$metrics stableMs=${stability.stableNs / 1_000_000} requiredMs=${BackgroundMatchPolicy.STABLE_NS / 1_000_000} candidateFrames=${stability.candidateFrames} briefGaps=${stability.briefGaps} geometryAccepted=$geometryAccepted evidence=${if (metrics != null && BackgroundMatchPolicy.confident(metrics)) "DISTRIBUTED" else if (metrics != null && BackgroundMatchPolicy.confidentForGuidance(metrics)) "STRONG_PARTIAL" else "INSUFFICIENT"} resets=${stability.resetCount} actualZoom=${sample.config.zoom} direction=${sample.config.orientation.deviceRotation} source=${if (sample.config.arSessionId == null) "CAMERAX" else "AR"}")
+                lastAlignmentLogNs = now
+                lastAlignmentStatus = status
+            }
             val sameBasis = targetPose != null && sample.pose != null && targetPose.basisId == sample.pose.basisId
-            BackgroundGuidance(if (aligned) BackgroundStatus.ALIGNED_AUTO else BackgroundStatus.SEARCHING,
+            BackgroundGuidance(status,
                 if (sameBasis && targetPose.heading != null && sample.pose.heading != null) angleDelta(targetPose.heading, sample.pose.heading) else null,
                 if (sameBasis) targetPose.pitch - sample.pose.pitch else null,
-                metrics?.let(BackgroundMatchPolicy::confident) == true)
+                metrics?.let(BackgroundMatchPolicy::confidentForGuidance) == true)
         } }
 
     suspend fun dispose() {

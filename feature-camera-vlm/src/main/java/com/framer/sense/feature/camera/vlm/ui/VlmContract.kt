@@ -79,6 +79,13 @@ data class VlmUiState(
     val directorProgress: DirectorProgress? = null,
     val photoSample: PhotoSampleState? = null
 ) {
+    /** 收起构图编辑时显示当前参考的顶部提示，两组界面始终互斥。 */
+    val showReferenceGuidanceOverlay: Boolean
+        get() = stage == VlmStage.LIVE && referencePlan != null && !compositionDetailsVisible
+
+    val showBackgroundAlignmentControls: Boolean
+        get() = showReferenceGuidanceOverlay && referencePlan?.viewBinding != null
+
     val operationBusy: Boolean
         get() = modelBusy || saving || photoSample != null || stage in listOf(VlmStage.FREEZING,
             VlmStage.GENERATING, VlmStage.MODIFYING, VlmStage.SCANNING, VlmStage.SCAN_PROCESSING, VlmStage.VIEW_SELECTING)

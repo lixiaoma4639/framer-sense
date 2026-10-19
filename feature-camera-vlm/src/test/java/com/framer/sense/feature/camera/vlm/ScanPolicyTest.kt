@@ -166,11 +166,116 @@ class ScanPolicyTest {
         assertFalse(BackgroundMatchPolicy.aligned(m.copy(scale = 1.09f)))
         assertFalse(BackgroundMatchPolicy.aligned(m.copy(valid = false)))
     }
-    @Test fun alignmentNeeds700msAndResetsOnFailure() {
+    @Test fun guidanceAllowsHandheldOffsetsWithoutLooseningScanDeduplication() {
+        val near = MatchMetrics(40, 30, .6f, 4, .05f, 5f, 1.12f, true)
+        assertTrue(BackgroundMatchPolicy.alignedForGuidance(near))
+        assertTrue(BackgroundMatchPolicy.alignedForGuidance(near.copy(rotation = -5f, scale = .88f)))
+        assertFalse(BackgroundMatchPolicy.aligned(near))
+        assertFalse(BackgroundMatchPolicy.alignedForGuidance(near.copy(cornerError = .061f)))
+        assertFalse(BackgroundMatchPolicy.alignedForGuidance(near.copy(rotation = 6.1f)))
+        assertFalse(BackgroundMatchPolicy.alignedForGuidance(near.copy(rotation = -6.1f)))
+        assertFalse(BackgroundMatchPolicy.alignedForGuidance(near.copy(scale = 1.151f)))
+        assertFalse(BackgroundMatchPolicy.alignedForGuidance(near.copy(scale = .849f)))
+    }
+    @Test fun widerGuidanceStillRequiresReliableDistributedMatching() {
+        val near = MatchMetrics(40, 30, .6f, 4, .05f, 5f, 1.12f, true)
+        for (unreliable in listOf(near.copy(valid = false), near.copy(matches = 29),
+            near.copy(inliers = 14), near.copy(inliers = 19), near.copy(coverage = .19f), near.copy(quadrants = 2))) {
+            assertFalse(BackgroundMatchPolicy.alignedForGuidance(unreliable))
+        }
+    }
+    @Test fun strongPartialEvidenceFromTheFailedPlanCanConfirmWithoutChangingScanDeduplication() {
+        // 用户日志：大量可靠内点，但裁剪／排除人物后只分布在两个象限。
+        val frames = listOf(
+            MatchMetrics(129, 99, .43177503f, 3, .043330453f, -5.697964f, 1.0258524f, true),
+            MatchMetrics(141, 116, .22345309f, 2, .037426952f, -4.6844883f, 1.0205429f, true),
+            MatchMetrics(137, 112, .22437337f, 2, .04266153f, -5.4642687f, 1.0150462f, true),
+            MatchMetrics(121, 102, .1673298f, 2, .051066786f, -5.456021f, 1.0533407f, true)
+        )
+        val stability = BackgroundStability()
+        frames.forEachIndexed { index, frame ->
+            assertTrue(BackgroundMatchPolicy.alignedForGuidance(frame))
+            assertNull(BackgroundMatchPolicy.guidanceRejection(frame))
+            // 按正常采样间隔回放这些指标，不将日志输出间隔当成采样间隔。
+            assertEquals(index == 3, stability.update(true, index * 200_000_000L))
+        }
+        assertFalse(BackgroundMatchPolicy.confident(frames.last()))
+        assertFalse(BackgroundMatchPolicy.aligned(frames.last()))
+    }
+    @Test fun partialDistributionCannotPassWithoutStrongIndependentEvidence() {
+        val strong = MatchMetrics(80, 64, .18f, 2, .04f, 2f, 1.02f, true)
+        assertTrue(BackgroundMatchPolicy.confidentForGuidance(strong))
+        for (weak in listOf(strong.copy(matches = 44, inliers = 35), strong.copy(inliers = 29),
+            strong.copy(inliers = 51), strong.copy(coverage = .149f), strong.copy(quadrants = 1),
+            strong.copy(valid = false), strong.copy(cornerError = .2f))) {
+            assertFalse(BackgroundMatchPolicy.alignedForGuidance(weak))
+            assertNotNull(BackgroundMatchPolicy.guidanceRejection(weak))
+        }
+    }
+    @Test fun oneBorderlineFrameCanBeBridgedButCannotItselfConfirm() {
+        val good = MatchMetrics(80, 64, .3f, 3, .04f, 2f, 1.02f, true)
+        val jitter = good.copy(rotation = 6.2f)
+        assertFalse(BackgroundMatchPolicy.alignedForGuidance(jitter))
+        assertTrue(BackgroundMatchPolicy.canBridgeGuidance(jitter))
+        val stability = BackgroundStability()
+        assertFalse(stability.update(true, 0))
+        assertFalse(stability.update(true, 200_000_000))
+        assertFalse(stability.update(false, 400_000_000, allowBriefGap = true))
+        assertEquals(2, stability.candidateFrames)
+        assertTrue(stability.update(true, 600_000_000))
+        assertEquals(3, stability.candidateFrames)
+        assertEquals(1, stability.briefGaps)
+        assertEquals(0, stability.resetCount)
+        assertFalse(BackgroundMatchPolicy.canBridgeGuidance(good.copy(cornerError = .2f)))
+        assertFalse(BackgroundMatchPolicy.canBridgeGuidance(good.copy(rotation = 20f)))
+        assertFalse(BackgroundMatchPolicy.canBridgeGuidance(good.copy(inliers = 5)))
+    }
+    @Test fun consecutiveBorderlineOrUnmatchedFramesResetTheCandidate() {
+        for (bridgeable in listOf(false, true)) {
+            val stability = BackgroundStability()
+            assertFalse(stability.update(true, 0))
+            assertFalse(stability.update(false, 200_000_000, allowBriefGap = bridgeable))
+            assertFalse(stability.update(false, 400_000_000, allowBriefGap = bridgeable))
+            assertEquals(0, stability.candidateFrames)
+            assertFalse(stability.update(true, 600_000_000))
+            assertEquals(1, stability.candidateFrames)
+        }
+    }
+    @Test fun longSampleGapsAndOnlyTwoGoodFramesCannotConfirm() {
+        val stability = BackgroundStability()
+        assertFalse(stability.update(false, 0, allowBriefGap = true))
+        assertFalse(stability.update(true, 200_000_000))
+        assertFalse(stability.update(true, 700_000_000))
+        assertEquals(2, stability.candidateFrames)
+        assertFalse(stability.update(true, 1_300_000_000))
+        assertEquals(1, stability.candidateFrames)
+        assertEquals(0L, stability.stableNs)
+        assertFalse(stability.update(false, 1_900_000_000, allowBriefGap = true))
+        assertEquals(0, stability.candidateFrames)
+    }
+    @Test fun alignmentNeeds500msAndResetsOnFailure() {
         val s = BackgroundStability()
-        assertFalse(s.update(true, 100)); assertFalse(s.update(true, 600_000_100))
-        assertTrue(s.update(true, 700_000_100)); assertFalse(s.update(false, 800_000_100))
-        assertFalse(s.update(true, 900_000_100)); s.reset(); assertFalse(s.update(true, 2_000_000_100))
+        assertFalse(s.update(true, 100)); assertFalse(s.update(true, 499_000_100))
+        assertEquals(2, s.candidateFrames)
+        assertEquals(499_000_000L, s.stableNs)
+        assertTrue(s.update(true, 500_000_100)); assertFalse(s.update(false, 600_000_100))
+        assertEquals(0, s.candidateFrames)
+        assertEquals(0L, s.stableNs)
+        assertEquals(1, s.resetCount)
+        assertFalse(s.update(true, 700_000_100)); assertFalse(s.update(true, 1_199_000_100))
+        assertTrue(s.update(true, 1_200_000_100))
+        s.reset(); assertFalse(s.update(true, 2_000_000_100))
+    }
+    @Test fun diagnosticsIdentifyMatchingAndGeometryRejections() {
+        val accepted = MatchMetrics(40, 30, .6f, 4, .01f, 1f, 1.02f, true)
+        assertNull(BackgroundMatchPolicy.guidanceRejection(accepted))
+        assertEquals("INLIER_RATIO", BackgroundMatchPolicy.guidanceRejection(accepted.copy(inliers = 19)))
+        assertEquals("COVERAGE", BackgroundMatchPolicy.guidanceRejection(accepted.copy(coverage = .14f)))
+        assertEquals("QUADRANTS", BackgroundMatchPolicy.guidanceRejection(accepted.copy(quadrants = 1)))
+        assertEquals("PARTIAL_EVIDENCE", BackgroundMatchPolicy.guidanceRejection(accepted.copy(quadrants = 2)))
+        assertEquals("CORNER_OFFSET", BackgroundMatchPolicy.guidanceRejection(accepted.copy(cornerError = .07f)))
+        assertEquals("ROTATION", BackgroundMatchPolicy.guidanceRejection(accepted.copy(rotation = 7f)))
+        assertEquals("SCALE", BackgroundMatchPolicy.guidanceRejection(accepted.copy(scale = 1.2f)))
     }
     @Test fun unknownPoseKeepsTemporalDiversityAfterCapacity() {
         val c = collector()
