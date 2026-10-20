@@ -22,6 +22,244 @@ import java.util.UUID
 
 /** 验证相机事件门控，不调用摄像头、网络、GPU 或原生模型。 */
 class VlmSessionTest {
+    @Test fun continuingGenerationAppendsBatchesAndFailureOrCancellationDoesNotConsumeNumbers() = runBlocking {
+        withContext(Dispatchers.Main) {
+            var calls = 0
+            var failNext = false
+            var holdNext = false
+            val entered = CompletableDeferred<Unit>()
+            val release = CompletableDeferred<Unit>()
+            val vm = viewModel(provider = object : VisionModelProvider {
+                override suspend fun step(call: ModelCall): StepReply {
+                    calls++
+                    if (failNext) { failNext = false; throw ModelFailure("TEST_FAILURE", "测试失败", false) }
+                    if (holdNext) {
+                        holdNext = false
+                        entered.complete(Unit)
+                        withContext(NonCancellable) { release.await() }
+                    }
+                    val decision = DirectorDecision(ActionKind.FINAL, plans().map {
+                        it.copy(title = "${it.title}-$calls", viewBinding = call.input.viewBinding)
+                    }, imageId = call.input.scene.id)
+                    return StepReply("fake", VlmJson.encodeToString(decision), decision)
+                }
+            }, renderer = backgroundRenderer())
+            val effects = mutableListOf<VlmEffect>()
+            val listener = launch(start = CoroutineStart.UNDISPATCHED) { vm.effects.collect { effects += it } }
+            try {
+                val token = startGenerating(vm, effects)
+                vm.onIntent(VlmIntent.FrameReady(token, Bitmap.createBitmap(60, 80, Bitmap.Config.ARGB_8888), 1f))
+                val first = withTimeout(5_000) { vm.state.first { it.stage == VlmStage.READY } }
+                assertFalse(first.compositionDetailsExpanded)
+                vm.onIntent(VlmIntent.CompositionDetailsExpanded(true))
+                assertTrue(vm.state.value.compositionDetailsExpanded)
+                vm.onIntent(VlmIntent.Resize(.4f))
+                val edited = withTimeout(5_000) { vm.state.first { it.previews["p1"]?.appliedPlan?.revision == 1 } }
+                val oldPreview = edited.previews.getValue("p1")
+                vm.onIntent(VlmIntent.Generate)
+                val second = withTimeout(5_000) { vm.state.first { it.stage == VlmStage.READY } }
+                assertFalse(second.compositionDetailsExpanded)
+                assertNotEquals(first.compositionBatchId, second.compositionBatchId)
+                assertEquals(6, second.compositionChoices.size)
+                assertEquals((0..5).toList(), second.compositionChoices.filterIsInstance<CompositionChoice.Plan>().map { it.index })
+                assertSame(oldPreview, second.currentBackgroundComposition()!!.allBatches[0].previews["p1"])
+                vm.onIntent(VlmIntent.Select("p1", first.scene!!.id, first.compositionBatchId))
+                assertEquals(first.compositionBatchId, vm.state.value.compositionBatchId)
+                assertSame(oldPreview, vm.state.value.previews["p1"])
+                assertEquals(2, calls)
+                // 从较早一轮继续生成也应追加到最新一轮之后。
+                vm.onIntent(VlmIntent.Generate)
+                val third = withTimeout(5_000) { vm.state.first { it.stage == VlmStage.READY } }
+                val batchIds = third.currentBackgroundComposition()!!.allBatches.map { it.id }
+                assertEquals(listOf(first.compositionBatchId, second.compositionBatchId, third.compositionBatchId), batchIds)
+                assertEquals(9, third.compositionChoices.size)
+                failNext = true
+                vm.onIntent(VlmIntent.Generate)
+                val failed = withTimeout(5_000) { vm.state.first { it.stage == VlmStage.READY && it.error != null } }
+                assertEquals(batchIds, failed.currentBackgroundComposition()!!.allBatches.map { it.id })
+                assertEquals(9, failed.compositionChoices.size)
+                holdNext = true
+                vm.onIntent(VlmIntent.Generate)
+                withTimeout(5_000) { entered.await() }
+                vm.onIntent(VlmIntent.Cancel)
+                release.complete(Unit)
+                assertEquals(9, vm.state.value.compositionChoices.size)
+                vm.onIntent(VlmIntent.Generate)
+                val fourth = withTimeout(5_000) { vm.state.first { it.stage == VlmStage.READY } }
+                assertEquals(12, fourth.compositionChoices.size)
+                assertEquals((0..11).toList(), fourth.compositionChoices.filterIsInstance<CompositionChoice.Plan>().map { it.index })
+                assertEquals(12, fourth.compositionChoices.map { it.key }.distinct().size)
+                assertEquals(3, fourth.result!!.plans.size)
+                assertEquals(6, calls)
+                vm.onIntent(VlmIntent.Select("p1", first.scene!!.id, first.compositionBatchId))
+                assertEquals(edited.result, vm.state.value.result)
+                assertSame(oldPreview, vm.state.value.previews["p1"])
+                vm.onIntent(VlmIntent.Apply)
+                val applied = withTimeout(5_000) { vm.state.first { it.stage == VlmStage.LIVE } }
+                assertEquals(oldPreview.appliedPlan, applied.referencePlan)
+                assertEquals(first.compositionBatchId, applied.compositionBatchId)
+                assertEquals(12, applied.compositionChoices.size)
+                assertEquals(6, calls)
+            } finally { release.complete(Unit); listener.cancel(); vm.onLeave() }
+        }
+    }
+
+    @Test fun backgroundsGenerateOnDemandAndRestoreEditsPreviewsAndTheCorrectCaptureSource() = runBlocking {
+        withContext(Dispatchers.Main) {
+            val inputs = mutableListOf<DirectorInput>()
+            val vm = viewModel(provider = object : VisionModelProvider {
+                override suspend fun step(call: ModelCall): StepReply {
+                    inputs += call.input
+                    val decision = DirectorDecision(ActionKind.FINAL,
+                        plans().map { it.copy(viewBinding = call.input.viewBinding) }, imageId = call.input.scene.id)
+                    return StepReply("fake", VlmJson.encodeToString(decision), decision)
+                }
+            }, renderer = backgroundRenderer())
+            try {
+                val frames = threeBackgroundScan(vm)
+                assertTrue(inputs.isEmpty())
+                vm.onIntent(VlmIntent.ScanViewSelected(frames[0].id))
+                val first = withTimeout(5_000) { vm.state.first { it.stage == VlmStage.READY } }
+                val firstPreview = first.previews.getValue("p1")
+                assertEquals(1, inputs.size)
+                assertEquals(1, first.compositionCache.size)
+                // 未生成背景只预览，不调用模型；切换拍摄方向的原图也不能混入旧人像。
+                listOf(1, 2, 1).forEach { index ->
+                    vm.onIntent(VlmIntent.PreviewScanView(frames[index].id))
+                    val preview = vm.state.value
+                    assertEquals(VlmStage.FROZEN, preview.stage)
+                    assertEquals(frames[index].scene, preview.displayScene)
+                    assertEquals(frames[index].id, preview.selectedFrameId)
+                    assertNull(preview.result)
+                    assertNull(preview.referencePlan)
+                    assertTrue(preview.previews.isEmpty())
+                    assertEquals(first.result, preview.compositionCache.getValue(frames[0].scene.id).result)
+                    assertEquals(1, inputs.size)
+                }
+                vm.onIntent(VlmIntent.Select("p2", frames[0].scene.id))
+                assertEquals(VlmStage.READY, vm.state.value.stage)
+                assertEquals("p2", vm.state.value.selectedId)
+                assertEquals(first.scene, vm.state.value.displayScene)
+                assertSame(firstPreview, vm.state.value.previews["p1"])
+                assertEquals(1, inputs.size)
+                vm.onIntent(VlmIntent.PreviewScanView(frames[1].id))
+                vm.onIntent(VlmIntent.ScanViewSelected(frames[1].id))
+                val second = withTimeout(5_000) { vm.state.first { it.stage == VlmStage.READY } }
+                assertEquals(2, inputs.size)
+                assertSame(firstPreview, second.compositionCache.getValue(frames[0].scene.id).previews["p1"])
+                // 滑动人物大小后立刻切走，尚未生成的预览在恢复时补齐，调整不能丢。
+                vm.onIntent(VlmIntent.Resize(.4f))
+                val changed = vm.state.value.result!!.plans.first()
+                assertFalse(vm.state.value.previews.containsKey("p1"))
+                vm.onIntent(VlmIntent.ScanViewSelected(frames[2].id))
+                val third = withTimeout(5_000) { vm.state.first { it.stage == VlmStage.READY } }
+                assertEquals(3, inputs.size)
+                assertEquals(9, third.compositionBackgrounds.sumOf { it.result.plans.size })
+                assertEquals(3, third.result!!.plans.size)
+                vm.onIntent(VlmIntent.Select("p1", frames[1].scene.id))
+                val restored = withTimeout(5_000) { vm.state.first {
+                    it.scene?.id == frames[1].scene.id && it.previews["p1"]?.appliedPlan?.revision == changed.revision
+                } }
+                assertEquals(changed.revision, restored.result!!.plans.first().revision)
+                assertEquals(.4f, restored.result!!.plans.first().avatar.height, .001f)
+                assertEquals(frames[1].scene.orientation, restored.scene!!.orientation)
+                assertEquals(3, inputs.size)
+                vm.onIntent(VlmIntent.ScanViewSelected(frames[0].id))
+                assertSame(firstPreview, vm.state.value.previews["p1"])
+                vm.onIntent(VlmIntent.Select("p3", frames[2].scene.id))
+                vm.onIntent(VlmIntent.Apply)
+                val applied = withTimeout(5_000) { vm.state.first { it.stage == VlmStage.LIVE } }
+                assertEquals(frames[2].scene.id, applied.scene!!.id)
+                assertEquals(frames[2].scene.orientation, applied.scene!!.orientation)
+                assertEquals(frames[2].id, applied.referencePlan!!.viewBinding!!.frameId)
+                assertEquals("p3", applied.referencePlan!!.id)
+                assertEquals(3, inputs.size)
+                frames.zip(inputs).forEach { (frame, input) ->
+                    assertEquals(frame.scene, input.scene)
+                    assertEquals(frame.id, input.viewBinding!!.frameId)
+                }
+                vm.onIntent(VlmIntent.StartScan)
+                assertTrue(vm.state.value.compositionCache.isEmpty())
+                assertNull(vm.state.value.result)
+            } finally { vm.onIntent(VlmIntent.CancelScan); vm.onLeave() }
+        }
+    }
+
+    @Test fun failedAndCanceledBackgroundGenerationNeverRemovesEarlierCompositions() = runBlocking {
+        withContext(Dispatchers.Main) {
+            var calls = 0
+            val entered = CompletableDeferred<Unit>()
+            val release = CompletableDeferred<Unit>()
+            val vm = viewModel(provider = object : VisionModelProvider {
+                override suspend fun step(call: ModelCall): StepReply {
+                    calls++
+                    if (calls == 2) throw ModelFailure("TEST_FAILURE", "测试生成失败", false)
+                    if (calls == 3) {
+                        entered.complete(Unit)
+                        withContext(NonCancellable) { release.await() }
+                    }
+                    val decision = DirectorDecision(ActionKind.FINAL,
+                        plans().map { it.copy(viewBinding = call.input.viewBinding) }, imageId = call.input.scene.id)
+                    return StepReply("fake", VlmJson.encodeToString(decision), decision)
+                }
+            }, renderer = backgroundRenderer())
+            try {
+                val frames = threeBackgroundScan(vm)
+                vm.onIntent(VlmIntent.ScanViewSelected(frames[0].id))
+                val first = withTimeout(5_000) { vm.state.first { it.stage == VlmStage.READY } }
+                vm.onIntent(VlmIntent.ScanViewSelected(frames[1].id))
+                val failed = withTimeout(5_000) { vm.state.first { it.stage == VlmStage.FROZEN && it.error != null } }
+                assertTrue(failed.hasCompositionChoices)
+                assertEquals(first.result, failed.compositionCache.getValue(frames[0].scene.id).result)
+                vm.onIntent(VlmIntent.Select("p2", frames[0].scene.id))
+                assertEquals(first.result, vm.state.value.result)
+                assertEquals("p2", vm.state.value.selectedId)
+                assertEquals(2, calls)
+                vm.onIntent(VlmIntent.ScanViewSelected(frames[2].id))
+                withTimeout(5_000) { entered.await() }
+                vm.onIntent(VlmIntent.Cancel)
+                assertEquals(VlmStage.FROZEN, vm.state.value.stage)
+                vm.onIntent(VlmIntent.Select("p3", frames[0].scene.id))
+                release.complete(Unit)
+                yield()
+                assertEquals(first.scene, vm.state.value.scene)
+                assertEquals(first.result, vm.state.value.result)
+                assertEquals("p3", vm.state.value.selectedId)
+                assertEquals(1, vm.state.value.compositionBackgrounds.size)
+                assertEquals(3, calls)
+                vm.onIntent(VlmIntent.CancelScan)
+                assertTrue(vm.state.value.compositionCache.isEmpty())
+            } finally { release.complete(Unit); vm.onIntent(VlmIntent.CancelScan); vm.onLeave() }
+        }
+    }
+
+    private fun backgroundRenderer() = object : AvatarRenderer {
+        override suspend fun render(plan: CompositionPlan, width: Int, height: Int, warmth: Float, brightness: Float) =
+            AvatarPreview(Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888), CropRect(.4f, .5f, .6f, .92f),
+                plan.avatar.copy(projectionCalibrated = true))
+    }
+
+    /** 留下三种拍摄方向的真实扫描文件；后台结束扫描，避免调用真实的选景模型。 */
+    private suspend fun threeBackgroundScan(vm: VlmCameraViewModel): List<ScanFrame> {
+        vm.onIntent(VlmIntent.CameraReady(CameraCapabilities(1f, 3f)))
+        vm.onIntent(VlmIntent.CameraConfigured(7))
+        vm.onIntent(VlmIntent.StartScan)
+        val scan = withTimeout(5_000) { vm.state.first { it.scanSession != null }.scanSession!! }
+        listOf(0, 1, 3).forEachIndexed { index, rotation ->
+            val direction = PhotoOrientation(rotation, 0)
+            vm.onIntent(VlmIntent.PhotoOrientationChanged(direction))
+            val buffer = ByteArray(64 * 48 * 3 / 2) { if (it < 64 * 48) 100 else 128.toByte() }
+            vm.onIntent(VlmIntent.AnalysisReceived(com.framer.sense.feature.camera.vlm.scan.AnalysisSample(
+                scan.id, 1, android.os.SystemClock.elapsedRealtimeNanos(),
+                ScanCameraConfig(7, direction.uprightDegrees(90), 1f, CropRect(), false, orientation = direction),
+                null, 64, 48, buffer)))
+            withTimeout(10_000) { vm.state.first { it.scanProgress.frames == index + 1 } }
+        }
+        vm.onIntent(VlmIntent.CameraForeground(false))
+        vm.onIntent(VlmIntent.StopScan)
+        return withTimeout(10_000) { vm.state.first { it.stage == VlmStage.SCAN_REVIEW }.scanSnapshot!!.frames }
+    }
+
     /** 回放真实 NV21 → ORB → 稳定确认 → MVI，不用人工确认冒充自动结果。 */
     @Test fun stableCameraFramesAutomaticallyReachTheSameReferenceStateAsManualConfirmation() = runBlocking {
         withContext(Dispatchers.Main) {
@@ -124,6 +362,13 @@ class VlmSessionTest {
                     arConfig = ScanCameraConfig(1, 0, 1f, CropRect(), false, arSessionId = "test-source")))
                 withTimeout(5_000) { vm.state.first { it.stage == VlmStage.READY } }
                 assertTrue(vm.state.value.compositionDetailsVisible)
+                assertFalse(vm.state.value.compositionDetailsExpanded)
+                val selected = vm.state.value.result
+                vm.onIntent(VlmIntent.CompositionDetailsExpanded(true))
+                assertTrue(vm.state.value.compositionDetailsExpanded)
+                vm.onIntent(VlmIntent.CompositionDetailsExpanded(false))
+                assertFalse(vm.state.value.compositionDetailsExpanded)
+                assertSame(selected, vm.state.value.result)
                 vm.onIntent(VlmIntent.Apply)
                 assertFalse(vm.state.value.compositionDetailsVisible)
                 val applied = withTimeout(5_000) { vm.state.first { it.stage == VlmStage.LIVE } }

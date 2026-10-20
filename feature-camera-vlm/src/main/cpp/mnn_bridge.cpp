@@ -319,7 +319,16 @@ static jbyteArray chooseView(JNIEnv* env, jlong handle, const std::vector<std::s
         }
         if (cancellation->cancelled()) return cancellation->cancelledResult();
         __android_log_print(ANDROID_LOG_INFO, "VlmOffline", "MNN 编号选择结束 method=constrained_logits images=%zu selected=%d scores=%s visionMs=%lld prefillMs=%lld generatedTokens=%zu", paths.size(), choice.ordinal, scores.str().c_str(), static_cast<long long>(context->vision_us / 1000), static_cast<long long>(context->prefill_us / 1000), context->output_tokens.size());
-        const auto digit = std::to_string(choice.ordinal);
+        std::string digit = std::to_string(choice.ordinal);
+        if (!options) {
+            const auto ranking = rankLocalViews(choice);
+            digit.clear();
+            for (auto ordinal : ranking) {
+                if (!digit.empty()) digit += ',';
+                digit += std::to_string(ordinal);
+            }
+            __android_log_print(ANDROID_LOG_INFO, "VlmOffline", "MNN 选景前三名 ranking=%s prefillCalls=1", digit.c_str());
+        }
         auto result = env->NewByteArray(static_cast<jsize>(digit.size()));
         if (result) env->SetByteArrayRegion(result, 0, static_cast<jsize>(digit.size()), reinterpret_cast<const jbyte*>(digit.data()));
         return result;

@@ -599,13 +599,16 @@ class VlmCameraScreenTest {
         val plans = (1..3).map { CompositionPlan("p$it", "测试标题$it", ShotType.FULL, CropRect(), 1f,
             AvatarPlacement(), "指导", "背景") }
         val state = mutableStateOf(VlmUiState(stage = VlmStage.READY, selectedId = "p1",
-            compositionDetailsVisible = true, result = CompositionResult(plans, emptyList(), emptyList(), emptyList())))
+            scene = SceneSnapshot("scene", 480, 640, 1f, "/scene", "/input"),
+            compositionDetailsVisible = true, compositionDetailsExpanded = true,
+            result = CompositionResult(plans, emptyList(), emptyList(), emptyList())))
         val events = mutableListOf<VlmIntent>()
         val onEvent: (VlmIntent) -> Unit = { event ->
             events += event
             when (event) {
                 is VlmIntent.Select -> state.value = state.value.copy(selectedId = event.id)
-                is VlmIntent.CompositionDetailsVisible -> state.value = state.value.copy(compositionDetailsVisible = event.visible)
+                is VlmIntent.CompositionDetailsVisible -> state.value = state.value.copy(compositionDetailsVisible = event.visible, compositionDetailsExpanded = false)
+                is VlmIntent.CompositionDetailsExpanded -> state.value = state.value.copy(compositionDetailsExpanded = event.expanded)
                 else -> Unit
             }
         }
@@ -628,6 +631,8 @@ class VlmCameraScreenTest {
         composeRule.onNodeWithTag("vlm_apply").assertDoesNotExist()
         composeRule.onNodeWithTag("vlm_details").performClick()
         composeRule.onNodeWithTag("vlm_composition_p3").assertIsDisplayed()
+        composeRule.onNodeWithTag("vlm_composition_details_panel").assertDoesNotExist()
+        composeRule.onNodeWithTag("vlm_composition_info_toggle").performClick()
         composeRule.onNodeWithText("测试标题3", substring = true).assertExists()
     }
 

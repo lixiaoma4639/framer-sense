@@ -29,6 +29,17 @@ int main() {
     const float logits[] = {1000.f, 0.f, -4.f, 0.f, -3.f, -1.f, 0.f, -2.f};
     auto choice = chooseLocalView(logits, 8, {2, 4, 5, 7});
     assert(choice.ordinal == 3 && choice.scores.size() == 4);
+    assert((rankLocalViews(choice) == std::vector<int>{3, 4, 2}));
+    assert((rankLocalViews({1, {2.f, 2.f, 1.f, 0.f}}) == std::vector<int>{1, 2, 3}));
+    assert((rankLocalViews({1, {2.f}}) == std::vector<int>{1}));
+    assert((rankLocalViews({2, {1.f, 2.f}}) == std::vector<int>{2, 1}));
+    for (const auto& scores : std::vector<std::vector<float>>{{}, {std::numeric_limits<float>::quiet_NaN()},
+            {std::numeric_limits<float>::infinity()}}) {
+        bool rejected = false;
+        try { rankLocalViews({1, scores}); }
+        catch (const std::runtime_error&) { rejected = true; }
+        assert(rejected);
+    }
     assert(chooseLocalView(logits, 8, {2}).ordinal == 1);
     const float photoLogits[] = {900.f, 0.f, -6.f, -5.f, -4.f, -3.f, -2.f, -1.f};
     auto photo = chooseLocalView(photoLogits, 8, {2, 3, 4, 5, 6, 7});

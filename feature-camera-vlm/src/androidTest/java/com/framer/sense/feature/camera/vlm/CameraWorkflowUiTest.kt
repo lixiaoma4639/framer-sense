@@ -15,6 +15,11 @@ import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.unit.dp
 import androidx.test.platform.app.InstrumentationRegistry
 import com.framer.sense.feature.camera.vlm.model.SceneSnapshot
+import com.framer.sense.feature.camera.vlm.model.AvatarPlacement
+import com.framer.sense.feature.camera.vlm.model.CompositionPlan
+import com.framer.sense.feature.camera.vlm.model.CompositionResult
+import com.framer.sense.feature.camera.vlm.model.CropRect
+import com.framer.sense.feature.camera.vlm.model.ShotType
 import com.framer.sense.feature.camera.vlm.ui.*
 import org.junit.Assert.*
 import org.junit.Rule
@@ -23,6 +28,62 @@ import kotlin.math.abs
 
 class CameraWorkflowUiTest {
     @get:Rule val compose = createComposeRule()
+
+    @Test fun actionsStayCenteredForEveryCountWithSelectionIconOnRight() {
+        val state = mutableStateOf(VlmUiState(cameraReady = true))
+        val width = mutableStateOf(320.dp)
+        val angle = mutableFloatStateOf(0f)
+        val plan = CompositionPlan("p1", "测试构图", ShotType.FULL, CropRect(), 1f,
+            AvatarPlacement(), "指导", "背景")
+        val result = CompositionResult(listOf(plan), emptyList(), emptyList(), emptyList())
+        compose.setContent { MaterialTheme {
+            CompositionLocalProvider(LocalCameraIconAngle provides angle.floatValue) {
+                Box(Modifier.width(width.value).fillMaxHeight().testTag("camera_bounds")) {
+                    CameraBottomBar(state.value, {}, {}, true, Modifier.align(Alignment.BottomCenter))
+                    CameraWorkflowFooter(state.value, 24.dp, Modifier.align(Alignment.BottomCenter))
+                }
+            }
+        } }
+        fun assertCentered(first: String, last: String) {
+            val parent = compose.onNodeWithTag("camera_bounds").getUnclippedBoundsInRoot()
+            val firstButton = compose.onNodeWithTag(first).getUnclippedBoundsInRoot()
+            val lastButton = compose.onNodeWithTag(last).getUnclippedBoundsInRoot()
+            assertEquals((parent.left.value + parent.right.value) / 2f,
+                (firstButton.left.value + lastButton.right.value) / 2f, 1f)
+        }
+        listOf(320.dp, 600.dp).forEach { availableWidth ->
+            compose.runOnIdle {
+                width.value = availableWidth
+                state.value = VlmUiState(cameraReady = true)
+            }
+            assertCentered("vlm_scan_start", "vlm_start")
+            // 三个按钮（包括构图选择的图标）仍然整体居中。
+            compose.runOnIdle { state.value = state.value.copy(result = result) }
+            listOf(0f, 90f, 180f, 270f).forEach { direction ->
+                compose.runOnIdle { angle.floatValue = direction }
+                assertCentered("vlm_scan_start", "vlm_details")
+                val label = compose.onNodeWithTag("vlm_details_label", useUnmergedTree = true).getUnclippedBoundsInRoot()
+                val icon = compose.onNodeWithTag("vlm_details_icon", useUnmergedTree = true).getUnclippedBoundsInRoot()
+                assertTrue("构图选择图标位于文字右侧", icon.left >= label.right)
+            }
+            compose.runOnIdle { state.value = state.value.copy(referencePlan = plan) }
+            assertCentered("vlm_scan_start", "vlm_resume")
+            compose.runOnIdle { state.value = VlmUiState(stage = VlmStage.SCANNING) }
+            assertCentered("vlm_scan_restart_active", "vlm_scan_cancel")
+        }
+    }
+
+    @Test fun crowdedActionRowStillScrollsToEveryAction() {
+        val events = mutableListOf<VlmIntent>()
+        compose.setContent { MaterialTheme {
+            Box(Modifier.width(220.dp)) {
+                Controls(VlmUiState(stage = VlmStage.SCAN_REVIEW), events::add, {}, Modifier.fillMaxWidth())
+            }
+        } }
+        compose.onNodeWithTag("vlm_scan_restart_active").performScrollTo().assertIsDisplayed().performClick()
+        compose.onNodeWithTag("vlm_scan_manual_open").performScrollTo().assertIsDisplayed().performClick()
+        assertEquals(listOf(VlmIntent.StartScan, VlmIntent.CompositionDetailsVisible(true)), events)
+    }
 
     @Test fun timelineStaysBelowShutterAndTurnsIconsWithoutMovingControls() {
         val angle = mutableFloatStateOf(0f)

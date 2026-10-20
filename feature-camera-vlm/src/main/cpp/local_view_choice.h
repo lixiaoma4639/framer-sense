@@ -1,5 +1,6 @@
 #pragma once
 #include <cmath>
+#include <algorithm>
 #include <limits>
 #include <stdexcept>
 #include <unordered_set>
@@ -42,4 +43,18 @@ inline LocalViewChoice chooseLocalView(const float* logits, size_t vocabulary,
         if (i == 0 || score > best) { best = score; choice.ordinal = static_cast<int>(i + 1); }
     }
     return choice;
+}
+
+/** 同一次视觉计算的编号分数排序；平分保持原顺序，不重复运行视觉预填充。 */
+inline std::vector<int> rankLocalViews(const LocalViewChoice& choice, size_t limit = 3) {
+    if (choice.scores.empty() || choice.scores.size() > kMaxLocalChoices || limit == 0)
+        throw std::runtime_error("LOCAL_VIEW_CHOICE_INVALID");
+    std::vector<int> order;
+    for (size_t i = 0; i < choice.scores.size(); ++i) {
+        if (!std::isfinite(choice.scores[i])) throw std::runtime_error("LOCAL_VIEW_CHOICE_INVALID");
+        order.push_back(static_cast<int>(i + 1));
+    }
+    std::stable_sort(order.begin(), order.end(), [&](int a, int b) { return choice.scores[a - 1] > choice.scores[b - 1]; });
+    order.resize(std::min(limit, order.size()));
+    return order;
 }

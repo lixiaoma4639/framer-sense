@@ -4,13 +4,14 @@ import com.framer.sense.feature.camera.vlm.model.BackgroundStatus
 import com.framer.sense.feature.camera.vlm.model.BackgroundGuidance
 
 /** 保存结果只属于当次背景与已应用方案，不跨流程点亮拍摄节点。 */
-data class CameraWorkflowKey(val sceneId: String?, val planId: String?, val planRevision: Int?)
+data class CameraWorkflowKey(val sceneId: String?, val planId: String?, val planRevision: Int?,
+    val batchId: String = INITIAL_COMPOSITION_BATCH)
 
 internal enum class CameraWorkflowStep { SCAN, GENERATE, SELECT, ALIGN, CAPTURE }
 internal enum class CameraStepStatus { PENDING, RUNNING, COMPLETE }
 
 internal val VlmUiState.workflowKey: CameraWorkflowKey
-    get() = CameraWorkflowKey(scene?.id, referencePlan?.id, referencePlan?.revision)
+    get() = CameraWorkflowKey(scene?.id, referencePlan?.id, referencePlan?.revision, compositionBatchId)
 
 /** 对齐回退后作废已拍摄记录，再次对齐不能复活上一次的拍摄完成状态。 */
 internal fun VlmUiState.withBackgroundGuidance(guidance: BackgroundGuidance): VlmUiState =

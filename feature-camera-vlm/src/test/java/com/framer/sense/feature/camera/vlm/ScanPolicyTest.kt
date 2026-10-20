@@ -105,10 +105,13 @@ class ScanPolicyTest {
         assertEquals(1, frozen.frames.size); assertFalse(frozen.frames.first().preferred)
         assertThrows(UnsupportedOperationException::class.java) { (frozen.frames as MutableList).clear() }
     }
-    @Test fun sixActualCallsIncludeRetriesAndDoNotReset() {
-        val b = PhotoSessionBudget(); repeat(6) { b.consume(10) }
+    @Test fun selectionAndThreeBackgroundsShareOneBoundedBudgetIncludingRetries() {
+        val b = PhotoSessionBudget()
+        repeat(ScanLimits.MAX_SELECTION_CALLS) { b.consume(10, selection = true) }
+        repeat(ScanLimits.MAX_COMPOSITION_BACKGROUNDS) { repeat(2) { b.consume(10) } }
         assertThrows(IllegalStateException::class.java) { b.consume(0) }
-        assertEquals(6, b.calls); assertEquals(60L, b.uploadedBytes)
+        assertEquals(8, b.calls); assertEquals(80L, b.uploadedBytes)
+        assertEquals(24L * 1024 * 1024, ScanLimits.MAX_SESSION_BYTES)
     }
     @Test fun uploadLimitAndRejectedConsumptionAreAtomic() {
         val b = PhotoSessionBudget(); b.consume(ScanLimits.MAX_SESSION_BYTES)

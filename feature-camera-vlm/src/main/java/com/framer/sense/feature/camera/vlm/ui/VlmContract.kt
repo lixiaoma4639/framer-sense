@@ -52,8 +52,11 @@ data class VlmUiState(
     val instructionDraftRevision: Int = 0,
     val instructionHistory: List<String> = emptyList(),
     val compositionDetailsVisible: Boolean = false,
+    val compositionDetailsExpanded: Boolean = false,
     val instruction: String = "自然一些，保留环境主体",
     val result: CompositionResult? = null,
+    val compositionBatchId: String = INITIAL_COMPOSITION_BATCH,
+    val compositionCache: Map<String, BackgroundComposition> = emptyMap(),
     val diagnostics: CompositionResult? = null,
     val selectedId: String? = null,
     val selectedAvatar: AvatarId = AvatarId.ADULT_FEMALE,
@@ -132,6 +135,7 @@ sealed interface VlmIntent {
     data object CancelScan : VlmIntent
     data object PreferScanView : VlmIntent
     data object AnalyzeScan : VlmIntent
+    data class PreviewScanView(val frameId: String) : VlmIntent
     data class ScanViewSelected(val frameId: String) : VlmIntent
     data class ManualScanSelectionVisible(val visible: Boolean) : VlmIntent
     data class CameraConfigured(val version: Int, val epoch: Int? = null) : VlmIntent
@@ -149,6 +153,7 @@ sealed interface VlmIntent {
     data class CameraModeSelected(val mode: CameraMode) : VlmIntent
     data class PhotoSettingsVisible(val visible: Boolean) : VlmIntent
     data class CompositionDetailsVisible(val visible: Boolean) : VlmIntent
+    data class CompositionDetailsExpanded(val expanded: Boolean) : VlmIntent
     data class PreferredEthnicity(val ethnicity: AvatarEthnicity) : VlmIntent
     data class InstructionChanged(val text: String) : VlmIntent
     data class InstructionEditorVisible(val visible: Boolean) : VlmIntent
@@ -162,7 +167,7 @@ sealed interface VlmIntent {
     data object Revise : VlmIntent
     data object Cancel : VlmIntent
     data object ResumeCamera : VlmIntent
-    data class Select(val id: String) : VlmIntent
+    data class Select(val id: String, val sceneId: String? = null, val batchId: String? = null) : VlmIntent
     data class Move(val dx: Float, val dy: Float) : VlmIntent
     data class Resize(val height: Float) : VlmIntent
     data class ActionSelected(val actionId: String) : VlmIntent

@@ -11,15 +11,27 @@ class CloudViewSelectionProtocolTest {
         primary = ViewCandidate(frameId, "树木和建筑", "背景留白适合人物入镜", emptyList(), emptyList(), emptyList()), alternatives = emptyList())
 
     @Test fun oneSixAndEightFramesReceiveCompleteSchemaAndExactFrameIds() {
-        listOf(1, 6, 8).forEach { count ->
+        listOf(1, 2, 3, 6, 8).forEach { count ->
             val images = (0 until count).map { ViewImage("frame-$it", "unused", false, 10, 10) }
             val prompt = CloudViewSelectionProtocol.prompt("scan", images, "", "")
             val example = prompt.substringAfter("complete structure: ").substringBefore(". The example frameId")
             val reply = CloudViewSelectionProtocol.inspect(ViewSelectionReply("m", example), "scan", images.map { it.frameId }.toSet())
             assertNotNull(reply.selection)
+            assertEquals(minOf(3, count) - 1, reply.selection!!.alternatives.size)
+            assertTrue(prompt.contains("Rank the best ${minOf(3, count)} distinct frames"))
             images.forEach { assertTrue(prompt.contains(it.frameId)) }
             assertTrue(prompt.contains("${count} supplied images"))
         }
+    }
+
+    @Test fun rankedAlternativesKeepTheirOwnBackgroundAndOrder() {
+        val ranked = selection("frame-2").copy(alternatives = listOf(
+            selection("frame-5").primary.copy(backgroundRegions = listOf(CropRect(.2f, .1f, .8f, .9f))),
+            selection("frame-0").primary))
+        val result = CloudViewSelectionProtocol.inspect(ViewSelectionReply("m", VlmJson.encodeToString(ranked)),
+            "scan", setOf("frame-0", "frame-2", "frame-5")).selection!!
+        assertEquals(listOf("frame-2", "frame-5", "frame-0"), (listOf(result.primary) + result.alternatives).map { it.frameId })
+        assertEquals(ranked.alternatives[0].backgroundRegions, result.alternatives[0].backgroundRegions)
     }
 
     @Test fun sixFrameReplyWithCodeFenceIsAcceptedButInventedIdsAndInvalidRegionsAreRejected() {

@@ -111,8 +111,9 @@ class ScanBackgroundTest {
             selectedId = plan.id, result = CompositionResult(listOf(plan), emptyList(), emptyList(), emptyList())))
         val onEvent: (VlmIntent) -> Unit = { event ->
             state.value = when (event) {
-                is VlmIntent.CompositionDetailsVisible -> state.value.copy(compositionDetailsVisible = event.visible)
-                VlmIntent.Apply -> state.value.copy(compositionDetailsVisible = false)
+                is VlmIntent.CompositionDetailsVisible -> state.value.copy(compositionDetailsVisible = event.visible, compositionDetailsExpanded = false)
+                is VlmIntent.CompositionDetailsExpanded -> state.value.copy(compositionDetailsExpanded = event.expanded)
+                VlmIntent.Apply -> state.value.copy(compositionDetailsVisible = false, compositionDetailsExpanded = false)
                 else -> state.value
             }
         }
@@ -126,6 +127,8 @@ class ScanBackgroundTest {
         compose.onNodeWithTag("vlm_background_confirm").assertExists()
         compose.onNodeWithTag("vlm_details").performClick()
         compose.onNodeWithTag("vlm_composition_choices").assertExists()
+        compose.onNodeWithTag("vlm_composition_details_panel").assertDoesNotExist()
+        compose.onNodeWithTag("vlm_composition_info_toggle").performClick()
         compose.onNodeWithTag("vlm_composition_details_panel").assertExists()
         compose.onNodeWithTag("vlm_background_status").assertDoesNotExist()
         compose.onNodeWithTag("vlm_background_confirm").assertDoesNotExist()
@@ -135,7 +138,8 @@ class ScanBackgroundTest {
         compose.onNodeWithTag("vlm_background_status").assertExists()
         compose.onNodeWithTag("vlm_background_confirm").assertExists()
         compose.onNodeWithTag("vlm_details").performClick()
-        compose.onNodeWithTag("vlm_composition_details_panel").assertExists()
+        compose.onNodeWithTag("vlm_composition_details_panel").assertDoesNotExist()
+        compose.onNodeWithTag("vlm_composition_info_toggle").assertExists()
         compose.onNodeWithTag("vlm_background_status").assertDoesNotExist()
         compose.onNodeWithTag("vlm_background_confirm").assertDoesNotExist()
         compose.onNodeWithTag("vlm_details").performClick()

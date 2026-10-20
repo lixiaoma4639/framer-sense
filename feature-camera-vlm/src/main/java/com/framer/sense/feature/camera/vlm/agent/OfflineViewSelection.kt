@@ -12,7 +12,7 @@ fun interface OfflineViewInference {
 }
 
 object OfflineViewSelectionProtocol {
-    enum class ParseFailure { FRAME_COUNT_INVALID, OUTPUT_TOO_LONG, SELECT_LINE_COUNT_INVALID, SELECT_FORMAT_INVALID, SELECT_OUT_OF_RANGE, SUBJECT_INVALID, REASON_INVALID }
+    enum class ParseFailure { FRAME_COUNT_INVALID, OUTPUT_TOO_LONG, SELECT_LINE_COUNT_INVALID, SELECT_FORMAT_INVALID, SELECT_OUT_OF_RANGE, RANK_COUNT_INVALID, RANK_DUPLICATE, SUBJECT_INVALID, REASON_INVALID }
     data class ParseResult(val selection: ViewSelection? = null, val failure: ParseFailure? = null)
     const val MAX_FRAMES = 4
     const val INPUT_LONG_SIDE = 448
@@ -34,6 +34,18 @@ object OfflineViewSelectionProtocol {
         if (frames.size !in 1..MAX_FRAMES) return ParseResult(failure = ParseFailure.FRAME_COUNT_INVALID)
         if (raw.length > 10000) return ParseResult(failure = ParseFailure.OUTPUT_TOO_LONG)
         val numeric = raw.trim()
+        // JNI 返回合法编号分数的前三名；继续兼容旧版本单编号，不凭采集质量补排名。
+        if (numeric.contains(',')) {
+            val parts = numeric.split(',')
+            if (parts.size !in 2..minOf(ScanLimits.MAX_COMPOSITION_BACKGROUNDS, frames.size))
+                return ParseResult(failure = ParseFailure.RANK_COUNT_INVALID)
+            if (parts.any { !Regex("[0-9]+").matches(it) }) return ParseResult(failure = ParseFailure.SELECT_FORMAT_INVALID)
+            val ordinals = parts.map { it.toIntOrNull() }
+            if (ordinals.any { it == null || it !in 1..frames.size }) return ParseResult(failure = ParseFailure.SELECT_OUT_OF_RANGE)
+            if (ordinals.distinct().size != ordinals.size) return ParseResult(failure = ParseFailure.RANK_DUPLICATE)
+            val candidates = ordinals.map { ViewCandidate(frames[requireNotNull(it) - 1].id, "", "", emptyList(), emptyList(), emptyList()) }
+            return ParseResult(selection = ViewSelection(scanId = scanId, primary = candidates.first(), alternatives = candidates.drop(1)))
+        }
         if (Regex("[0-9]+").matches(numeric)) {
             val ordinal = numeric.toIntOrNull() ?: return ParseResult(failure = ParseFailure.SELECT_FORMAT_INVALID)
             val frame = frames.getOrNull(ordinal - 1) ?: return ParseResult(failure = ParseFailure.SELECT_OUT_OF_RANGE)
@@ -80,7 +92,7 @@ class OfflineScanViewAgent(private val logger: DirectorLogger = NoOpDirectorLogg
                 logger.warn("离线选景解析失败 scan=${scan.session.id.take(8)} reason=${parsed.failure} outputChars=${answer.raw.length} outputLines=${answer.raw.lines().size} compared=${frames.size}")
                 throw ModelFailure("LOCAL_VIEW_INVALID_OUTPUT", "", false)
             }
-            logger.info("离线选景解析成功 scan=${scan.session.id.take(8)} frame=${selection.primary.frameId.take(8)} ordinal=${frames.indexOfFirst { it.id == selection.primary.frameId } + 1} elapsedMs=${answer.elapsedMs}")
+            logger.info("离线选景解析成功 scan=${scan.session.id.take(8)} frame=${selection.primary.frameId.take(8)} ranking=${(listOf(selection.primary) + selection.alternatives).map { it.frameId.take(8) }} ordinal=${frames.indexOfFirst { it.id == selection.primary.frameId } + 1} elapsedMs=${answer.elapsedMs}")
             logger.info("模型使用 stage=选景任务 result=成功 ${ModelUsageLog.identity(ProviderId.LOCAL, actualModel = answer.model)} scan=${scan.session.id.take(8)}")
             return ScanSelectionResult(selection, frames.size, listOf(CallTrace(ProviderId.LOCAL, answer.model, answer.elapsedMs, "SELECT_VIEWS_LOCAL")))
         } catch (cancel: CancellationException) {

@@ -171,7 +171,7 @@
     <string name="vlm_scan_restart_active">重新扫描</string>
     <string name="vlm_flow_waiting_native">正在停止上一轮本地推理，完成清理后自动开始新任务；模型会保留。</string>
     <string name="vlm_flow_generate">生成方案</string>
-    <string name="vlm_flow_regenerate">重新生成</string>
+    <string name="vlm_flow_regenerate">继续生成</string>
     <string name="vlm_flow_restart_single">重新取景生成</string>
     <string name="vlm_scan_stop">完成扫描</string>
     <string name="vlm_scan_single">单张构图</string>
@@ -343,6 +343,9 @@
     <string name="vlm_zoom_value">%1$.1f×</string>
     <string name="vlm_take_photo">拍摄照片</string>
     <string name="vlm_apply_plan">应用构图</string>
+    <string name="vlm_composition_info">构图详情</string>
+    <string name="vlm_composition_info_show">展开构图详情</string>
+    <string name="vlm_composition_info_hide">收起构图详情</string>
     <string name="vlm_back_camera">取消</string>
     <string name="vlm_composition_details">构图选择</string>
     <string name="vlm_composition_expand">展开构图选择</string>
@@ -463,4 +466,11 @@
     <string name="vlm_open_gallery">打开系统相册</string>
     <string name="vlm_gallery_app_missing">未找到可直接打开的相册应用。</string>
     <string name="vlm_gallery_open_failed">暂时无法打开系统相册，请稍后重试。</string>
+    <string name="vlm_background_candidate_status">%2$s\n背景 %1$d</string>
+    <string name="vlm_background_generate_on_select">点击生成</string>
+    <string name="vlm_background_generate_title">继续生成构图</string>
+    <string name="vlm_background_generate_message">继续为背景 %1$d 生成三个构图？已生成的构图会保留。</string>
+    <string name="vlm_background_generate_confirm">确认</string>
+    <string name="vlm_background_plan_number">构图 %1$d-%2$d</string>
+    <string name="vlm_background_cache_limit">本次已保留三个背景，请选择已有背景，或重新扫描。</string>
 </resources>

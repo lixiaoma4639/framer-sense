@@ -14,6 +14,30 @@ class OfflineViewSelectionTest {
         ScanCameraConfig(1, 0, 1f, CropRect(), false), ScanPose("basis", i.toLong(), (i - 1) * 360f / count, 0f), i.toFloat(),
         SceneSnapshot("f$i", 640, 480, 1f, "/scene$i", "/input$i"), 100, i == 1) }
     private fun snapshot() = ScanSnapshot(ScanSession("scan", 0, 10), frames(), 0f)
+    @Test fun nativeRankingBindsEachPositionToItsOwnSubmittedBackground() = runBlocking {
+        var calls = 0
+        val submitted = OfflineScanViewAgent().representativeFrames(frames())
+        val result = OfflineScanViewAgent().select(snapshot(), "", OfflineViewInference { images, _ ->
+            calls++
+            assertEquals(submitted.map { it.scene.modelImagePath }, images)
+            StepReply("fake-local", "4,2,1")
+        })
+        val ranked = result.selection!!
+        assertEquals(listOf(submitted[3].id, submitted[1].id, submitted[0].id),
+            (listOf(ranked.primary) + ranked.alternatives).map { it.frameId })
+        assertEquals(1, calls)
+        assertEquals(4, result.comparedFrames)
+        assertEquals(1, result.traces.size)
+        val two = OfflineViewSelectionProtocol.parse("2,1", "scan", frames(2))!!
+        assertEquals(listOf("f2", "f1"), (listOf(two.primary) + two.alternatives).map { it.frameId })
+    }
+
+    @Test fun duplicateOutOfRangeOrMalformedRankingsCannotChooseAnyBackground() {
+        listOf("1,1,2", "1,2,5", "0,2,3", "1,2,3,4", "2, 1", "2,1\n3", "2,", "SELECT=2,1")
+            .forEach { assertNull(it, OfflineViewSelectionProtocol.parse(it, "scan", frames(4))) }
+        assertNull(OfflineViewSelectionProtocol.parse("1,2,3", "scan", frames(2)))
+    }
+
     @Test fun shortProtocolBindsNumberToSubmittedFrameAndNeverGuesses() {
         val frames = frames().take(4)
         val result = OfflineViewSelectionProtocol.parse("SELECT=2\nSUBJECT=山体\nREASON=背景层次清晰", "scan", frames)!!

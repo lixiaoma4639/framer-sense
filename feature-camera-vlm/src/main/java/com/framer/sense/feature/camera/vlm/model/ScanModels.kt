@@ -10,9 +10,10 @@ object ScanLimits {
     const val SAMPLE_INTERVAL_NS = 250_000_000L
     const val MAX_UPLOAD_FRAMES = 8
     const val MAX_REQUEST_BYTES = 3L * 1024 * 1024
-    const val MAX_SESSION_BYTES = 12L * 1024 * 1024
-    const val MAX_MODEL_CALLS = 6
     const val MAX_SELECTION_CALLS = 2
+    const val MAX_COMPOSITION_BACKGROUNDS = 3
+    const val MAX_MODEL_CALLS = MAX_SELECTION_CALLS + MAX_COMPOSITION_BACKGROUNDS * 2
+    const val MAX_SESSION_BYTES = MAX_REQUEST_BYTES * MAX_MODEL_CALLS
     const val VIEW_ANGLE = 12f
 }
 

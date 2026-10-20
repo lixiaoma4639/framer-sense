@@ -70,6 +70,7 @@ class CameraWorkflowTest {
         assertEquals(pending, saved.copy(scene = scene.copy(id = "next")).workflowProgress().last())
         assertEquals(pending, saved.copy(referencePlan = plan.copy(id = "p2")).workflowProgress().last())
         assertEquals(pending, saved.copy(referencePlan = plan.copy(revision = 1)).workflowProgress().last())
+        assertEquals(pending, saved.copy(compositionBatchId = "another-round").workflowProgress().last())
         assertEquals(complete, saved.copy(cameraConfigVersion = 2, cameraEpoch = 2).workflowProgress().last())
         assertEquals(pending, applied.copy(error = "save failed").workflowProgress().last())
         // 普通快门仍可拍摄，但不能跳过未完成的流程节点点亮后续步骤。

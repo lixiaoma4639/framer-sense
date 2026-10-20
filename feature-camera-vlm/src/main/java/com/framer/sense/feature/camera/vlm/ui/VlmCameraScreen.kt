@@ -324,7 +324,7 @@ private fun CameraPane(state: VlmUiState, controller: VlmCameraController, permi
                     if (preview != null) {
                         CameraPhotoViewport(scene.orientation.previewDegrees, Modifier.fillMaxSize()) {
                             Image(preview.composite.asImageBitmap(), stringResource(R.string.vlm_selected_composition), Modifier.fillMaxSize().testTag("vlm_selected_preview")
-                                .pointerInput(selected.id, state.stage) {
+                                .pointerInput(selected.id, state.compositionBatchId, state.stage) {
                                     if (state.stage == VlmStage.READY) awaitEachGesture {
                                         val first = awaitFirstDown(requireUnconsumed = false)
                                         var multiple = false
@@ -664,7 +664,7 @@ internal fun PhotoActionControls(state: VlmUiState, plan: CompositionPlan, busy:
                 label = { Text(expressionLabel(expression)) }, modifier = Modifier.testTag("vlm_expression_${expression.name}"))
         }
     }
-    var intensity by remember(plan.id, plan.revision, busy) { mutableFloatStateOf(plan.avatar.expressionIntensity) }
+    var intensity by remember(state.scene?.id, state.compositionBatchId, plan.id, plan.revision, busy) { mutableFloatStateOf(plan.avatar.expressionIntensity) }
     Text(stringResource(R.string.vlm_photo_intensity, (intensity * 100f).roundToInt()))
     Slider(value = intensity, onValueChange = { intensity = it }, valueRange = 0f..1f,
         onValueChangeFinished = { onEvent(VlmIntent.ExpressionIntensityChanged(intensity)) },
