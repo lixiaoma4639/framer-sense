@@ -137,6 +137,34 @@ class VlmSessionTest {
                 assertTrue(vm.state.value.showBackgroundAlignmentControls)
                 vm.onIntent(VlmIntent.ConfirmBackground)
                 assertEquals(BackgroundStatus.ALIGNED_MANUAL, vm.state.value.background.status)
+                vm.onIntent(VlmIntent.Capture)
+                yield()
+                assertEquals(CameraStepStatus.RUNNING, vm.state.value.workflowProgress().last())
+                vm.onIntent(VlmIntent.CaptureFinished((effects.last() as VlmEffect.Capture).token))
+                assertEquals(CameraStepStatus.COMPLETE, vm.state.value.workflowProgress().last())
+                vm.onIntent(VlmIntent.PhotoOrientationChanged(PhotoOrientation(1, 0)))
+                assertEquals(CameraStepStatus.RUNNING, vm.state.value.workflowProgress()[3])
+                assertEquals(CameraStepStatus.PENDING, vm.state.value.workflowProgress().last())
+                assertNull(vm.state.value.capturedWorkflow)
+                vm.onIntent(VlmIntent.ConfirmBackground)
+                assertEquals(CameraStepStatus.PENDING, vm.state.value.workflowProgress().last())
+                vm.onIntent(VlmIntent.Capture)
+                yield()
+                // 保存尚未完成时又失去对齐，迟到的成功不能点亮后续节点。
+                vm.onIntent(VlmIntent.PhotoOrientationChanged(PhotoOrientation(2, 0)))
+                vm.onIntent(VlmIntent.CaptureFinished((effects.last() as VlmEffect.Capture).token))
+                assertNull(vm.state.value.capturedWorkflow)
+                assertEquals(CameraStepStatus.PENDING, vm.state.value.workflowProgress().last())
+                vm.onIntent(VlmIntent.ConfirmBackground)
+                vm.onIntent(VlmIntent.Capture)
+                yield()
+                vm.onIntent(VlmIntent.CaptureFinished((effects.last() as VlmEffect.Capture).token))
+                assertEquals(CameraStepStatus.COMPLETE, vm.state.value.workflowProgress().last())
+                vm.onIntent(VlmIntent.CompositionDetailsVisible(true))
+                assertEquals(listOf(CameraStepStatus.COMPLETE, CameraStepStatus.COMPLETE,
+                    CameraStepStatus.PENDING, CameraStepStatus.PENDING, CameraStepStatus.PENDING),
+                    vm.state.value.workflowProgress())
+                assertNull(vm.state.value.capturedWorkflow)
             } finally { listener.cancel(); vm.onLeave() }
         }
     }
@@ -406,6 +434,34 @@ class VlmSessionTest {
         }
     }
 
+    @Test fun galleryOpensDirectlyWithoutReadingPhotosAndIsBlockedWhileSaving() = runBlocking {
+        withContext(Dispatchers.Main) {
+            val vm = viewModel()
+            val effects = mutableListOf<VlmEffect>()
+            val listener = launch(start = CoroutineStart.UNDISPATCHED) { vm.effects.collect { effects += it } }
+            try {
+                vm.onIntent(VlmIntent.OpenGallery)
+                yield()
+                assertEquals(listOf(VlmEffect.OpenGallery), effects)
+                vm.onIntent(VlmIntent.CameraReady(CameraCapabilities()))
+                vm.onIntent(VlmIntent.Capture)
+                yield()
+                vm.onIntent(VlmIntent.OpenGallery)
+                yield()
+                assertEquals(1, effects.count { it == VlmEffect.OpenGallery })
+                val token = effects.filterIsInstance<VlmEffect.Capture>().single().token
+                vm.onIntent(VlmIntent.CaptureFinished(token))
+                vm.onIntent(VlmIntent.OpenGallery)
+                yield()
+                assertEquals(2, effects.count { it == VlmEffect.OpenGallery })
+                vm.onIntent(VlmIntent.CameraForeground(false))
+                vm.onIntent(VlmIntent.CameraForeground(true))
+                yield()
+                assertEquals(2, effects.count { it == VlmEffect.OpenGallery })
+            } finally { listener.cancel(); vm.onLeave() }
+        }
+    }
+
     /** 为状态机创建测试依赖。
      * @param saved 进程恢复状态。
      * @return 无外部模型调用的状态机。
@@ -614,12 +670,27 @@ class VlmSessionTest {
                 yield()
                 assertEquals(1, events.size)
                 val first = (events.single() as VlmEffect.Capture).token
+                assertTrue(vm.state.value.saving)
                 vm.onIntent(VlmIntent.CaptureFinished(first))
+                assertNotNull(vm.state.value.capturedWorkflow)
+                assertEquals(CameraStepStatus.PENDING, vm.state.value.workflowProgress().last())
                 vm.onIntent(VlmIntent.Capture)
                 yield()
                 vm.onIntent(VlmIntent.CaptureFinished(first))
                 assertTrue(vm.state.value.saving)
+                assertNull(vm.state.value.capturedWorkflow)
                 assertEquals(2, events.size)
+                val second = (events.last() as VlmEffect.Capture).token
+                vm.onIntent(VlmIntent.CaptureFinished(second, "save failed"))
+                assertFalse(vm.state.value.saving)
+                assertEquals(CameraStepStatus.PENDING, vm.state.value.workflowProgress().last())
+                vm.onIntent(VlmIntent.Capture)
+                yield()
+                vm.onIntent(VlmIntent.CaptureFinished((events.last() as VlmEffect.Capture).token))
+                assertNotNull(vm.state.value.capturedWorkflow)
+                vm.onIntent(VlmIntent.StartComposition)
+                assertNull(vm.state.value.capturedWorkflow)
+                assertEquals(CameraStepStatus.PENDING, vm.state.value.workflowProgress().last())
             } finally { listener.cancel(); vm.onLeave() }
         }
     }

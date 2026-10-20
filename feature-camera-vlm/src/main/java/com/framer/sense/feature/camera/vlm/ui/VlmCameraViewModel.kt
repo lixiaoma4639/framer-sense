@@ -54,6 +54,7 @@ class VlmCameraViewModel @Inject constructor(
         override fun error(message: String, error: Throwable?) { Log.e("VlmScan", message, error) }
     }
     private var captureToken: String? = null
+    private var pendingCaptureWorkflow: CameraWorkflowKey? = null
     private var work: Job? = null
     private var renderWork: Job? = null
     private var faceWork: Job? = null
@@ -113,7 +114,7 @@ class VlmCameraViewModel @Inject constructor(
                     }
                     _state.update { current ->
                         if (!foreground || epoch != guidanceEpoch || token != requestToken || current.referencePlan != plan || current.cameraConfigVersion != sample.config.version || current.stage != VlmStage.LIVE) current
-                        else current.copy(background = mergeBackgroundAlignment(current.background, aligned))
+                        else current.withBackgroundGuidance(mergeBackgroundAlignment(current.background, aligned))
                     }
                     if (s.background.status != BackgroundStatus.ALIGNED_AUTO && aligned.status == BackgroundStatus.ALIGNED_AUTO) {
                         val committed = _state.value
@@ -122,7 +123,7 @@ class VlmCameraViewModel @Inject constructor(
                 } catch (cancel: CancellationException) { throw cancel }
                 catch (failure: Exception) {
                     Log.w("VlmScan", "背景对齐处理失败", failure)
-                    if (token == requestToken) _state.update { it.copy(background = BackgroundGuidance()) }
+                    if (token == requestToken) _state.update { it.withBackgroundGuidance(BackgroundGuidance()) }
                 }
             }
         }
@@ -236,7 +237,7 @@ class VlmCameraViewModel @Inject constructor(
                 // 方向不是相机重绑：保留扫描、已冻结照片、请求令牌及生成结果。
                 guidanceEpoch++
                 sessions.resetReference()
-                _state.update { it.copy(photoOrientation = intent.orientation, background = BackgroundGuidance()) }
+                _state.update { it.withBackgroundGuidance(BackgroundGuidance()).copy(photoOrientation = intent.orientation) }
             }
             VlmIntent.OpenPhotoSample -> if (!busy() && !_state.value.settingsVisible &&
                 _state.value.stage in listOf(VlmStage.LIVE, VlmStage.FROZEN, VlmStage.READY)) requestSample(ExpressionId.SMILE)
@@ -277,8 +278,8 @@ class VlmCameraViewModel @Inject constructor(
                 }
                 if (_state.value.ar.sessionId != intent.state.sessionId || intent.state.tracking in listOf(com.framer.sense.feature.camera.vlm.ar.ArTrackingState.LOST, com.framer.sense.feature.camera.vlm.ar.ArTrackingState.PAUSED)) guidanceEpoch++
                 _state.update { current ->
-                current.copy(ar = intent.state, zoom = if (intent.state.source == com.framer.sense.feature.camera.vlm.ar.ArSource.SHARED_CAMERA) 1f else current.zoom,
-                    background = if (current.ar.sessionId != intent.state.sessionId || intent.state.tracking in listOf(com.framer.sense.feature.camera.vlm.ar.ArTrackingState.LOST, com.framer.sense.feature.camera.vlm.ar.ArTrackingState.PAUSED)) BackgroundGuidance() else current.background)
+                current.withBackgroundGuidance(if (current.ar.sessionId != intent.state.sessionId || intent.state.tracking in listOf(com.framer.sense.feature.camera.vlm.ar.ArTrackingState.LOST, com.framer.sense.feature.camera.vlm.ar.ArTrackingState.PAUSED)) BackgroundGuidance() else current.background)
+                    .copy(ar = intent.state, zoom = if (intent.state.source == com.framer.sense.feature.camera.vlm.ar.ArSource.SHARED_CAMERA) 1f else current.zoom)
                 }
             }
             is VlmIntent.CameraConfigured -> {
@@ -286,7 +287,7 @@ class VlmCameraViewModel @Inject constructor(
                 guidanceEpoch++
                 if (intent.version <= _state.value.cameraConfigVersion) return
                 sessions.configure(intent.version)
-                _state.update { it.copy(cameraConfigVersion = intent.version, background = BackgroundGuidance()) }
+                _state.update { it.withBackgroundGuidance(BackgroundGuidance()).copy(cameraConfigVersion = intent.version) }
             }
             is VlmIntent.AnalysisReceived -> {
                 if (intent.epoch != null && intent.epoch != _state.value.cameraEpoch) return
@@ -302,7 +303,7 @@ class VlmCameraViewModel @Inject constructor(
             VlmIntent.StartComposition -> if (_state.value.stage in listOf(VlmStage.LIVE, VlmStage.FREEZING) && _state.value.cameraReady &&
                 !_state.value.modelBusy && !_state.value.saving && !_state.value.settingsVisible && !_state.value.photoSettingsVisible && !_state.value.instructionEditorVisible && _state.value.photoSample == null) {
                 cancelWork()
-                _state.update { it.copy(stage = VlmStage.FREEZING, error = null, notice = null, directorProgress = null,
+                _state.update { it.copy(stage = VlmStage.FREEZING, capturedWorkflow = null, error = null, notice = null, directorProgress = null,
                     scanSession = null, scanSnapshot = null, viewCandidates = emptyList(), selectedFrameId = null,
                     scene = null, result = null, diagnostics = null, previews = emptyMap(), reference = null, referencePlan = null,
                     facePreview = null, availableActions = emptyMap(), availableExpressions = emptyMap()) }
@@ -319,7 +320,7 @@ class VlmCameraViewModel @Inject constructor(
                     zoom = CameraZoomPolicy.clamp(it.zoom, intent.capabilities.minZoom, intent.capabilities.maxZoom)) }
             is VlmIntent.CameraBindingStopped -> if (intent.epoch == _state.value.cameraEpoch) {
                 guidanceEpoch++
-                _state.update { it.copy(cameraReady = false, background = BackgroundGuidance()) }
+                _state.update { it.withBackgroundGuidance(BackgroundGuidance()).copy(cameraReady = false) }
             }
             is VlmIntent.ZoomReported -> if (intent.epoch == _state.value.cameraEpoch && _state.value.cameraMode == CameraMode.NORMAL)
                 _state.update { it.copy(actualZoom = intent.zoom) }
@@ -333,7 +334,8 @@ class VlmCameraViewModel @Inject constructor(
             is VlmIntent.CameraModeSelected -> if (_state.value.framingUnlocked) switchCameraMode(intent.mode)
             is VlmIntent.PhotoSettingsVisible -> if (!intent.visible || !busy())
                 _state.update { it.copy(photoSettingsVisible = intent.visible, instructionEditorVisible = false) }
-            is VlmIntent.CompositionDetailsVisible -> _state.update { it.copy(compositionDetailsVisible = intent.visible) }
+            is VlmIntent.CompositionDetailsVisible -> _state.update { it.copy(compositionDetailsVisible = intent.visible,
+                capturedWorkflow = if (intent.visible) null else it.capturedWorkflow) }
             is VlmIntent.PreferredEthnicity -> if (!busy()) {
                 updatePhotoPreferences { it.copy(ethnicity = intent.ethnicity) }
                 _state.update { it.copy(selectedEthnicity = intent.ethnicity) }
@@ -376,9 +378,9 @@ class VlmCameraViewModel @Inject constructor(
             VlmIntent.Revise -> compose(true)
             VlmIntent.Cancel -> { if (_state.value.stage == VlmStage.SCANNING || _state.value.stage == VlmStage.SCAN_PROCESSING) { cancelScan(); return }; if (busy() && _state.value.modelBusy) return; cancelWork(); _state.update { it.copy(stage = if (it.scanSnapshot != null && it.scene == null) VlmStage.SCAN_REVIEW else if (it.scene == null) VlmStage.LIVE else if (it.result == null) VlmStage.FROZEN else VlmStage.READY, error = null, directorProgress = null) } }
             // 相机是否就绪由绑定生命周期更新；退出构图不能把仍在运行的相机标记为未就绪。
-            VlmIntent.ResumeCamera -> { if (_state.value.scanSnapshot != null) { cancelScan(); return }; cancelWork(); _state.update { it.copy(stage = VlmStage.LIVE, reference = null, referencePlan = null, error = null, directorProgress = null) } }
+            VlmIntent.ResumeCamera -> { if (_state.value.scanSnapshot != null) { cancelScan(); return }; cancelWork(); _state.update { it.copy(stage = VlmStage.LIVE, capturedWorkflow = null, reference = null, referencePlan = null, error = null, directorProgress = null) } }
             is VlmIntent.Select -> if (!busy() && _state.value.result?.plans?.any { it.id == intent.id } == true) {
-                _state.update { it.copy(selectedId = intent.id, facePreview = null,
+                _state.update { it.copy(selectedId = intent.id, capturedWorkflow = null, facePreview = null,
                     stage = if (it.stage == VlmStage.LIVE) VlmStage.READY else it.stage,
                     reference = if (it.stage == VlmStage.LIVE) null else it.reference,
                     referencePlan = if (it.stage == VlmStage.LIVE) null else it.referencePlan) }
@@ -424,7 +426,7 @@ class VlmCameraViewModel @Inject constructor(
                 foreground = intent.visible
                 if (!foreground) closeSample()
                 if (!foreground && _state.value.stage == VlmStage.SCANNING) stopScan(false)
-                if (!foreground) _state.update { it.copy(background = BackgroundGuidance()) }
+                if (!foreground) _state.update { it.withBackgroundGuidance(BackgroundGuidance()) }
                 if (foreground) maybeAutoLoad()
             }
             is VlmIntent.StartModelDownload -> if (!busy() && !downloads.state.value.running && foreground) {
@@ -505,7 +507,7 @@ class VlmCameraViewModel @Inject constructor(
                 val token = requestToken
                 work = viewModelScope.launch {
                     try {
-                        _state.update { it.copy(stage = VlmStage.FREEZING, error = null, scanSession = null, scanSnapshot = null, viewCandidates = emptyList(), selectedFrameId = null, referencePlan = null) }
+                        _state.update { it.copy(stage = VlmStage.FREEZING, capturedWorkflow = null, error = null, scanSession = null, scanSnapshot = null, viewCandidates = emptyList(), selectedFrameId = null, referencePlan = null) }
                         val scene = snapshots.importImage(intent.uri)
                         if (token == requestToken) {
                             _state.update { it.copy(scene = scene, stage = VlmStage.FROZEN, result = null, diagnostics = null, previews = emptyMap(), reference = null, selectedId = null, fromImportedImage = true, facePreview = null, availableActions = emptyMap(), availableExpressions = emptyMap()) }
@@ -517,13 +519,20 @@ class VlmCameraViewModel @Inject constructor(
             VlmIntent.Capture -> if (_state.value.stage == VlmStage.LIVE && _state.value.cameraReady && !busy() && !_state.value.settingsVisible && !_state.value.photoSettingsVisible && !_state.value.instructionEditorVisible) {
                 val token = newVlmId()
                 captureToken = token
-                _state.update { it.copy(saving = true, error = null) }
+                pendingCaptureWorkflow = _state.value.workflowKey
+                _state.update { it.copy(saving = true, capturedWorkflow = null, error = null) }
                 _effects.tryEmit(VlmEffect.Capture(token))
             }
             is VlmIntent.CaptureFinished -> if (intent.token == captureToken) {
+                val completed = pendingCaptureWorkflow.takeIf { intent.error == null }
                 captureToken = null
-                _state.update { it.copy(saving = false, error = intent.error, notice = if (intent.error == null) "照片已保存到系统相册" else null) }
+                pendingCaptureWorkflow = null
+                _state.update { it.copy(saving = false,
+                    capturedWorkflow = completed?.takeIf { workflow -> workflow == it.workflowKey &&
+                        (it.referencePlan == null || it.workflowProgress().take(4).all { status -> status == CameraStepStatus.COMPLETE }) },
+                    error = intent.error, notice = if (intent.error == null) models.message(R.string.vlm_photo_saved) else null) }
             }
+            VlmIntent.OpenGallery -> if (_state.value.canOpenGallery) _effects.tryEmit(VlmEffect.OpenGallery)
         }
     }
 
@@ -581,7 +590,7 @@ class VlmCameraViewModel @Inject constructor(
         cancelWork()
         val token = requestToken
         Log.i(LOG_TAG, "重新开始扫描 oldStage=${old.stage} oldScan=${old.scanSession?.id?.take(8)} token=${token.take(8)} nativeDraining=${local.isInferenceRunning}")
-        _state.update { it.copy(stage = VlmStage.SCANNING, scanSession = null, scanSnapshot = null,
+        _state.update { it.copy(stage = VlmStage.SCANNING, capturedWorkflow = null, scanSession = null, scanSnapshot = null,
             scanProgress = ScanProgress(), viewCandidates = emptyList(), selectedFrameId = null, comparedFrames = 0, manualScanSelectionVisible = false,
             scene = null, result = null, diagnostics = null, previews = emptyMap(), reference = null, referencePlan = null,
             availableActions = emptyMap(), availableExpressions = emptyMap(), facePreview = null,
@@ -656,7 +665,7 @@ class VlmCameraViewModel @Inject constructor(
         previous?.cancel()
         val precedingCleanup = cleanupWork
         cleanupWork = viewModelScope.launch { previous?.join(); previousWork?.join(); previousRender?.join(); previousFace?.join(); precedingCleanup?.join(); local.awaitIdle(); sessions.clear() }
-        _state.update { it.copy(stage = VlmStage.LIVE, scanSession = null, scanSnapshot = null, scene = null,
+        _state.update { it.copy(stage = VlmStage.LIVE, capturedWorkflow = null, scanSession = null, scanSnapshot = null, scene = null,
             scanProgress = ScanProgress(), viewCandidates = emptyList(), selectedFrameId = null, comparedFrames = 0, manualScanSelectionVisible = false,
             result = null, diagnostics = null, previews = emptyMap(), reference = null, referencePlan = null,
             background = BackgroundGuidance(), facePreview = null, error = null, notice = null) }
@@ -783,7 +792,7 @@ class VlmCameraViewModel @Inject constructor(
         val token = requestToken
         val input = inputFor(previous, if (revise) previous.result!!.plans else emptyList(), if (revise) previous.selectedId else null)
         Log.i(LOG_TAG, "启动${if (revise) "修改方案" else "生成方案"}任务 token=${token.take(8)} image=${scene.id.take(8)} mode=${previous.settings.mode} modelStatus=${previous.modelStatus}")
-        _state.update { it.copy(stage = if (revise) VlmStage.MODIFYING else VlmStage.GENERATING, error = null,
+        _state.update { it.copy(stage = if (revise) VlmStage.MODIFYING else VlmStage.GENERATING, capturedWorkflow = null, error = null,
             notice = if (local.isInferenceRunning) models.message(R.string.vlm_flow_waiting_native) else null,
             directorProgress = if (local.isInferenceRunning) DirectorProgress.WaitingPreviousTask else DirectorProgress.PreparingRequest, facePreview = null) }
         work = viewModelScope.launch {
@@ -975,7 +984,7 @@ class VlmCameraViewModel @Inject constructor(
         if (errors.isNotEmpty()) { _state.update { it.copy(error = if (errors.any { error -> "RESOLVED_SPEC_MISMATCH" in error || "VIEW_BINDING_MISMATCH" in error }) models.message(R.string.vlm_photo_spec_invalid) else errors.joinToString("\n")) }; return }
         cancelWork()
         val token = requestToken
-        _state.update { it.copy(stage = VlmStage.MODIFYING, compositionDetailsVisible = false, notice = null) }
+        _state.update { it.copy(stage = VlmStage.MODIFYING, capturedWorkflow = null, compositionDetailsVisible = false, notice = null) }
         work = viewModelScope.launch {
             try {
                 val projectionErrors = previews.inspect(plan, scene).errors
@@ -1051,6 +1060,7 @@ class VlmCameraViewModel @Inject constructor(
         guidanceEpoch++
         cancelWork()
         captureToken = null
+        pendingCaptureWorkflow = null
         _state.update { it.copy(cameraReady = false, saving = false, photoSettingsVisible = false, instructionEditorVisible = if (resetCameraMode) false else it.instructionEditorVisible, compositionDetailsVisible = false, stage = if (it.stage == VlmStage.SCAN_PROCESSING || it.stage == VlmStage.SCAN_REVIEW) it.stage else if (it.scanSnapshot != null && it.scene == null) VlmStage.SCAN_REVIEW else if (it.scene != null && it.stage != VlmStage.LIVE) { if (it.result == null) VlmStage.FROZEN else VlmStage.READY } else VlmStage.LIVE, directorProgress = null) }
     }
 

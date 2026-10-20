@@ -74,6 +74,7 @@ data class VlmUiState(
     val localModelName: String? = null,
     val download: ModelDownloadState = ModelDownloadState(),
     val saving: Boolean = false,
+    val capturedWorkflow: CameraWorkflowKey? = null,
     val settingsVisible: Boolean = false,
     val fromImportedImage: Boolean = false,
     val directorProgress: DirectorProgress? = null,
@@ -95,6 +96,8 @@ data class VlmUiState(
         get() = !operationBusy && !settingsVisible && !photoSettingsVisible
     val canCapture: Boolean
         get() = framingUnlocked && cameraReady && !settingsVisible && !photoSettingsVisible
+    val canOpenGallery: Boolean
+        get() = !operationBusy && !instructionEditorVisible && !settingsVisible && !photoSettingsVisible
     val canZoom: Boolean
         get() = framingUnlocked && cameraReady && cameraMode == CameraMode.NORMAL
 
@@ -187,11 +190,13 @@ sealed interface VlmIntent {
     data class ImportImage(val uri: Uri) : VlmIntent
     data object Capture : VlmIntent
     data class CaptureFinished(val token: String, val error: String? = null) : VlmIntent
+    data object OpenGallery : VlmIntent
 }
 sealed interface VlmEffect {
     data class DownloadModel(val source: String, val allowMetered: Boolean) : VlmEffect
     data class Freeze(val token: String) : VlmEffect
     data class Capture(val token: String) : VlmEffect
+    data object OpenGallery : VlmEffect
 }
 
 data class VlmCaptureAction(val enabled: Boolean, val onClick: () -> Unit)

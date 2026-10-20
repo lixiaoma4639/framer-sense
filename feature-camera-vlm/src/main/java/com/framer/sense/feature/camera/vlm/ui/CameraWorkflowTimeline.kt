@@ -23,6 +23,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.Dp
 import com.framer.sense.feature.camera.vlm.R
 
+internal val CameraWorkflowMaxWidth = 360.dp
+
 /** 独立利用快门原有 6dp 底边距和底部留白，不参与操作栏的测量。 */
 @Composable
 internal fun CameraWorkflowFooter(state: VlmUiState, bottomSpace: Dp, modifier: Modifier = Modifier) {
@@ -40,7 +42,7 @@ internal fun CameraWorkflowTimeline(state: VlmUiState, modifier: Modifier = Modi
     val progress = state.workflowProgress()
     val completeColor = Color(0xFF69D484)
     val nodeSize = height.coerceAtMost(20.dp)
-    Row(modifier.widthIn(max = 360.dp).fillMaxWidth().height(height)
+    Row(modifier.widthIn(max = CameraWorkflowMaxWidth).fillMaxWidth().height(height)
         .testTag("vlm_workflow_timeline"), verticalAlignment = Alignment.CenterVertically) {
         CameraWorkflowStep.entries.forEachIndexed { index, step ->
             val status = progress[index]

@@ -4,6 +4,7 @@ import android.util.Log
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.boundsInWindow
 import android.Manifest
+import android.content.ActivityNotFoundException
 import android.content.pm.PackageManager
 import android.os.Build
 import android.view.MotionEvent
@@ -104,6 +105,10 @@ fun VlmCameraScreen(
         if (granted) viewModel.onIntent(VlmIntent.Capture)
         else viewModel.onIntent(VlmIntent.UserMessage("保存照片需要存储权限"))
     }
+    var galleryLaunching by remember { mutableStateOf(false) }
+    val galleryViewer = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) {
+        galleryLaunching = false
+    }
     val modelLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri -> uri?.let { viewModel.onIntent(VlmIntent.ImportModel(it)) } }
     val directoryLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri -> uri?.let { viewModel.onIntent(VlmIntent.ImportModelDirectory(it)) } }
     var requestedDownload by remember { mutableStateOf<VlmEffect.DownloadModel?>(null) }
@@ -170,6 +175,24 @@ fun VlmCameraScreen(
                     onEvent(VlmIntent.CaptureFinished(effect.token))
                 } catch (cancel: CancellationException) { throw cancel }
                 catch (e: Exception) { onEvent(VlmIntent.CaptureFinished(effect.token, e.message ?: "保存失败")) }
+                VlmEffect.OpenGallery -> {
+                    if (!galleryLaunching) {
+                        try {
+                            val intent = cameraGalleryListIntent(context)
+                            if (intent == null) onEvent(VlmIntent.UserMessage(context.getString(R.string.vlm_gallery_app_missing)))
+                            else {
+                                galleryLaunching = true
+                                galleryViewer.launch(intent)
+                            }
+                        } catch (_: ActivityNotFoundException) {
+                            galleryLaunching = false
+                            onEvent(VlmIntent.UserMessage(context.getString(R.string.vlm_gallery_app_missing)))
+                        } catch (_: SecurityException) {
+                            galleryLaunching = false
+                            onEvent(VlmIntent.UserMessage(context.getString(R.string.vlm_gallery_open_failed)))
+                        }
+                    }
+                }
             }
         }
     }
@@ -191,6 +214,9 @@ fun VlmCameraScreen(
                 onEvent, Modifier.fillMaxSize().padding(top = 48.dp, bottom = 84.dp))
             CameraBottomBar(state, onEvent, { latestCapture() }, permission,
                 Modifier.align(Alignment.BottomCenter).heightIn(max = controlsMaxHeight))
+            CameraWorkflowFooter(state,
+                safeInsets.calculateBottomPadding() - WindowInsets.displayCutout.asPaddingValues().calculateBottomPadding(),
+                Modifier.align(Alignment.BottomCenter))
             ArSupportControl(controller, state, permission, onEvent)
             CameraTopBar(state, onEvent, Modifier.align(Alignment.TopCenter), onExit = exitCamera)
             CompositionInstructionOverlay(state, onEvent, Modifier.fillMaxSize())

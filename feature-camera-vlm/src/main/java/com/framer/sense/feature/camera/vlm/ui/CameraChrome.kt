@@ -146,7 +146,14 @@ internal fun CameraBottomBar(state: VlmUiState, onEvent: (VlmIntent) -> Unit, ca
                 }
             }
         }
-        CameraShutter(state.canCapture && permission, capture, if (landscape) 52 else 68)
+        Box(Modifier.widthIn(max = CameraWorkflowMaxWidth).fillMaxWidth()
+            .height(if (landscape) 52.dp else 68.dp)) {
+            CameraGalleryEntry(state.canOpenGallery, { onEvent(VlmIntent.OpenGallery) },
+                Modifier.align(Alignment.CenterStart))
+            Box(Modifier.align(Alignment.Center)) {
+                CameraShutter(state.canCapture && permission, capture, if (landscape) 52 else 68)
+            }
+        }
     }
 }
 
