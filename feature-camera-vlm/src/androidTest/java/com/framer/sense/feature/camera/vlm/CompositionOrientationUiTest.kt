@@ -81,6 +81,41 @@ class CompositionOrientationUiTest {
         apply.assertIsNotEnabled()
     }
 
+    @Test fun reopeningChoicesPreservesExactScrollOffsetInsteadOfScrollingBackToSelection() {
+        val fixture = fixtureState()
+        val state = mutableStateOf(fixture.copy(compositionDetailsExpanded = false,
+            result = fixture.result!!.copy(plans = (1..9).map { index ->
+                fixture.result!!.plans.first().copy(id = "p$index", title = "测试方案$index")
+            })))
+        compose.setContent { MaterialTheme {
+            Controls(state.value, { event ->
+                when (event) {
+                    is VlmIntent.Select -> state.value = state.value.copy(selectedId = event.id)
+                    is VlmIntent.CompositionDetailsVisible -> state.value = state.value.copy(compositionDetailsVisible = event.visible)
+                    else -> Unit
+                }
+            }, {}, Modifier.size(300.dp, 620.dp))
+        } }
+        val row = compose.onNodeWithTag("vlm_composition_choices")
+        row.performScrollToNode(hasTestTag("vlm_composition_p8"))
+        compose.onNodeWithTag("vlm_composition_p8").performClick()
+        compose.waitForIdle()
+        // 保留与选中项不同的浏览位置，既验证条目，也验证非零像素偏移。
+        row.performScrollToIndex(3)
+        row.performSemanticsAction(SemanticsActions.ScrollBy) { it(17f, 0f) }
+        val before = row.fetchSemanticsNode().config[SemanticsProperties.HorizontalScrollAxisRange].value()
+        val itemBounds = compose.onNodeWithTag("vlm_composition_p4").getUnclippedBoundsInRoot()
+        repeat(2) {
+            compose.onNodeWithTag("vlm_details").performClick()
+            row.assertDoesNotExist()
+            compose.onNodeWithTag("vlm_details").performClick()
+            row.assertIsDisplayed()
+            assertEquals(before, row.fetchSemanticsNode().config[SemanticsProperties.HorizontalScrollAxisRange].value(), .001f)
+            assertEquals(itemBounds, compose.onNodeWithTag("vlm_composition_p4").getUnclippedBoundsInRoot())
+            compose.runOnIdle { assertEquals("p8", state.value.selectedId) }
+        }
+    }
+
     @Test fun pendingBackgroundSharesTheCompositionRowAndRequiresConfirmationBeforeGeneration() {
         val fixture = fixtureState()
         val first = fixture.currentBackgroundComposition()!!

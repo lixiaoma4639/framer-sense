@@ -1,13 +1,13 @@
 package com.framer.sense.feature.camera.vlm.ui
 
 import android.content.res.Configuration
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.layout.*
@@ -192,6 +192,8 @@ private fun Modifier.semanticsShutter(): Modifier {
 /** 列表和详情分别控制；收起详情仍保留选图及应用入口。 */
 @Composable
 internal fun Controls(state: VlmUiState, onEvent: (VlmIntent) -> Unit, importImage: () -> Unit, modifier: Modifier) {
+    // 放在显示条件之外，收起列表时保留位置，也不重新触发选中项定位动画。
+    val compositionScroll = rememberCompositionListState(state)
     val busy = state.operationBusy || state.instructionEditorVisible
     val interruptible = state.stage in listOf(VlmStage.SCANNING, VlmStage.SCAN_PROCESSING,
         VlmStage.VIEW_SELECTING, VlmStage.FREEZING, VlmStage.GENERATING, VlmStage.MODIFYING)
@@ -207,7 +209,7 @@ internal fun Controls(state: VlmUiState, onEvent: (VlmIntent) -> Unit, importIma
                     else Modifier.fillMaxWidth()
                 CompositionDetailsPanel(state, onEvent, panelModifier)
             }
-            CompositionCards(state, onEvent)
+            CompositionCards(state, onEvent, compositionScroll)
         }
         if (state.stage == VlmStage.LIVE && state.referencePlan != null) {
             if (state.referencePlan.viewBinding == null || state.background.status != BackgroundStatus.SEARCHING) {
@@ -270,11 +272,10 @@ private fun CameraActionRow(content: @Composable RowScope.() -> Unit) {
 
 @Composable
 private fun CompositionSelectionToggle(state: VlmUiState, onEvent: (VlmIntent) -> Unit) {
-    OutlinedButton(onClick = { onEvent(VlmIntent.CompositionDetailsVisible(!state.compositionDetailsVisible)) },
+    TextButton(onClick = { onEvent(VlmIntent.CompositionDetailsVisible(!state.compositionDetailsVisible)) },
         enabled = !state.operationBusy, modifier = Modifier.defaultMinSize(minWidth = 1.dp, minHeight = 1.dp).testTag("vlm_details"),
         contentPadding = PaddingValues(horizontal = 5.dp, vertical = 2.dp), shape = RoundedCornerShape(2.dp),
-        border = BorderStroke(.5.dp, Color.White.copy(alpha = if (state.operationBusy) .4f else 1f)),
-        colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.White, disabledContentColor = Color.White.copy(alpha = .4f))) {
+        colors = ButtonDefaults.textButtonColors(contentColor = Color.White, disabledContentColor = Color.White.copy(alpha = .4f))) {
         Text(stringResource(R.string.vlm_composition_details), maxLines = 1,
             modifier = Modifier.testTag("vlm_details_label"))
         Icon(if (state.compositionDetailsVisible) Icons.Default.ExpandMore else Icons.Default.ExpandLess,
@@ -285,31 +286,37 @@ private fun CompositionSelectionToggle(state: VlmUiState, onEvent: (VlmIntent) -
 
 @Composable
 private fun CameraAction(label: Int, tag: String, enabled: Boolean, click: () -> Unit) {
-    OutlinedButton(onClick = click, enabled = enabled,
+    TextButton(onClick = click, enabled = enabled,
         modifier = Modifier.defaultMinSize(minWidth = 1.dp, minHeight = 1.dp).testTag(tag),
         contentPadding = PaddingValues(horizontal = 5.dp, vertical = 2.dp), shape = RoundedCornerShape(2.dp),
-        border = BorderStroke(.5.dp, Color.White.copy(alpha = if (enabled) 1f else .4f)),
-        colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.White, disabledContentColor = Color.White.copy(alpha = .4f))) {
+        colors = ButtonDefaults.textButtonColors(contentColor = Color.White, disabledContentColor = Color.White.copy(alpha = .4f))) {
         Text(stringResource(label), maxLines = 1, modifier = Modifier.testTag("${tag}_label"))
     }
 }
 
 @Composable
-internal fun CompositionCards(state: VlmUiState, onEvent: (VlmIntent) -> Unit) {
-    val landscape = LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
+private fun rememberCompositionListState(state: VlmUiState): LazyListState {
     val choices = state.compositionChoices
-    val scroll = rememberLazyListState()
-    var pendingFrameId by remember(state.scanSnapshot?.session?.id) { mutableStateOf<String?>(null) }
-    val pending = choices.filterIsInstance<CompositionChoice.PendingBackground>()
-        .firstOrNull { it.frame.id == pendingFrameId }
     val selectedIndex = choices.indexOfFirst { choice -> when (choice) {
         is CompositionChoice.Plan -> choice.group.scene.id == state.scene?.id && choice.batch.id == state.compositionBatchId &&
             choice.plan.id == state.selectedId
         is CompositionChoice.PendingBackground -> state.result == null && choice.frame.id == state.selectedFrameId
     } }
+    val scroll = rememberLazyListState(initialFirstVisibleItemIndex = selectedIndex.coerceAtLeast(0))
     LaunchedEffect(state.scene?.id, state.compositionBatchId, state.selectedId, choices.size) {
         if (selectedIndex >= 0) scroll.animateScrollToItem(selectedIndex)
     }
+    return scroll
+}
+
+@Composable
+internal fun CompositionCards(state: VlmUiState, onEvent: (VlmIntent) -> Unit,
+    scroll: LazyListState = rememberCompositionListState(state)) {
+    val landscape = LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
+    val choices = state.compositionChoices
+    var pendingFrameId by remember(state.scanSnapshot?.session?.id) { mutableStateOf<String?>(null) }
+    val pending = choices.filterIsInstance<CompositionChoice.PendingBackground>()
+        .firstOrNull { it.frame.id == pendingFrameId }
     LaunchedEffect(state.operationBusy, pendingFrameId, pending?.frame?.id) {
         if (state.operationBusy || pending == null) pendingFrameId = null
     }
