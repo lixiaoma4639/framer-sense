@@ -152,7 +152,8 @@ val VlmJson = Json { encodeDefaults = true; explicitNulls = true }
     val currentZoom: Float,
     val imagePath: String,
     val modelImagePath: String,
-    @kotlinx.serialization.Transient val arBinding: PhotoViewBinding? = null,
+    /** 相机冻结来源；普通单张与 AR 均据此找回背景，不进入模型网关协议。 */
+    @kotlinx.serialization.Transient val captureBinding: PhotoViewBinding? = null,
     /** 仅供 App 把转正照片映回固定预览；不进入模型网关协议。 */
     @kotlinx.serialization.Transient val orientation: PhotoOrientation = PhotoOrientation()
 )

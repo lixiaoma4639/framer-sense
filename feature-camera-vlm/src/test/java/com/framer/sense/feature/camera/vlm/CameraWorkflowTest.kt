@@ -4,6 +4,8 @@ import com.framer.sense.feature.camera.vlm.agent.DirectorProgress
 import com.framer.sense.feature.camera.vlm.model.*
 import com.framer.sense.feature.camera.vlm.ui.*
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class CameraWorkflowTest {
@@ -16,6 +18,28 @@ class CameraWorkflowTest {
     private val pending = CameraStepStatus.PENDING
     private val running = CameraStepStatus.RUNNING
     private val complete = CameraStepStatus.COMPLETE
+
+    @Test fun scanAndSinglePhotoEntriesAreOnlyAvailableInTheFirstStep() {
+        val initial = VlmUiState(cameraReady = true)
+        assertTrue(initial.canRestartScan)
+        assertTrue(initial.canStartSingleComposition)
+        assertFalse(initial.copy(stage = VlmStage.SCANNING).canRestartScan)
+        assertTrue(initial.copy(stage = VlmStage.SCANNING).canRestartFlow)
+        assertFalse(initial.copy(stage = VlmStage.FREEZING).canRestartScan)
+        assertTrue(initial.copy(stage = VlmStage.FREEZING).canRestartFlow)
+        assertFalse(initial.copy(stage = VlmStage.SCANNING).canStartSingleComposition)
+        listOf(VlmStage.FROZEN, VlmStage.GENERATING, VlmStage.READY, VlmStage.MODIFYING,
+            VlmStage.SCAN_REVIEW, VlmStage.SCAN_PROCESSING, VlmStage.VIEW_SELECTING, VlmStage.LIVE).forEach { stage ->
+            val later = ready.copy(stage = stage, cameraReady = true,
+                referencePlan = if (stage == VlmStage.LIVE) plan else null)
+            assertFalse(later.isFirstCaptureStep)
+            assertFalse(later.canRestartScan)
+            assertFalse(later.canStartSingleComposition)
+            assertTrue(later.canRestartFlow)
+            assertFalse(later.copy(saving = true).canRestartFlow)
+            assertFalse(later.copy(modelBusy = true).canRestartFlow)
+        }
+    }
 
     @Test fun progressFollowsScanGenerateApplyAlignmentAndSuccessfulSave() {
         assertProgress(VlmUiState(), pending, pending, pending, pending, pending)

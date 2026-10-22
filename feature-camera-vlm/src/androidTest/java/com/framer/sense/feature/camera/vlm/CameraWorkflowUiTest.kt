@@ -57,19 +57,20 @@ class CameraWorkflowUiTest {
                 state.value = VlmUiState(cameraReady = true)
             }
             assertCentered("vlm_scan_start", "vlm_start")
-            // 三个按钮（包括构图选择的图标）仍然整体居中。
+            // 构图生成后保留重新开始与构图选择，仍然整体居中。
             compose.runOnIdle { state.value = state.value.copy(result = result) }
             listOf(0f, 90f, 180f, 270f).forEach { direction ->
                 compose.runOnIdle { angle.floatValue = direction }
-                assertCentered("vlm_scan_start", "vlm_details")
+                assertCentered("vlm_restart_flow", "vlm_details")
+                compose.onNodeWithTag("vlm_start").assertDoesNotExist()
                 val label = compose.onNodeWithTag("vlm_details_label", useUnmergedTree = true).getUnclippedBoundsInRoot()
                 val icon = compose.onNodeWithTag("vlm_details_icon", useUnmergedTree = true).getUnclippedBoundsInRoot()
                 assertTrue("构图选择图标位于文字右侧", icon.left >= label.right)
             }
             compose.runOnIdle { state.value = state.value.copy(referencePlan = plan) }
-            assertCentered("vlm_scan_start", "vlm_resume")
+            assertCentered("vlm_restart_flow", "vlm_details")
             compose.runOnIdle { state.value = VlmUiState(stage = VlmStage.SCANNING) }
-            assertCentered("vlm_scan_restart_active", "vlm_scan_cancel")
+            assertCentered("vlm_restart_flow", "vlm_scan_stop")
         }
     }
 
@@ -80,9 +81,9 @@ class CameraWorkflowUiTest {
                 Controls(VlmUiState(stage = VlmStage.SCAN_REVIEW), events::add, {}, Modifier.fillMaxWidth())
             }
         } }
-        compose.onNodeWithTag("vlm_scan_restart_active").performScrollTo().assertIsDisplayed().performClick()
+        compose.onNodeWithTag("vlm_restart_flow").performScrollTo().assertIsDisplayed().performClick()
         compose.onNodeWithTag("vlm_scan_manual_open").performScrollTo().assertIsDisplayed().performClick()
-        assertEquals(listOf(VlmIntent.StartScan, VlmIntent.CompositionDetailsVisible(true)), events)
+        assertEquals(listOf(VlmIntent.RestartFlow, VlmIntent.CompositionDetailsVisible(true)), events)
     }
 
     @Test fun timelineStaysBelowShutterAndTurnsIconsWithoutMovingControls() {

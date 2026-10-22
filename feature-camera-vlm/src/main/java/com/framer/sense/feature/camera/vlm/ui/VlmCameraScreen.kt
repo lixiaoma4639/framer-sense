@@ -48,6 +48,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
@@ -222,7 +223,6 @@ fun VlmCameraScreen(
             CompositionInstructionOverlay(state, onEvent, Modifier.fillMaxSize())
         }
         if (state.photoSettingsVisible) PhotoSettingsDialog(state, onEvent, { imageLauncher.launch("image/*") })
-        if (state.compositionDetailsVisible && state.stage == VlmStage.SCAN_REVIEW) CompositionDetailsDialog(state, onEvent)
         if (state.settingsVisible) ModelSettingsDialog(state, onEvent, { modelLauncher.launch(arrayOf("application/zip", "application/octet-stream", "application/x-zip-compressed")) }, { directoryLauncher.launch(null) })
         state.photoSample?.let { PhotoSampleDialog(it, onEvent) }
     }
@@ -366,6 +366,7 @@ internal fun FrozenSceneImage(scene: SceneSnapshot, modifier: Modifier = Modifie
 }
 
 /** 扫描收尾、选景和构图共用黑色进度面板，跟随设备方向转正。 */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 internal fun VlmLoadingOverlay(
     stage: VlmStage,
@@ -375,26 +376,34 @@ internal fun VlmLoadingOverlay(
 ) {
     CameraRotatingViewport(modifier.fillMaxSize().testTag("vlm_loading_viewport")) {
         Column(
-            Modifier.align(Alignment.Center).padding(16.dp).widthIn(max = 360.dp)
-                .background(Color.Black.copy(alpha = .72f)).padding(16.dp)
-                .verticalScroll(rememberScrollState()).testTag("vlm_loading_panel"),
-            horizontalAlignment = Alignment.CenterHorizontally
+            Modifier.align(Alignment.Center).padding(12.dp).widthIn(max = 300.dp)
+                .background(Color.Black.copy(alpha = .72f)).testTag("vlm_loading_panel")
+                .padding(horizontal = 12.dp, vertical = 8.dp).verticalScroll(rememberScrollState()),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(4.dp)
         ) {
-            CircularProgressIndicator(color = Color.White, trackColor = Color.White.copy(alpha = .2f),
-                modifier = Modifier.testTag("vlm_loading_spinner"))
             Text(
-                when (stage) {
+                stringResource(R.string.vlm_loading_description, when (stage) {
                     VlmStage.FREEZING -> stringResource(R.string.vlm_camera_freezing)
                     VlmStage.SCAN_PROCESSING -> stringResource(R.string.vlm_scan_finishing)
                     VlmStage.VIEW_SELECTING -> stringResource(R.string.vlm_scan_selecting)
                     else -> directorProgressLabel(progress)
-                },
+                }),
                 color = Color.White,
+                style = MaterialTheme.typography.bodyLarge.let {
+                    it.copy(fontSize = (it.fontSize.value - 2f).sp, lineHeight = (it.lineHeight.value - 2f).sp)
+                },
                 textAlign = TextAlign.Center,
                 modifier = Modifier.testTag("vlm_director_progress")
             )
-            TextButton(onClick = onCancel, colors = ButtonDefaults.textButtonColors(contentColor = Color.White),
-                modifier = Modifier.testTag("vlm_loading_cancel")) { Text(stringResource(R.string.vlm_action_cancel)) }
+            // 移除按钮默认的额外高度，让顶部说明与底部取消文字具有相同的外边距。
+            CompositionLocalProvider(LocalMinimumInteractiveComponentSize provides 0.dp) {
+                TextButton(onClick = onCancel, colors = ButtonDefaults.textButtonColors(contentColor = Color.White),
+                    contentPadding = PaddingValues(0.dp),
+                    modifier = Modifier.defaultMinSize(minWidth = 1.dp, minHeight = 1.dp).testTag("vlm_loading_cancel")) {
+                    Text(stringResource(R.string.vlm_action_cancel), modifier = Modifier.testTag("vlm_loading_cancel_label"))
+                }
+            }
         }
     }
 }

@@ -104,9 +104,17 @@ data class VlmUiState(
     val canZoom: Boolean
         get() = framingUnlocked && cameraReady && cameraMode == CameraMode.NORMAL
 
-    /** 重启业务允许取消生成／扫描，但不能打断模型管理、保存或样片资源操作。 */
+    /** 扫描／单张冻结仍属于第一步；有背景或构图后必须显式重置流程。 */
+    val isFirstCaptureStep: Boolean
+        get() = stage in listOf(VlmStage.LIVE, VlmStage.SCANNING, VlmStage.FREEZING) &&
+            scene == null && scanSnapshot == null && result == null && compositionCache.isEmpty() && referencePlan == null
+    /** 可取消本轮工作回到第一步，但不能打断模型管理、保存或样片资源操作。 */
+    val canRestartFlow: Boolean
+        get() = !modelBusy && !saving && !settingsVisible && !photoSettingsVisible && !instructionEditorVisible && photoSample == null
     val canRestartScan: Boolean
-        get() = !modelBusy && !saving && !settingsVisible && !photoSettingsVisible && !instructionEditorVisible && photoSample == null && (cameraReady || stage != VlmStage.LIVE)
+        get() = isFirstCaptureStep && stage == VlmStage.LIVE && canRestartFlow && cameraReady
+    val canStartSingleComposition: Boolean
+        get() = isFirstCaptureStep && stage in listOf(VlmStage.LIVE, VlmStage.FREEZING) && cameraReady && canRestartFlow
     val canGenerate: Boolean
         get() = !modelBusy && !saving && !settingsVisible && !photoSettingsVisible && !instructionEditorVisible && photoSample == null && scene != null &&
             stage in listOf(VlmStage.FROZEN, VlmStage.READY, VlmStage.GENERATING, VlmStage.MODIFYING)
@@ -131,6 +139,7 @@ sealed interface VlmIntent {
     data class PhotoSampleAction(val actionId: String) : VlmIntent
     data class UserMessage(val message: String) : VlmIntent
     data object StartScan : VlmIntent
+    data object RestartFlow : VlmIntent
     data object StopScan : VlmIntent
     data object CancelScan : VlmIntent
     data object PreferScanView : VlmIntent

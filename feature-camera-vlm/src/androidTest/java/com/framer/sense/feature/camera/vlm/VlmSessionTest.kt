@@ -22,6 +22,145 @@ import java.util.UUID
 
 /** 验证相机事件门控，不调用摄像头、网络、GPU 或原生模型。 */
 class VlmSessionTest {
+    @Test fun singleCompositionRequiresFreshBackgroundConfirmationAfterEveryRestart() = runBlocking {
+        withContext(Dispatchers.Main) {
+            val vm = viewModel(provider = object : VisionModelProvider {
+                override suspend fun step(call: ModelCall) = reply(call.input)
+            }, renderer = backgroundRenderer())
+            val effects = mutableListOf<VlmEffect>()
+            val listener = launch(start = CoroutineStart.UNDISPATCHED) { vm.effects.collect { effects += it } }
+            var previousBinding: PhotoViewBinding? = null
+            try {
+                var token = startGenerating(vm, effects)
+                repeat(2) { round ->
+                    vm.onIntent(VlmIntent.FrameReady(token, Bitmap.createBitmap(80, 60, Bitmap.Config.ARGB_8888), 1f))
+                    val ready = withTimeout(5_000) { vm.state.first { it.stage == VlmStage.READY } }
+                    val binding = requireNotNull(ready.scene!!.captureBinding)
+                    assertEquals(ready.scene!!.id, binding.frameId)
+                    assertNull(binding.arSessionId)
+                    assertNotEquals(previousBinding, binding)
+                    assertTrue(ready.result!!.plans.all { it.viewBinding == binding })
+                    // 后续相机配置更新不能改变照片已绑定的来源，导致应用校验失败。
+                    vm.onIntent(VlmIntent.CameraConfigured(10 + round))
+                    vm.onIntent(VlmIntent.Apply)
+                    val applied = withTimeout(5_000) { vm.state.first { it.stage == VlmStage.LIVE && it.referencePlan != null } }
+                    assertEquals(binding, applied.referencePlan!!.viewBinding)
+                    assertEquals(BackgroundStatus.SEARCHING, applied.background.status)
+                    assertTrue(applied.showBackgroundAlignmentControls)
+                    assertEquals(ReferencePresentation.HIDDEN,
+                        referencePresentation(applied.referencePlan, applied.background.status, applied.ar))
+                    assertEquals(CameraStepStatus.RUNNING, applied.workflowProgress()[3])
+                    vm.onIntent(VlmIntent.ConfirmBackground)
+                    val confirmed = vm.state.value
+                    assertEquals(BackgroundStatus.ALIGNED_MANUAL, confirmed.background.status)
+                    assertEquals(ReferencePresentation.SCREEN,
+                        referencePresentation(confirmed.referencePlan, confirmed.background.status, confirmed.ar))
+                    previousBinding = binding
+                    if (round == 0) {
+                        vm.onIntent(VlmIntent.RestartFlow)
+                        assertNull(vm.state.value.scene)
+                        assertNull(vm.state.value.referencePlan)
+                        vm.onIntent(VlmIntent.StartComposition)
+                        yield()
+                        token = effects.filterIsInstance<VlmEffect.Freeze>().last().token
+                    }
+                }
+            } finally { listener.cancel(); vm.onLeave() }
+        }
+    }
+
+    @Test fun restartFlowClearsAllGeneratedAndAppliedStateWithoutStartingAnotherAction() = runBlocking {
+        withContext(Dispatchers.Main) {
+            val vm = viewModel(provider = object : VisionModelProvider {
+                override suspend fun step(call: ModelCall) = reply(call.input)
+            }, renderer = backgroundRenderer())
+            val effects = mutableListOf<VlmEffect>()
+            val listener = launch(start = CoroutineStart.UNDISPATCHED) { vm.effects.collect { effects += it } }
+            try {
+                val token = startGenerating(vm, effects)
+                vm.onIntent(VlmIntent.FrameReady(token, Bitmap.createBitmap(60, 80, Bitmap.Config.ARGB_8888), 1f))
+                val first = withTimeout(5_000) { vm.state.first { it.stage == VlmStage.READY } }
+                // 后续步骤不能从旧入口直接开始扫描或单张构图。
+                val effectCount = effects.size
+                vm.onIntent(VlmIntent.StartScan)
+                vm.onIntent(VlmIntent.StartComposition)
+                assertEquals(first.scene, vm.state.value.scene)
+                assertEquals(VlmStage.READY, vm.state.value.stage)
+                assertEquals(effectCount, effects.size)
+                vm.onIntent(VlmIntent.Generate)
+                withTimeout(5_000) { vm.state.first { it.stage == VlmStage.READY && it.compositionChoices.size == 6 } }
+                vm.onIntent(VlmIntent.Apply)
+                val applied = withTimeout(5_000) { vm.state.first { it.stage == VlmStage.LIVE && it.referencePlan != null } }
+                vm.onIntent(VlmIntent.StartComposition)
+                assertEquals(applied.scene, vm.state.value.scene)
+                assertNotNull(vm.state.value.referencePlan)
+                vm.onIntent(VlmIntent.RestartFlow)
+                yield()
+                val initial = vm.state.value
+                assertEquals(VlmStage.LIVE, initial.stage)
+                assertTrue(initial.cameraReady)
+                assertEquals(applied.cameraEpoch, initial.cameraEpoch)
+                assertEquals(applied.settings, initial.settings)
+                assertEquals(applied.photoPreferences, initial.photoPreferences)
+                assertNull(initial.scanSession); assertNull(initial.scanSnapshot); assertNull(initial.scene)
+                assertNull(initial.result); assertNull(initial.selectedId); assertNull(initial.selectedFrameId)
+                assertNull(initial.reference); assertNull(initial.referencePlan); assertNull(initial.facePreview)
+                assertNull(initial.diagnostics); assertNull(initial.directorProgress); assertNull(initial.capturedWorkflow)
+                assertTrue(initial.compositionCache.isEmpty()); assertTrue(initial.previews.isEmpty())
+                assertTrue(initial.viewCandidates.isEmpty()); assertTrue(initial.availableActions.isEmpty())
+                assertTrue(initial.availableExpressions.isEmpty())
+                assertEquals(ScanProgress(), initial.scanProgress)
+                assertEquals(BackgroundGuidance(), initial.background)
+                assertFalse(initial.compositionDetailsVisible); assertFalse(initial.compositionDetailsExpanded)
+                assertEquals(List(5) { CameraStepStatus.PENDING }, initial.workflowProgress())
+                assertEquals(effectCount, effects.size)
+                vm.onIntent(VlmIntent.PlatformFailed(token, "旧冻结错误"))
+                assertNull(vm.state.value.error)
+                vm.onIntent(VlmIntent.RestartFlow)
+                assertNull(vm.state.value.scanSession)
+                vm.onIntent(VlmIntent.StartScan)
+                withTimeout(5_000) { vm.state.first { it.scanSession != null && it.stage == VlmStage.SCANNING } }
+            } finally { listener.cancel(); vm.onIntent(VlmIntent.CancelScan); vm.onLeave() }
+        }
+    }
+
+    @Test fun restartDuringGenerationDiscardsLateResultsAndWaitsForAnExplicitNewScan() = runBlocking {
+        withContext(Dispatchers.Main) {
+            val entered = CompletableDeferred<Unit>()
+            val release = CompletableDeferred<Unit>()
+            val finished = CompletableDeferred<Unit>()
+            val vm = viewModel(provider = object : VisionModelProvider {
+                override suspend fun step(call: ModelCall): StepReply {
+                    entered.complete(Unit)
+                    try { withContext(NonCancellable) { release.await() }; return reply(call.input) }
+                    finally { finished.complete(Unit) }
+                }
+            }, renderer = backgroundRenderer())
+            val effects = mutableListOf<VlmEffect>()
+            val listener = launch(start = CoroutineStart.UNDISPATCHED) { vm.effects.collect { effects += it } }
+            try {
+                val token = startGenerating(vm, effects)
+                vm.onIntent(VlmIntent.FrameReady(token, Bitmap.createBitmap(60, 80, Bitmap.Config.ARGB_8888), 1f))
+                withTimeout(5_000) { entered.await() }
+                vm.onIntent(VlmIntent.RestartFlow)
+                assertEquals(VlmStage.LIVE, vm.state.value.stage)
+                assertNull(vm.state.value.scanSession)
+                assertNull(vm.state.value.scene)
+                assertNull(vm.state.value.directorProgress)
+                release.complete(Unit)
+                withTimeout(5_000) { finished.await() }
+                yield()
+                assertNull(vm.state.value.result)
+                assertTrue(vm.state.value.compositionCache.isEmpty())
+                assertEquals(List(5) { CameraStepStatus.PENDING }, vm.state.value.workflowProgress())
+                assertEquals(1, effects.filterIsInstance<VlmEffect.Freeze>().size)
+                assertTrue(effects.none { it is VlmEffect.Capture })
+                vm.onIntent(VlmIntent.StartScan)
+                withTimeout(5_000) { vm.state.first { it.scanSession != null && it.stage == VlmStage.SCANNING } }
+            } finally { release.complete(Unit); listener.cancel(); vm.onIntent(VlmIntent.CancelScan); vm.onLeave() }
+        }
+    }
+
     @Test fun continuingGenerationAppendsBatchesAndFailureOrCancellationDoesNotConsumeNumbers() = runBlocking {
         withContext(Dispatchers.Main) {
             var calls = 0
@@ -116,7 +255,7 @@ class VlmSessionTest {
                 }
             }, renderer = backgroundRenderer())
             try {
-                val frames = threeBackgroundScan(vm)
+                val frames = cachedScanFrames(vm)
                 assertTrue(inputs.isEmpty())
                 vm.onIntent(VlmIntent.ScanViewSelected(frames[0].id))
                 val first = withTimeout(5_000) { vm.state.first { it.stage == VlmStage.READY } }
@@ -178,7 +317,9 @@ class VlmSessionTest {
                     assertEquals(frame.scene, input.scene)
                     assertEquals(frame.id, input.viewBinding!!.frameId)
                 }
-                vm.onIntent(VlmIntent.StartScan)
+                vm.onIntent(VlmIntent.RestartFlow)
+                assertEquals(VlmStage.LIVE, vm.state.value.stage)
+                assertNull(vm.state.value.scanSession)
                 assertTrue(vm.state.value.compositionCache.isEmpty())
                 assertNull(vm.state.value.result)
             } finally { vm.onIntent(VlmIntent.CancelScan); vm.onLeave() }
@@ -204,7 +345,7 @@ class VlmSessionTest {
                 }
             }, renderer = backgroundRenderer())
             try {
-                val frames = threeBackgroundScan(vm)
+                val frames = cachedScanFrames(vm)
                 vm.onIntent(VlmIntent.ScanViewSelected(frames[0].id))
                 val first = withTimeout(5_000) { vm.state.first { it.stage == VlmStage.READY } }
                 vm.onIntent(VlmIntent.ScanViewSelected(frames[1].id))
@@ -239,13 +380,58 @@ class VlmSessionTest {
                 plan.avatar.copy(projectionCalibrated = true))
     }
 
-    /** 留下三种拍摄方向的真实扫描文件；后台结束扫描，避免调用真实的选景模型。 */
-    private suspend fun threeBackgroundScan(vm: VlmCameraViewModel): List<ScanFrame> {
+    @Test fun manualScanPreviewWaitsForGenerationAndCannotExceedTheBackgroundCacheLimit() = runBlocking {
+        withContext(Dispatchers.Main) {
+            val inputs = mutableListOf<DirectorInput>()
+            val vm = viewModel(provider = object : VisionModelProvider {
+                override suspend fun step(call: ModelCall): StepReply {
+                    inputs += call.input
+                    return reply(call.input)
+                }
+            }, renderer = backgroundRenderer())
+            try {
+                val frames = cachedScanFrames(vm, listOf(0, 1, 3, 2))
+                assertTrue(vm.state.value.viewCandidates.isEmpty())
+                assertNull(vm.state.value.scene)
+                assertNull(vm.state.value.selectedFrameId)
+                assertEquals(4, vm.state.value.compositionChoices.size)
+                for (frame in frames.take(3)) {
+                    val callsBefore = inputs.size
+                    vm.onIntent(VlmIntent.PreviewScanView(frame.id))
+                    assertEquals(VlmStage.FROZEN, vm.state.value.stage)
+                    assertEquals(frame.scene, vm.state.value.displayScene)
+                    assertNull(vm.state.value.result)
+                    assertEquals(callsBefore, inputs.size)
+                    vm.onIntent(VlmIntent.Generate)
+                    val ready = withTimeout(5_000) { vm.state.first { it.stage == VlmStage.READY } }
+                    assertEquals(callsBefore + 1, inputs.size)
+                    assertEquals(frame.id, ready.result!!.plans.first().viewBinding!!.frameId)
+                }
+                vm.onIntent(VlmIntent.PreviewScanView(frames[3].id))
+                assertEquals(frames[3].scene, vm.state.value.displayScene)
+                vm.onIntent(VlmIntent.Generate)
+                assertEquals(VlmStage.FROZEN, vm.state.value.stage)
+                assertNotNull(vm.state.value.error)
+                assertEquals(3, inputs.size)
+                assertEquals(3, vm.state.value.compositionCache.size)
+                // 缓存满仍可选回已有构图，并为已有背景追加一批。
+                vm.onIntent(VlmIntent.Select("p1", frames[0].scene.id))
+                vm.onIntent(VlmIntent.Generate)
+                val continued = withTimeout(5_000) { vm.state.first { it.stage == VlmStage.READY } }
+                assertEquals(4, inputs.size)
+                assertEquals(2, continued.compositionCache.getValue(frames[0].scene.id).allBatches.size)
+                assertEquals(3, continued.compositionCache.size)
+            } finally { vm.onIntent(VlmIntent.CancelScan); vm.onLeave() }
+        }
+    }
+
+    /** 保留各拍摄方向的真实扫描文件；后台结束扫描，避免调用真实的选景模型。 */
+    private suspend fun cachedScanFrames(vm: VlmCameraViewModel, rotations: List<Int> = listOf(0, 1, 3)): List<ScanFrame> {
         vm.onIntent(VlmIntent.CameraReady(CameraCapabilities(1f, 3f)))
         vm.onIntent(VlmIntent.CameraConfigured(7))
         vm.onIntent(VlmIntent.StartScan)
         val scan = withTimeout(5_000) { vm.state.first { it.scanSession != null }.scanSession!! }
-        listOf(0, 1, 3).forEachIndexed { index, rotation ->
+        rotations.forEachIndexed { index, rotation ->
             val direction = PhotoOrientation(rotation, 0)
             vm.onIntent(VlmIntent.PhotoOrientationChanged(direction))
             val buffer = ByteArray(64 * 48 * 3 / 2) { if (it < 64 * 48) 100 else 128.toByte() }
@@ -261,7 +447,7 @@ class VlmSessionTest {
     }
 
     /** 回放真实 NV21 → ORB → 稳定确认 → MVI，不用人工确认冒充自动结果。 */
-    @Test fun stableCameraFramesAutomaticallyReachTheSameReferenceStateAsManualConfirmation() = runBlocking {
+    @Test fun stableSinglePhotoCameraFramesAutomaticallyReachTheSameStateAsManualConfirmation() = runBlocking {
         withContext(Dispatchers.Main) {
             val provider = object : VisionModelProvider {
                 override suspend fun step(call: ModelCall): StepReply {
@@ -297,13 +483,15 @@ class VlmSessionTest {
             var sampling: Job? = null
             try {
                 val token = startGenerating(vm, effects)
-                val config = ScanCameraConfig(7, 0, 1f, CropRect(), false, arSessionId = "test-source")
-                vm.onIntent(VlmIntent.FrameReady(token, texture, 1f, arConfig = config))
+                val config = ScanCameraConfig(7, 0, 1f, CropRect(), false)
+                vm.onIntent(VlmIntent.FrameReady(token, texture, 1f))
                 withTimeout(5_000) { vm.state.first { it.stage == VlmStage.READY } }
                 vm.onIntent(VlmIntent.Apply)
                 val applied = withTimeout(5_000) { vm.state.first { it.stage == VlmStage.LIVE && it.reference != null } }
                 val plan = requireNotNull(applied.referencePlan)
                 assertNotNull(plan.viewBinding)
+                assertNull(plan.viewBinding!!.arSessionId)
+                assertEquals(ReferencePresentation.HIDDEN, referencePresentation(plan, applied.background.status, applied.ar))
                 vm.onIntent(VlmIntent.CameraConfigured(7))
                 vm.onIntent(VlmIntent.CameraForeground(true))
                 val target = "guide:${plan.viewBinding!!.frameId}:${plan.id}:${plan.revision}"
@@ -425,7 +613,7 @@ class VlmSessionTest {
                     assertEquals(captured, call.input.scene.orientation)
                     assertEquals(80, call.input.scene.width); assertEquals(60, call.input.scene.height)
                     entered.complete(Unit); released.await()
-                    return reply(call.input.scene.id)
+                    return reply(call.input)
                 }
             }
             val renderer = object : AvatarRenderer {
@@ -741,11 +929,11 @@ class VlmSessionTest {
     )
 
     /** 创建当前冻结画面对应的最终模型答复。 */
-    private fun reply(imageId: String): StepReply = StepReply(
-        "fake",
-        VlmJson.encodeToString(DirectorDecision(ActionKind.FINAL, plans(), imageId = imageId)),
-        DirectorDecision(ActionKind.FINAL, plans(), imageId = imageId)
-    )
+    private fun reply(input: DirectorInput): StepReply {
+        val decision = DirectorDecision(ActionKind.FINAL,
+            plans().map { it.copy(viewBinding = input.viewBinding) }, imageId = input.scene.id)
+        return StepReply("fake", VlmJson.encodeToString(decision), decision)
+    }
 
     /** 通过冻结事件进入自动生成流程，并返回当前冻结请求令牌。 */
     private suspend fun startGenerating(vm: VlmCameraViewModel, events: MutableList<VlmEffect>): String {
@@ -797,7 +985,7 @@ class VlmSessionTest {
             val provider = object : VisionModelProvider {
                 override suspend fun step(call: ModelCall): StepReply {
                     if (++calls == 1) { entered.complete(Unit); withContext(NonCancellable) { release.await() } }
-                    return reply(call.input.scene.id)
+                    return reply(call.input)
                 }
             }
             val vm = viewModel(provider = provider)
@@ -828,7 +1016,7 @@ class VlmSessionTest {
                 override suspend fun step(call: ModelCall): StepReply {
                     entered.complete(Unit)
                     released.await()
-                    return reply(call.input.scene.id)
+                    return reply(call.input)
                 }
             }
             val renderer = object : AvatarRenderer {
@@ -954,7 +1142,7 @@ class VlmSessionTest {
     @Test fun resizeDiscardsOldPreviewAndApplyUsesCalibratedPlan() = runBlocking {
         withContext(Dispatchers.Main) {
             val provider = object : VisionModelProvider {
-                override suspend fun step(call: ModelCall) = reply(call.input.scene.id)
+                override suspend fun step(call: ModelCall) = reply(call.input)
             }
             val pending = CompletableDeferred<Unit>()
             val release = CompletableDeferred<Unit>()
@@ -995,7 +1183,7 @@ class VlmSessionTest {
                 assertNotNull(vm.state.value.reference)
                 assertNull(vm.state.value.notice)
                 assertFalse(vm.state.value.compositionDetailsVisible)
-                assertFalse(vm.state.value.showBackgroundAlignmentControls)
+                assertTrue(vm.state.value.showBackgroundAlignmentControls)
             } finally { release.complete(Unit); listener.cancel(); vm.onLeave() }
         }
     }
@@ -1005,7 +1193,7 @@ class VlmSessionTest {
             var calls = 0
             var failRender = false
             val provider = object : VisionModelProvider {
-                override suspend fun step(call: ModelCall): StepReply { calls++; return reply(call.input.scene.id) }
+                override suspend fun step(call: ModelCall): StepReply { calls++; return reply(call.input) }
             }
             val renderer = object : AvatarRenderer {
                 override suspend fun render(plan: CompositionPlan, width: Int, height: Int, warmth: Float, brightness: Float): AvatarPreview {
@@ -1067,7 +1255,7 @@ class VlmSessionTest {
                     return AvatarPreview(bitmap, CropRect(), plan.avatar, plan.resolvedSpec)
                 }
             }
-            val vm = viewModel(provider = object : VisionModelProvider { override suspend fun step(call: ModelCall) = reply(call.input.scene.id) }, renderer = renderer)
+            val vm = viewModel(provider = object : VisionModelProvider { override suspend fun step(call: ModelCall) = reply(call.input) }, renderer = renderer)
             val events = mutableListOf<VlmEffect>()
             val listener = launch(start = CoroutineStart.UNDISPATCHED) { vm.effects.collect { events += it } }
             try {
@@ -1085,7 +1273,7 @@ class VlmSessionTest {
             } finally { release.complete(Unit); listener.cancel(); vm.onLeave() }
         }
     }
-    /** 重复开始建立新扫描，普通拍照／倍率保持禁用；旧扫描帧不能进入新窗口。 */
+    /** 扫描中重新开始回到等待状态，显式开始才建立新扫描，旧帧不能进入新窗口。 */
     @Test fun scanControlsGateOtherOperationsAndIgnoreLateFrames() = runBlocking {
         withContext(Dispatchers.Main) {
             val vm = viewModel()
@@ -1096,6 +1284,14 @@ class VlmSessionTest {
                 vm.onIntent(VlmIntent.CameraConfigured(1))
                 vm.onIntent(VlmIntent.StartScan)
                 val session = withTimeout(5000) { vm.state.first { it.scanSession != null }.scanSession!! }
+                vm.onIntent(VlmIntent.StartScan)
+                assertEquals(session.id, vm.state.value.scanSession!!.id)
+                vm.onIntent(VlmIntent.RestartFlow)
+                yield()
+                assertEquals(VlmStage.LIVE, vm.state.value.stage)
+                assertNull(vm.state.value.scanSession)
+                assertEquals(List(5) { CameraStepStatus.PENDING }, vm.state.value.workflowProgress())
+                assertTrue(events.isEmpty())
                 vm.onIntent(VlmIntent.StartScan)
                 val restarted = withTimeout(5000) { vm.state.first { it.scanSession != null && it.scanSession!!.id != session.id }.scanSession!! }
                 vm.onIntent(VlmIntent.StartComposition)
@@ -1110,7 +1306,7 @@ class VlmSessionTest {
                     session.id, 1, android.os.SystemClock.elapsedRealtimeNanos(), ScanCameraConfig(1,0,1f,CropRect(),false), null,
                     64,48,ByteArray(64 * 48 * 3 / 2))))
                 yield(); assertEquals(0, vm.state.value.scanProgress.frames)
-                vm.onIntent(VlmIntent.CancelScan); vm.onIntent(VlmIntent.CancelScan)
+                vm.onIntent(VlmIntent.RestartFlow); vm.onIntent(VlmIntent.RestartFlow)
                 val config = ScanCameraConfig(1, 0, 1f, CropRect(), false)
                 vm.onIntent(VlmIntent.AnalysisReceived(com.framer.sense.feature.camera.vlm.scan.AnalysisSample(
                     session.id, 1, android.os.SystemClock.elapsedRealtimeNanos(), config, null, 64, 48, ByteArray(64 * 48 * 3 / 2))))
@@ -1120,11 +1316,21 @@ class VlmSessionTest {
                 assertTrue(vm.state.value.canRestartScan)
                 vm.onIntent(VlmIntent.StartScan)
                 withTimeout(5000) { vm.state.first { it.scanSession != null } }
-                vm.onIntent(VlmIntent.CancelScan)
+                vm.onIntent(VlmIntent.RestartFlow)
                 vm.onIntent(VlmIntent.StartComposition)
                 yield()
                 assertEquals(VlmStage.FREEZING, vm.state.value.stage)
                 assertEquals(1, events.filterIsInstance<VlmEffect.Freeze>().size)
+                val frozenToken = events.filterIsInstance<VlmEffect.Freeze>().single().token
+                vm.onIntent(VlmIntent.RestartFlow)
+                val lateBitmap = Bitmap.createBitmap(60, 80, Bitmap.Config.ARGB_8888)
+                vm.onIntent(VlmIntent.FrameReady(frozenToken, lateBitmap, 1f))
+                yield()
+                assertTrue(lateBitmap.isRecycled)
+                assertEquals(VlmStage.LIVE, vm.state.value.stage)
+                assertNull(vm.state.value.scene)
+                assertNull(vm.state.value.scanSession)
+                assertEquals(List(5) { CameraStepStatus.PENDING }, vm.state.value.workflowProgress())
             } finally { listener.cancel(); vm.onLeave() }
         }
     }

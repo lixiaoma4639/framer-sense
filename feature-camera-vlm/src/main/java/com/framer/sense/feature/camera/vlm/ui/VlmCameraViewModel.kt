@@ -257,6 +257,7 @@ class VlmCameraViewModel @Inject constructor(
                 }
             }
             VlmIntent.StartScan -> startScan()
+            VlmIntent.RestartFlow -> restartFlow()
             VlmIntent.StopScan -> stopScan(true)
             VlmIntent.CancelScan -> cancelScan()
             VlmIntent.PreferScanView -> if (_state.value.stage == VlmStage.SCANNING) {
@@ -301,8 +302,7 @@ class VlmCameraViewModel @Inject constructor(
                 Log.i("VlmScan", "手动对齐结果提交 applied=${confirmed.background.status} referenceReady=${confirmed.reference != null && confirmed.reference.appliedPlan == confirmed.referencePlan} presentation=${referencePresentation(confirmed.referencePlan, confirmed.background.status, confirmed.ar)}")
             }
             is VlmIntent.UserMessage -> _state.update { it.copy(error = intent.message) }
-            VlmIntent.StartComposition -> if (_state.value.stage in listOf(VlmStage.LIVE, VlmStage.FREEZING) && _state.value.cameraReady &&
-                !_state.value.modelBusy && !_state.value.saving && !_state.value.settingsVisible && !_state.value.photoSettingsVisible && !_state.value.instructionEditorVisible && _state.value.photoSample == null) {
+            VlmIntent.StartComposition -> if (_state.value.canStartSingleComposition) {
                 cancelWork()
                 _state.update { it.copy(stage = VlmStage.FREEZING, capturedWorkflow = null, error = null, notice = null, directorProgress = null,
                     scanSession = null, scanSnapshot = null, viewCandidates = emptyList(), selectedFrameId = null,
@@ -673,6 +673,26 @@ class VlmCameraViewModel @Inject constructor(
         scanQueue?.close(); scanTimer?.cancel()
     }
 
+    /** 结束本轮流程，只回到等待扫描的实时取景，不自动创建扫描窗口或冻结照片。 */
+    private fun restartFlow() {
+        if (!_state.value.canRestartFlow) return
+        guidanceEpoch++
+        analyzeAfterStop = false
+        sessions.stop(SystemClock.elapsedRealtimeNanos())
+        sessions.resetReference()
+        captureToken = null
+        pendingCaptureWorkflow = null
+        cancelScan()
+        _state.update { current ->
+            val initialZoom = CameraZoomPolicy.clamp(1f, current.camera.minZoom, current.camera.maxZoom)
+            current.copy(compositionDetailsVisible = false, compositionDetailsExpanded = false,
+                selectedId = null, availableActions = emptyMap(), availableExpressions = emptyMap(),
+                fromImportedImage = false, directorProgress = null, faceLoading = false,
+                zoom = if (current.cameraMode == CameraMode.AR) 1f else initialZoom, normalZoom = initialZoom,
+                ar = current.ar.copy(manualAnchor = false, placedReferenceKey = null))
+        }
+    }
+
     private fun cancelScan() {
         val previousWork = work; val previousRender = renderWork; val previousFace = faceWork
         cancelWork(); scanQueue?.close(); scanTimer?.cancel()
@@ -738,7 +758,7 @@ class VlmCameraViewModel @Inject constructor(
         }
     }
 
-    /** 缩略卡先切换原图；生成由确认后的 ScanViewSelected 单独触发。 */
+    /** 缩略卡只切换原图；生成由按钮确认后的 Generate 单独触发。 */
     private fun previewScanFrame(frameId: String) {
         if (busy()) return
         val state = _state.value
@@ -814,7 +834,7 @@ class VlmCameraViewModel @Inject constructor(
         val actor = existing.firstOrNull()?.avatar?.avatarId ?: s.selectedAvatar
         val ethnicity = existing.firstOrNull()?.avatar?.ethnicity ?: s.selectedEthnicity
         return DirectorInput(scene, s.camera, s.instruction, existing, selectedId, actor,
-            frame?.let { PhotoViewBinding(it.scanId, it.id, it.config.version, it.config.arSessionId) } ?: scene.arBinding,
+            frame?.let { PhotoViewBinding(it.scanId, it.id, it.config.version, it.config.arSessionId) } ?: scene.captureBinding,
             s.viewCandidates.firstOrNull { it.frameId == (frame?.id ?: scene.id) }?.backgroundRegions.orEmpty(),
             if (frame != null) sessions.budget else null,
             photoReferences = actor == AvatarId.ADULT_FEMALE, ethnicity = ethnicity, arMode = s.ar.source == com.framer.sense.feature.camera.vlm.ar.ArSource.SHARED_CAMERA)
@@ -830,10 +850,13 @@ class VlmCameraViewModel @Inject constructor(
      */
     private fun receiveFrame(event: VlmIntent.FrameReady) {
         if (event.token != requestToken) { event.bitmap.recycle(); return }
+        val configVersion = _state.value.cameraConfigVersion
         work = viewModelScope.launch {
             try {
                 val saved = snapshots.save(event.bitmap, event.zoom, event.orientation)
-                val scene = saved.copy(arBinding = event.arConfig?.let { PhotoViewBinding("ar:${it.arSessionId}", saved.id, it.version, it.arSessionId) })
+                val binding = event.arConfig?.let { PhotoViewBinding("ar:${it.arSessionId}", saved.id, it.version, it.arSessionId) }
+                    ?: PhotoViewBinding("single:${saved.id}", saved.id, configVersion)
+                val scene = saved.copy(captureBinding = binding)
                 if (event.token == requestToken) {
                     _state.update { it.copy(scene = scene, stage = VlmStage.FROZEN, result = null, diagnostics = null, previews = emptyMap(), reference = null, selectedId = null, fromImportedImage = false, directorProgress = null, facePreview = null, availableActions = emptyMap(), availableExpressions = emptyMap()) }
                     compose(false)
@@ -852,6 +875,12 @@ class VlmCameraViewModel @Inject constructor(
         val scene = previous.scene ?: return
         if (!previous.canGenerate || revise && previous.stage != VlmStage.READY) return
         if (revise && (previous.result == null || previous.selectedId == null)) return
+        // 手动列表可以浏览全部扫描帧，但不能绕过既有的三背景保留上限。
+        val saved = previous.rememberedBackgrounds()
+        if (scene.id !in saved && saved.size >= ScanLimits.MAX_COMPOSITION_BACKGROUNDS) {
+            _state.update { it.copy(error = models.message(R.string.vlm_background_cache_limit)) }
+            return
+        }
         val previousWork = work; val previousRender = renderWork; val previousFace = faceWork
         cancelWork()
         val token = requestToken
@@ -1056,6 +1085,9 @@ class VlmCameraViewModel @Inject constructor(
         val errors = PlanValidator().validate(result.plans, inputFor(s, result.plans, s.selectedId))
         if (errors.isNotEmpty()) { _state.update { it.copy(error = if (errors.any { error -> "RESOLVED_SPEC_MISMATCH" in error || "VIEW_BINDING_MISMATCH" in error }) models.message(R.string.vlm_photo_spec_invalid) else errors.joinToString("\n")) }; return }
         cancelWork()
+        // 每次应用都重新确认当前照片，不能沿用同一方案上一次确认的稳定计时。
+        guidanceEpoch++
+        sessions.resetReference()
         val token = requestToken
         _state.update { it.copy(stage = VlmStage.MODIFYING, capturedWorkflow = null, compositionDetailsVisible = false, compositionDetailsExpanded = false, notice = null) }
         work = viewModelScope.launch {

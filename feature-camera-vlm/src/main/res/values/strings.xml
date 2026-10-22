@@ -69,6 +69,7 @@
     <string name="vlm_camera_freezing">正在冻结画面</string>
     <string name="vlm_action_cancel">取消</string>
     <string name="vlm_director_preparing">正在准备构图请求</string>
+    <string name="vlm_loading_description">%1$s...</string>
     <string name="vlm_director_analyzing">正在分析画面并生成构图方向（第 %1$d 轮）</string>
     <string name="vlm_director_refining">正在根据校验结果完善方案（第 %1$d 轮）</string>
     <string name="vlm_director_switching_provider">正在切换到备用模型继续分析（第 %1$d 轮）</string>
@@ -168,9 +169,9 @@
     <string name="vlm_guidance_pose">"入镜者：整体%1$s;  身体%2$s;  手臂%3$s;  %4$s;  %5$s;  表情%6$s。"</string>
     <string name="vlm_guidance_size">人物可见参考高度 %1$d%% · 横向位置 %2$d%%</string>
     <string name="vlm_scan_start">开始扫描</string>
-    <string name="vlm_scan_restart_active">重新扫描</string>
+    <string name="vlm_flow_restart">重新开始</string>
     <string name="vlm_flow_waiting_native">正在停止上一轮本地推理，完成清理后自动开始新任务；模型会保留。</string>
-    <string name="vlm_flow_generate">生成方案</string>
+    <string name="vlm_flow_generate">生成构图</string>
     <string name="vlm_flow_regenerate">继续生成</string>
     <string name="vlm_flow_restart_single">重新取景生成</string>
     <string name="vlm_scan_stop">完成扫描</string>
@@ -210,7 +211,9 @@
     <string name="vlm_background_up">摄影师：稍微抬高手机。</string>
     <string name="vlm_background_down">摄影师：稍微压低手机。</string>
     <string name="vlm_scan_restore">上次扫描任务已结束，请重新扫描</string>
-    <string name="vlm_scan_manual_open">手动选择背景（备用）</string>
+    <string name="vlm_scan_manual_open">手动选景</string>
+    <string name="vlm_scan_manual_expand">展开手动选择背景</string>
+    <string name="vlm_scan_manual_collapse">收起手动选择背景</string>
     <string name="vlm_scan_manual_hide">收起背景列表</string>
     <string name="vlm_scan_change_background">更换背景（可选）</string>
     <string name="vlm_scan_model_settings">检查模型设置</string>
@@ -466,10 +469,9 @@
     <string name="vlm_open_gallery">打开系统相册</string>
     <string name="vlm_gallery_app_missing">未找到可直接打开的相册应用。</string>
     <string name="vlm_gallery_open_failed">暂时无法打开系统相册，请稍后重试。</string>
-    <string name="vlm_background_candidate_status">%2$s\n背景 %1$d</string>
-    <string name="vlm_background_generate_on_select">点击生成</string>
+    <string name="vlm_background_candidate_status">备选 %1$d</string>
     <string name="vlm_background_generate_title">继续生成构图</string>
-    <string name="vlm_background_generate_message">继续为背景 %1$d 生成三个构图？已生成的构图会保留。</string>
+    <string name="vlm_background_generate_message">继续为备选 %1$d 生成三个构图？已生成的构图会保留。</string>
     <string name="vlm_background_generate_confirm">确认</string>
     <string name="vlm_background_plan_number">构图 %1$d-%2$d</string>
     <string name="vlm_background_cache_limit">本次已保留三个背景，请选择已有背景，或重新扫描。</string>

@@ -9,6 +9,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toPixelMap
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.unit.dp
@@ -30,7 +32,9 @@ class CameraLoadingUiTest {
         val stage = mutableStateOf(VlmStage.SCAN_PROCESSING)
         val progress = DirectorProgress.ValidatingResponse(2)
         var cancellations = 0
+        var expectedFontSize = 0f
         compose.setContent { MaterialTheme {
+            expectedFontSize = MaterialTheme.typography.bodyLarge.fontSize.value - 2f
             Box(Modifier.fillMaxSize().background(Color.Black)) {
                 VlmLoadingOverlay(stage.value, progress, { cancellations++ })
                 Controls(VlmUiState(stage = stage.value), {}, {}, Modifier.align(Alignment.BottomCenter).fillMaxWidth())
@@ -43,15 +47,26 @@ class CameraLoadingUiTest {
             VlmStage.GENERATING to context.getString(R.string.vlm_director_validating, 2)
         ).forEach { (nextStage, label) ->
             compose.runOnIdle { stage.value = nextStage }
-            compose.onAllNodesWithText(label).assertCountEquals(1)
-            compose.onNodeWithTag("vlm_director_progress").assertTextEquals(label)
+            val description = context.getString(R.string.vlm_loading_description, label)
+            compose.onAllNodesWithText(description).assertCountEquals(1)
+            compose.onNodeWithTag("vlm_director_progress").assertTextEquals(description)
                 .assert(hasAnyAncestor(hasTestTag("vlm_loading_panel")))
+            compose.onNodeWithTag("vlm_loading_spinner").assertDoesNotExist()
+            val layouts = mutableListOf<TextLayoutResult>()
+            compose.onNodeWithTag("vlm_director_progress").performSemanticsAction(SemanticsActions.GetTextLayoutResult) { it(layouts) }
+            assertEquals(expectedFontSize, layouts.single().layoutInput.style.fontSize.value, .01f)
+            val panel = compose.onNodeWithTag("vlm_loading_panel").getUnclippedBoundsInRoot()
+            assertTrue("加载面板应保持紧凑", panel.width <= 300.dp && panel.height <= 100.dp)
+            val topText = compose.onNodeWithTag("vlm_director_progress").getUnclippedBoundsInRoot()
+            val bottomText = compose.onNodeWithTag("vlm_loading_cancel_label", useUnmergedTree = true).getUnclippedBoundsInRoot()
+            assertEquals(8f, (topText.top - panel.top).value, .5f)
+            assertEquals(8f, (panel.bottom - bottomText.bottom).value, .5f)
             compose.onNodeWithTag("vlm_loading_cancel").performTouchInput { click() }
         }
         assertEquals(4, cancellations)
     }
 
-    @Test fun loadingTurnsInFourDirectionsWithWhiteSpinnerAndCancelAndFixedBackground() {
+    @Test fun compactLoadingTurnsInFourDirectionsWithoutSpinnerAndKeepsWhiteCancel() {
         val phone = mutableFloatStateOf(0f)
         var cancellations = 0
         compose.setContent { MaterialTheme {
@@ -64,6 +79,7 @@ class CameraLoadingUiTest {
         val viewport = compose.onNodeWithTag("vlm_loading_viewport")
         val viewportBounds = viewport.getUnclippedBoundsInRoot()
         val background = compose.onNodeWithTag("fixed_loading_background").getUnclippedBoundsInRoot()
+        compose.onNodeWithTag("vlm_loading_spinner").assertDoesNotExist()
         listOf(0f, 90f, 180f, 270f, 0f).forEach { direction ->
             compose.runOnIdle { phone.floatValue = direction }
             val rotation = compose.onNode(SemanticsMatcher.keyIsDefined(CameraDialogDegrees) and
@@ -72,7 +88,7 @@ class CameraLoadingUiTest {
             assertEquals(0f, shortestIconRotation(rotation, direction), .1f)
             assertEquals(viewportBounds, viewport.getUnclippedBoundsInRoot())
             assertEquals(background, compose.onNodeWithTag("fixed_loading_background").getUnclippedBoundsInRoot())
-            listOf("vlm_loading_spinner", "vlm_loading_cancel").forEach { tag ->
+            listOf("vlm_loading_cancel").forEach { tag ->
                 val pixels = compose.onNodeWithTag(tag).captureToImage().toPixelMap()
                 var whitePixels = 0
                 for (y in 0 until pixels.height) for (x in 0 until pixels.width) {

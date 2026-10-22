@@ -26,7 +26,6 @@ import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.asExecutor
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 
@@ -418,29 +417,25 @@ class VlmCameraController(private val context: Context) {
             put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg")
             if (Build.VERSION.SDK_INT >= 29) put(MediaStore.Images.Media.RELATIVE_PATH, "Pictures/FramerSense")
         }
-        val options = ImageCapture.OutputFileOptions.Builder(context.contentResolver, MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values).build()
-        val uri = suspendCancellableCoroutine<Uri?> { continuation ->
-            active.takePicture(options, executor, object : ImageCapture.OnImageSavedCallback {
-                override fun onImageSaved(outputFileResults: ImageCapture.OutputFileResults) {
-                    if (continuation.isActive) continuation.resume(outputFileResults.savedUri)
-                }
-                override fun onError(exception: ImageCaptureException) {
-                    if (continuation.isActive) continuation.resumeWithException(exception)
-                }
-            })
-        }
-        // CameraX 继续负责 JPEG、裁切及元数据；只修正快门时的 EXIF，不解码和重压照片。
-        if (uri != null && orientation.previewDegrees != 0) {
-            withContext(Dispatchers.IO) {
-                context.contentResolver.openFileDescriptor(uri, "rw")?.use { file ->
-                    androidx.exifinterface.media.ExifInterface(file.fileDescriptor).apply {
-                        rotate(-orientation.previewDegrees)
-                        saveAttributes()
+        val options = ImageCapture.OutputFileOptions.Builder(context.contentResolver,
+            MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values).build()
+        // 只设置这次拍照的目标方向；JPEG、EXIF 和相册发布全部交给 CameraX。
+        // 结束后恢复原方向，冻结／扫描仍沿用已验证的固定视口及帧方向转换。
+        return active.withPhotoTargetRotation(orientation.deviceRotation) {
+            android.util.Log.i("VlmCamera", "拍照方向 device=${orientation.deviceRotation} " +
+                "preview=${orientation.previewRotation} target=${active.targetRotation}")
+            suspendCancellableCoroutine<Uri?> { continuation ->
+                active.takePicture(options, executor, object : ImageCapture.OnImageSavedCallback {
+                    override fun onImageSaved(outputFileResults: ImageCapture.OutputFileResults) {
+                        if (continuation.isActive) continuation.resume(outputFileResults.savedUri)
                     }
-                } ?: error(context.getString(com.framer.sense.feature.camera.vlm.R.string.vlm_photo_orientation_failed))
+
+                    override fun onError(exception: ImageCaptureException) {
+                        if (continuation.isActive) continuation.resumeWithException(exception)
+                    }
+                })
             }
         }
-        return uri
     }
 
     /** 解绑本实例使用的相机用例；无参数，不解绑其他模块的相机资源。 */

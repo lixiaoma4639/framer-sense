@@ -35,7 +35,9 @@ class CameraNavigationTest {
         val result = com.framer.sense.feature.camera.vlm.model.CompositionResult(emptyList(), emptyList(), emptyList(), emptyList())
         assertEquals(CameraBackAction.COLLAPSE, cameraBackAction(VlmUiState(stage = VlmStage.READY,
             result = result, compositionDetailsVisible = true), true))
-        assertEquals(CameraBackAction.NONE, cameraBackAction(VlmUiState(stage = VlmStage.SCAN_REVIEW,
+        assertEquals(CameraBackAction.COLLAPSE, cameraBackAction(VlmUiState(stage = VlmStage.SCAN_REVIEW,
+            compositionDetailsVisible = true), true))
+        assertEquals(CameraBackAction.COLLAPSE, cameraBackAction(VlmUiState(stage = VlmStage.FROZEN,
             compositionDetailsVisible = true), true))
     }
 }

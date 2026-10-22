@@ -67,5 +67,7 @@ class PhotoOrientationTest {
     @Test fun orientationDoesNotChangeSceneGatewayJson() {
         val scene = SceneSnapshot("photo", 640, 480, 1f, "/image", "/model")
         assertEquals(VlmJson.encodeToString(scene), VlmJson.encodeToString(scene.copy(orientation = PhotoOrientation(1, 0))))
+        assertEquals(VlmJson.encodeToString(scene), VlmJson.encodeToString(scene.copy(
+            captureBinding = PhotoViewBinding("single:photo", "photo", 7))))
     }
 }

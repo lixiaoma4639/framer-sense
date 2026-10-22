@@ -5,6 +5,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.SemanticsActions
@@ -116,7 +117,7 @@ class CompositionOrientationUiTest {
         }
     }
 
-    @Test fun pendingBackgroundSharesTheCompositionRowAndRequiresConfirmationBeforeGeneration() {
+    @Test fun backgroundCardsOnlyPreviewAndBothGenerationButtonsRequireConfirmation() {
         val fixture = fixtureState()
         val first = fixture.currentBackgroundComposition()!!
         val groups = listOf(first) + (2..3).map { rank -> first.copy(scene = first.scene.copy(id = "background$rank"), frameId = "frame$rank") }
@@ -146,7 +147,7 @@ class CompositionOrientationUiTest {
         compose.onNodeWithTag("vlm_background_choices").assertDoesNotExist()
         compose.onNodeWithText("构图 1-1").assertExists()
         compose.onNodeWithTag("vlm_composition_details_panel").assertExists()
-        // 两行背景标签最后一行与构图标签共用字号、起始位置和底边距。
+        // 背景与构图均为单行标签，共用字号、起始位置和底边距。
         fun captionStyle(tag: String): androidx.compose.ui.text.TextStyle {
             val results = mutableListOf<TextLayoutResult>()
             compose.onNodeWithTag(tag, useUnmergedTree = true).performSemanticsAction(SemanticsActions.GetTextLayoutResult) { it(results) }
@@ -154,6 +155,7 @@ class CompositionOrientationUiTest {
         }
         val planStyle = captionStyle("vlm_composition_label_p1")
         val pendingStyle = captionStyle("vlm_background_label_frame2")
+        assertEquals(Color.White, captionStyle("vlm_generate_label").color)
         assertEquals(planStyle.fontSize, pendingStyle.fontSize)
         assertEquals(TextAlign.Start, planStyle.textAlign)
         assertEquals(TextAlign.Start, pendingStyle.textAlign)
@@ -164,20 +166,27 @@ class CompositionOrientationUiTest {
         assertEquals(planLabel.left - planCard.left, pendingLabel.left - pendingCard.left)
         assertEquals(planCard.bottom - planLabel.bottom, pendingCard.bottom - pendingLabel.bottom)
         row.performScrollToNode(hasTestTag("vlm_background_candidate_frame3"))
-        compose.onNodeWithText("点击生成\n背景 3").assertExists()
+        compose.onNodeWithText("备选 3").assertExists()
+        compose.onNodeWithText("点击生成", substring = true).assertDoesNotExist()
         compose.onNodeWithTag("vlm_background_candidate_frame3").performClick()
-        compose.onNodeWithTag("vlm_background_generate_dialog").assertIsDisplayed()
+        compose.onNodeWithTag("vlm_background_generate_dialog").assertDoesNotExist()
         compose.onNodeWithTag("vlm_composition_details_panel").assertDoesNotExist()
+        assertEquals(Color(0xFFFFD66A), captionStyle("vlm_generate_label").color)
         compose.runOnIdle {
             assertEquals(listOf(VlmIntent.PreviewScanView("frame3")), events)
             assertEquals(frames[2].scene, state.value.displayScene)
             assertNull(state.value.result)
             phone.floatValue = 90f
         }
+        compose.onNodeWithTag("vlm_generate").assertTextContains("生成构图").performClick()
+        compose.onNodeWithTag("vlm_background_generate_dialog").assertIsDisplayed()
+        compose.onNodeWithText("继续为备选 3", substring = true).assertIsDisplayed()
+        compose.runOnIdle { assertTrue(events.none { it == VlmIntent.Generate }) }
         compose.onNodeWithTag("vlm_background_generate_cancel").assertIsDisplayed().performClick()
         compose.onNodeWithTag("vlm_background_generate_dialog").assertDoesNotExist()
         compose.onNodeWithTag("vlm_background_candidate_frame3").assertIsSelected()
-        compose.runOnIdle { assertTrue(events.none { it is VlmIntent.ScanViewSelected }) }
+        assertEquals(Color(0xFFFFD66A), captionStyle("vlm_generate_label").color)
+        compose.runOnIdle { assertTrue(events.none { it == VlmIntent.Generate || it is VlmIntent.ScanViewSelected }) }
         // 取消只放弃生成，保留背景预览；仍能选回旧构图并重新打开详情。
         row.performScrollToNode(hasTestTag("vlm_composition_landscape_p2"))
         compose.onNodeWithTag("vlm_composition_landscape_p2").performClick()
@@ -185,16 +194,29 @@ class CompositionOrientationUiTest {
         compose.onNodeWithTag("vlm_composition_info_toggle").performClick()
         compose.onNodeWithTag("vlm_composition_details_panel").assertIsDisplayed()
         compose.onNodeWithTag("vlm_composition_p2").assertIsSelected()
+        assertEquals(Color.White, captionStyle("vlm_generate_label").color)
+        // 选择已有构图后，继续生成也必须确认；取消不触发请求、不改动旧方案。
+        compose.onNodeWithTag("vlm_generate").assertTextContains("继续生成").performClick()
+        compose.onNodeWithText("继续为备选 1", substring = true).assertIsDisplayed()
+        compose.onNodeWithTag("vlm_background_generate_cancel").performClick()
+        compose.runOnIdle { assertTrue(events.none { it == VlmIntent.Generate }) }
+        compose.onNodeWithTag("vlm_generate").performClick()
+        compose.onNodeWithTag("vlm_background_generate_confirm").performClick()
+        compose.runOnIdle { assertEquals(1, events.count { it == VlmIntent.Generate }) }
         row.performScrollToNode(hasTestTag("vlm_background_candidate_frame3"))
         compose.onNodeWithTag("vlm_background_candidate_frame3").performClick()
+        compose.onNodeWithTag("vlm_background_generate_dialog").assertDoesNotExist()
+        compose.onNodeWithTag("vlm_generate").assertTextContains("生成构图").performClick()
         compose.onNodeWithTag("vlm_background_generate_confirm").performClick()
         compose.onNodeWithTag("vlm_background_generate_dialog").assertDoesNotExist()
         compose.runOnIdle {
-            assertEquals(listOf(VlmIntent.ScanViewSelected("frame3")), events.filterIsInstance<VlmIntent.ScanViewSelected>())
+            assertEquals(2, events.count { it == VlmIntent.Generate })
+            assertTrue(events.none { it is VlmIntent.ScanViewSelected })
             state.value = state.value.copy(compositionCache = state.value.rememberedBackgrounds() + (groups[2].scene.id to groups[2]))
                 .restoreBackground(groups[2])
         }
         compose.onNodeWithTag("vlm_background_candidate_frame3").assertDoesNotExist()
+        assertEquals(Color.White, captionStyle("vlm_generate_label").color)
         row.performScrollToNode(hasTestTag("vlm_background_candidate_frame2"))
         compose.onNodeWithTag("vlm_background_candidate_frame2").assertIsDisplayed()
         compose.runOnIdle {

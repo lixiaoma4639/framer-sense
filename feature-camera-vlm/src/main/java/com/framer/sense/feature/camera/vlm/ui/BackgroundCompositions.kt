@@ -66,7 +66,8 @@ internal val VlmUiState.hasCompositionChoices: Boolean
     get() = !result?.plans.isNullOrEmpty() || compositionCache.values.any { it.result.plans.isNotEmpty() }
 
 internal val VlmUiState.rankedBackgroundFrames: List<ScanFrame>
-    get() = viewCandidates.take(ScanLimits.MAX_COMPOSITION_BACKGROUNDS).mapNotNull { candidate ->
+    get() = if (viewCandidates.isEmpty()) scanSnapshot?.frames.orEmpty()
+    else viewCandidates.take(ScanLimits.MAX_COMPOSITION_BACKGROUNDS).mapNotNull { candidate ->
         scanSnapshot?.frames?.firstOrNull { it.id == candidate.frameId }
     }
 

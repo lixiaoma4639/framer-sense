@@ -10,6 +10,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.foundation.layout.*
 import androidx.compose.ui.Alignment
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createComposeRule
@@ -208,7 +209,8 @@ class ScanBackgroundTest {
         } }
         compose.onNodeWithTag("vlm_scan_start").assertDoesNotExist()
         compose.onNodeWithTag("vlm_start").assertDoesNotExist()
-        val tags = listOf("vlm_scan_restart_active", "vlm_scan_prefer", "vlm_scan_stop", "vlm_scan_cancel")
+        compose.onNodeWithTag("vlm_scan_cancel").assertDoesNotExist()
+        val tags = listOf("vlm_restart_flow", "vlm_scan_prefer", "vlm_scan_stop")
         val bounds = tags.map { compose.onNodeWithTag(it).getUnclippedBoundsInRoot() }
         bounds.zipWithNext().forEach { (left, right) ->
             assertEquals(left.top, right.top)
@@ -216,7 +218,7 @@ class ScanBackgroundTest {
         }
         compose.onNodeWithTag("vlm_scan_stop").assertTextContains("完成扫描")
         tags.forEach { compose.onNodeWithTag(it).performScrollTo().performClick() }
-        assertEquals(listOf(VlmIntent.StartScan, VlmIntent.PreferScanView, VlmIntent.StopScan, VlmIntent.CancelScan), events)
+        assertEquals(listOf(VlmIntent.RestartFlow, VlmIntent.PreferScanView, VlmIntent.StopScan), events)
     }
     @Test fun resourcePauseDisablesPreferenceButStillAllowsExplicitEnd() {
         compose.setContent { MaterialTheme {
@@ -247,12 +249,12 @@ class ScanBackgroundTest {
             SceneSnapshot(id, 640, 480, 1f, "/missing", "/missing"), 1)
         val snapshot = ScanSnapshot(ScanSession("s", 0, 1), listOf(frame("main"), frame("alternative")), 0f)
         compose.setContent { MaterialTheme {
-            Controls(VlmUiState(stage = VlmStage.READY, scanSnapshot = snapshot, selectedFrameId = "main", manualScanSelectionVisible = true,
+            Controls(VlmUiState(stage = VlmStage.READY, scanSnapshot = snapshot, selectedFrameId = "main", compositionDetailsVisible = true,
                 viewCandidates = listOf(ViewCandidate("main", "主背景", "山体", emptyList(), emptyList(), emptyList()),
                     ViewCandidate("alternative", "备选背景", "树林", emptyList(), emptyList(), emptyList()))), events::add, {}, Modifier)
         } }
-        compose.onNodeWithTag("vlm_scan_view_alternative").performClick()
-        assertEquals(listOf(VlmIntent.ScanViewSelected("alternative")), events)
+        compose.onNodeWithTag("vlm_background_candidate_alternative").performClick()
+        assertEquals(listOf(VlmIntent.PreviewScanView("alternative")), events)
     }
 
     @Test fun agentResultShowsChosenBackgroundWithoutFramePicker() {
@@ -265,22 +267,63 @@ class ScanBackgroundTest {
             Controls(VlmUiState(stage = VlmStage.READY, scanSnapshot = snapshot, selectedFrameId = "main",
                 viewCandidates = listOf(candidate)), {}, {}, Modifier)
         } }
-        compose.onNodeWithTag("vlm_scan_agent_background").assertExists()
-        compose.onNodeWithTag("vlm_scan_view_main").assertDoesNotExist()
-        compose.onNodeWithTag("vlm_scan_change_background").assertExists()
+        compose.onNodeWithTag("vlm_composition_choices").assertDoesNotExist()
+        compose.onNodeWithTag("vlm_background_candidate_main").assertDoesNotExist()
+        compose.onNodeWithTag("vlm_details").assertExists()
     }
-    @Test fun manualFallbackDoesNotForceFrameChoiceAndCanBeOpenedExplicitly() {
+    @Test fun manualFallbackUsesInlineCardsAndPreservesSelectionAndScrollAcrossToggles() {
         val events = mutableListOf<VlmIntent>()
         val config = ScanCameraConfig(1, 0, 1f, CropRect(), false)
-        val frame = ScanFrame("frame", "s", 0, 0, config, null, 1f,
-            SceneSnapshot("frame", 640, 480, 1f, "/missing", "/missing"), 1)
+        val frames = (1..8).map { index -> ScanFrame("frame$index", "s", 0, 0, config, null, 1f,
+            SceneSnapshot("frame$index", 640, 480, 1f, "/missing", "/missing"), 1) }
+        val state = mutableStateOf(VlmUiState(stage = VlmStage.SCAN_REVIEW,
+            scanSnapshot = ScanSnapshot(ScanSession("s", 0, 1), frames, 0f)))
         compose.setContent { MaterialTheme {
-            Controls(VlmUiState(stage = VlmStage.SCAN_REVIEW,
-                scanSnapshot = ScanSnapshot(ScanSession("s", 0, 1), listOf(frame), 0f)), events::add, {}, Modifier)
+            Controls(state.value, { intent ->
+                events += intent
+                state.value = when (intent) {
+                    is VlmIntent.CompositionDetailsVisible -> state.value.copy(compositionDetailsVisible = intent.visible)
+                    is VlmIntent.PreviewScanView -> state.value.previewBackground(frames.first { it.id == intent.frameId })
+                    else -> state.value
+                }
+            }, {}, Modifier.fillMaxWidth())
         } }
-        compose.onNodeWithTag("vlm_scan_view_frame").assertDoesNotExist()
+        compose.onNodeWithTag("vlm_composition_choices").assertDoesNotExist()
+        compose.onNodeWithContentDescription("展开手动选择背景").assertExists()
         compose.onNodeWithTag("vlm_scan_manual_open").performClick()
-        assertEquals(listOf(VlmIntent.ManualScanSelectionVisible(true)), events)
+        compose.onNodeWithContentDescription("收起手动选择背景").assertExists()
+        compose.onNodeWithTag("vlm_composition_details_dialog").assertDoesNotExist()
+        compose.onNodeWithTag("vlm_background_candidate_frame1").assertIsNotSelected()
+        compose.runOnIdle { assertNull(state.value.scene); assertNull(state.value.selectedFrameId) }
+        val label = compose.onNodeWithTag("vlm_scan_manual_open_label", useUnmergedTree = true).getUnclippedBoundsInRoot()
+        val icon = compose.onNodeWithTag("vlm_scan_manual_open_icon", useUnmergedTree = true).getUnclippedBoundsInRoot()
+        assertTrue(icon.left >= label.right)
+        val list = compose.onNodeWithTag("vlm_composition_choices")
+        list.performScrollToNode(hasTestTag("vlm_background_candidate_frame7"))
+        compose.onNodeWithTag("vlm_background_candidate_frame7").performClick().assertIsSelected()
+        compose.waitForIdle()
+        compose.runOnIdle {
+            assertEquals(frames[6].scene, state.value.displayScene)
+            assertNull(state.value.result)
+            assertEquals(listOf(VlmIntent.CompositionDetailsVisible(true), VlmIntent.PreviewScanView("frame7")), events)
+        }
+        val position = list.fetchSemanticsNode().config[SemanticsProperties.HorizontalScrollAxisRange].value()
+        assertTrue(position > 0f)
+        compose.onNodeWithTag("vlm_scan_manual_open").performClick()
+        list.assertDoesNotExist()
+        compose.onNodeWithContentDescription("展开手动选择背景").assertExists()
+        compose.onNodeWithTag("vlm_scan_manual_open").performClick()
+        compose.onNodeWithTag("vlm_background_candidate_frame7").assertIsSelected().assertIsDisplayed()
+        assertEquals(position, list.fetchSemanticsNode().config[SemanticsProperties.HorizontalScrollAxisRange].value(), .01f)
+        compose.onNodeWithTag("vlm_generate").assertIsEnabled()
+        compose.onNodeWithTag("vlm_background_generate_dialog").assertDoesNotExist()
+        // 手动选择原图及收起／展开列表后，仍保留自动选景入口和原事件。
+        compose.onNodeWithTag("vlm_scan_analyze").performScrollTo().assertIsEnabled()
+            .assertTextContains("继续自动选景").performClick()
+        compose.runOnIdle {
+            assertEquals(VlmIntent.AnalyzeScan, events.last())
+            assertEquals(frames, state.value.scanSnapshot!!.frames)
+        }
     }
 
 }

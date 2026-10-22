@@ -24,6 +24,31 @@ class BackgroundCompositionsTest {
         selectedId = group.selectedId, compositionBatchId = group.batchId, diagnostics = group.diagnostics, previews = group.previews,
         availableActions = group.actions, availableExpressions = group.expressions)
 
+    @Test fun manualFallbackExposesEveryScanViewAndKeepsTheirOrderAfterGeneration() {
+        val groups = (1..6).map { group("$it") }
+        val frames = groups.mapIndexed { index, group -> ScanFrame(group.frameId!!, "scan", index.toLong(), index.toLong(),
+            ScanCameraConfig(7, 0, 1f, CropRect(), false), null, 1f, group.scene, 100) }
+        val fallback = VlmUiState(stage = VlmStage.SCAN_REVIEW,
+            scanSnapshot = ScanSnapshot(ScanSession("scan", 0, 10), frames, 0f))
+        assertEquals(frames, fallback.rankedBackgroundFrames)
+        assertEquals((1..6).toList(), fallback.compositionChoices.map { it.rank })
+        assertTrue(fallback.compositionChoices.all { it is CompositionChoice.PendingBackground })
+        assertNull(fallback.scene)
+        assertNull(fallback.selectedFrameId)
+        val preview = fallback.previewBackground(frames[4])
+        assertEquals(frames[4].scene, preview.displayScene)
+        assertNull(preview.result)
+        assertEquals(6, preview.compositionChoices.size)
+        val generated = preview.restoreBackground(groups[4])
+        assertEquals(listOf(1, 2, 3, 4, 5, 5, 5, 6), generated.compositionChoices.map { it.rank })
+        assertEquals(3, generated.compositionChoices.filterIsInstance<CompositionChoice.Plan>().size)
+        // 自动比较成功时仍只列出推荐背景，不额外混入全部扫描帧。
+        val ranked = fallback.copy(viewCandidates = frames.reversed().map {
+            ViewCandidate(it.id, "", "", emptyList(), emptyList(), emptyList())
+        })
+        assertEquals(frames.reversed().take(ScanLimits.MAX_COMPOSITION_BACKGROUNDS), ranked.rankedBackgroundFrames)
+    }
+
     @Test fun continuedGenerationKeepsBatchOrderAndEditingAnOlderBatchDoesNotReplaceLaterBatches() {
         val first = group("a").copy(batchId = "round1")
         val initial = state(first).copy(compositionCache = mapOf(first.scene.id to first))

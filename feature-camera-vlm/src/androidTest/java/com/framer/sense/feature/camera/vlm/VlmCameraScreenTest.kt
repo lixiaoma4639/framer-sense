@@ -526,25 +526,73 @@ class VlmCameraScreenTest {
         composeRule.onNodeWithTag("vlm_photo_settings_dialog").assertDoesNotExist()
     }
 
+    @Test fun laterWorkflowStepsOnlyOfferRestartFlowAndKeepSinglePhotoInTheFirstStep() {
+        val plans = (1..3).map { CompositionPlan("p$it", "测试标题$it", ShotType.FULL, CropRect(), 1f,
+            AvatarPlacement(), "指导", "背景") }
+        val state = mutableStateOf(VlmUiState(cameraReady = true))
+        val events = mutableListOf<VlmIntent>()
+        composeRule.setContent { MaterialTheme { Controls(state.value, events::add, {}, Modifier.fillMaxWidth()) } }
+        fun assertNoCancelActions() {
+            listOf("vlm_resume", "vlm_cancel", "vlm_scan_cancel").forEach { tag ->
+                composeRule.onNodeWithTag(tag).assertDoesNotExist()
+            }
+        }
+        assertNoCancelActions()
+        composeRule.onNodeWithTag("vlm_scan_start").assertTextContains("开始扫描")
+        composeRule.onNodeWithTag("vlm_start").assertTextContains("单张构图")
+        listOf(VlmStage.SCAN_PROCESSING, VlmStage.SCAN_REVIEW, VlmStage.VIEW_SELECTING,
+            VlmStage.FROZEN, VlmStage.GENERATING, VlmStage.READY, VlmStage.MODIFYING, VlmStage.LIVE).forEach { stage ->
+            composeRule.runOnIdle { state.value = VlmUiState(stage = stage, cameraReady = true,
+                scene = SceneSnapshot("scene", 640, 480, 1f, "/scene", "/input"),
+                result = CompositionResult(plans, emptyList(), emptyList(), emptyList()),
+                referencePlan = if (stage == VlmStage.LIVE) plans.first() else null) }
+            composeRule.onNodeWithTag("vlm_start").assertDoesNotExist()
+            composeRule.onNodeWithTag("vlm_scan_start").assertDoesNotExist()
+            composeRule.onNodeWithTag("vlm_scan_restart_active").assertDoesNotExist()
+            assertNoCancelActions()
+            val restartBounds = composeRule.onNodeWithTag("vlm_restart_flow").getUnclippedBoundsInRoot()
+            listOf("vlm_generate", "vlm_details", "vlm_scan_analyze", "vlm_scan_manual_open").forEach { tag ->
+                val other = composeRule.onAllNodesWithTag(tag).fetchSemanticsNodes()
+                if (other.isNotEmpty()) {
+                    val bounds = composeRule.onNodeWithTag(tag).getUnclippedBoundsInRoot()
+                    org.junit.Assert.assertTrue("$stage 的重新开始应排在 $tag 左侧", restartBounds.right <= bounds.left)
+                }
+            }
+            composeRule.onNodeWithTag("vlm_restart_flow").assertTextContains("重新开始").performScrollTo().performClick()
+            assertEquals(VlmIntent.RestartFlow, events.last())
+        }
+        composeRule.runOnIdle { state.value = VlmUiState(stage = VlmStage.SCANNING, cameraReady = true) }
+        assertNoCancelActions()
+        composeRule.onNodeWithTag("vlm_scan_restart_active").assertDoesNotExist()
+        composeRule.onNodeWithTag("vlm_restart_flow").assertTextContains("重新开始").performClick()
+        assertEquals(VlmIntent.RestartFlow, events.last())
+        composeRule.runOnIdle { state.value = VlmUiState(stage = VlmStage.FREEZING, cameraReady = true) }
+        assertNoCancelActions()
+        composeRule.onNodeWithTag("vlm_scan_restart_active").assertDoesNotExist()
+        composeRule.onNodeWithTag("vlm_restart_flow").assertTextContains("重新开始").performClick()
+        assertEquals(VlmIntent.RestartFlow, events.last())
+    }
+
     @Test fun restartActionsRemainAvailableDuringGenerationButNotModelManagement() {
         val state = mutableStateOf(VlmUiState(stage = VlmStage.GENERATING,
             scene = SceneSnapshot("scene",640,480,1f,"/scene","/input")))
         val events = mutableListOf<VlmIntent>()
         composeRule.setContent { MaterialTheme { Controls(state.value,{ events += it },{},Modifier.fillMaxWidth()) } }
-        val tags = listOf("vlm_generate", "vlm_scan_restart_active", "vlm_cancel")
+        val tags = listOf("vlm_restart_flow", "vlm_generate")
         val bounds = tags.map { composeRule.onNodeWithTag(it).getUnclippedBoundsInRoot() }
         bounds.zipWithNext().forEach { (left, right) ->
             assertEquals(left.top, right.top)
             org.junit.Assert.assertTrue(left.right <= right.left)
         }
-        composeRule.onNodeWithTag("vlm_generate").assertTextContains("重新生成")
+        composeRule.onNodeWithTag("vlm_generate").assertTextContains("继续生成")
         composeRule.onNodeWithTag("vlm_generate").assertIsEnabled().performClick()
-        composeRule.onNodeWithTag("vlm_scan_restart_active").assertIsEnabled().performClick()
-        composeRule.onNodeWithTag("vlm_cancel").performScrollTo().performClick()
-        assertEquals(listOf(VlmIntent.Generate,VlmIntent.StartScan,VlmIntent.Cancel), events)
+        composeRule.onNodeWithTag("vlm_background_generate_confirm").performClick()
+        composeRule.onNodeWithTag("vlm_restart_flow").assertTextContains("重新开始").assertIsEnabled().performClick()
+        composeRule.onNodeWithTag("vlm_cancel").assertDoesNotExist()
+        assertEquals(listOf(VlmIntent.Generate,VlmIntent.RestartFlow), events)
         composeRule.runOnIdle { state.value = state.value.copy(modelBusy = true) }
         composeRule.onNodeWithTag("vlm_generate").assertIsNotEnabled()
-        composeRule.onNodeWithTag("vlm_scan_restart_active").assertIsNotEnabled()
+        composeRule.onNodeWithTag("vlm_restart_flow").assertIsNotEnabled()
     }
 
     @Test fun zoomDefaultsToOneAndHighlightsActualSelectedRatioWithLargerText() {
@@ -636,7 +684,7 @@ class VlmCameraScreenTest {
         composeRule.onNodeWithText("测试标题3", substring = true).assertExists()
     }
 
-    @Test fun generatedAndAppliedCompositionActionsKeepOrderAndShareCancelEvent() {
+    @Test fun generatedAndAppliedCompositionActionsKeepOrderWithoutCancelActions() {
         val plans = (1..3).map { CompositionPlan("p$it", "测试标题$it", ShotType.FULL, CropRect(), 1f,
             AvatarPlacement(), "指导", "背景") }
         val state = mutableStateOf(VlmUiState(stage = VlmStage.READY, selectedId = "p1", cameraReady = true,
@@ -655,22 +703,28 @@ class VlmCameraScreenTest {
             }
         }
 
-        val generatedTags = listOf("vlm_scan_restart_active", "vlm_generate", "vlm_details", "vlm_resume")
+        val generatedTags = listOf("vlm_restart_flow", "vlm_generate", "vlm_details")
         assertActionOrder(generatedTags)
-        composeRule.onNodeWithTag("vlm_generate").assertTextContains("重新生成")
-        composeRule.onNodeWithTag("vlm_resume").assertTextContains("取消")
-        generatedTags.forEach { composeRule.onNodeWithTag(it).performScrollTo().performClick() }
-        assertEquals(listOf(VlmIntent.StartScan, VlmIntent.Generate,
-            VlmIntent.CompositionDetailsVisible(true), VlmIntent.ResumeCamera), events)
+        composeRule.onNodeWithTag("vlm_generate").assertTextContains("继续生成")
+        composeRule.onNodeWithTag("vlm_resume").assertDoesNotExist()
+        generatedTags.forEach { tag ->
+            composeRule.onNodeWithTag(tag).performScrollTo().performClick()
+            if (tag == "vlm_generate") composeRule.onNodeWithTag("vlm_background_generate_confirm").performClick()
+        }
+        assertEquals(listOf(VlmIntent.RestartFlow, VlmIntent.Generate,
+            VlmIntent.CompositionDetailsVisible(true)), events)
 
         composeRule.runOnIdle {
             events.clear()
             state.value = state.value.copy(stage = VlmStage.LIVE, referencePlan = plans.first())
         }
-        assertActionOrder(listOf("vlm_scan_start", "vlm_start", "vlm_details", "vlm_resume"))
-        composeRule.onNodeWithTag("vlm_scan_start").assertTextContains("重新扫描")
-        composeRule.onNodeWithTag("vlm_resume").assertTextContains("取消").performScrollTo().performClick()
-        assertEquals(listOf(VlmIntent.ResumeCamera), events)
+        assertActionOrder(listOf("vlm_restart_flow", "vlm_details"))
+        composeRule.onNodeWithTag("vlm_restart_flow").assertTextContains("重新开始")
+        composeRule.onNodeWithTag("vlm_start").assertDoesNotExist()
+        composeRule.onNodeWithTag("vlm_scan_start").assertDoesNotExist()
+        composeRule.onNodeWithTag("vlm_resume").assertDoesNotExist()
+        composeRule.onNodeWithTag("vlm_restart_flow").performClick()
+        assertEquals(listOf(VlmIntent.RestartFlow), events)
 
         composeRule.runOnIdle { state.value = VlmUiState(cameraReady = true) }
         composeRule.onNodeWithTag("vlm_resume").assertDoesNotExist()
