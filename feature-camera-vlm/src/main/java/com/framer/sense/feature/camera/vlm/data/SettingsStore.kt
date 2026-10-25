@@ -56,7 +56,7 @@ class SettingsStore(context: Context) {
                 decoded = decoded.copy(seedAccess = SeedAccess.GATEWAY)
             decoded
         }.getOrDefault(ModelSettings())
-        return CloudModelConfig.applyQwenConfiguration(settings.copy(gatewayToken = token, qwenApiKey = readSecret("qwen-api-key"), seedApiKey = readSecret("seed-api-key")))
+        return CloudModelConfig.applyQwenConfiguration(settings.copy(gatewayToken = token, qwenApiKey = readSecret("qwen-api-key"), seedApiKey = readSecret("seed-api-key"))).normalizeReferenceSource()
     }
 
     private fun readSecret(name: String): String = runCatching {
@@ -74,7 +74,7 @@ class SettingsStore(context: Context) {
         val token = encrypt(settings.gatewayToken)
         val qwenKey = encrypt(settings.qwenApiKey)
         val seedKey = encrypt(settings.seedApiKey)
-        check(prefs.edit().putString("settings", VlmJson.encodeToString(CloudModelConfig.applyQwenConfiguration(settings).copy(gatewayToken = "", qwenApiKey = "", seedApiKey = "")))
+        check(prefs.edit().putString("settings", VlmJson.encodeToString(CloudModelConfig.applyQwenConfiguration(settings).normalizeReferenceSource().copy(gatewayToken = "", qwenApiKey = "", seedApiKey = "")))
             .putString("token", token).putString("qwen-api-key", qwenKey).putString("seed-api-key", seedKey).commit()) { "无法保存模型设置" }
     }
 

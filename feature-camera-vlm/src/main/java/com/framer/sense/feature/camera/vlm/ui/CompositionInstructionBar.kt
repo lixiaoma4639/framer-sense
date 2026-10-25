@@ -15,8 +15,10 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.DeleteOutline
+import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
@@ -28,6 +30,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
@@ -35,13 +38,17 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.TextFieldValue
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.unit.dp
 import com.framer.sense.feature.camera.vlm.R
+import com.framer.sense.feature.camera.vlm.model.ModelMode
+import com.framer.sense.feature.camera.vlm.model.SeedreamModel
 
 /** 原生键盘单独接收输入；相机区域的外部点击只收起编辑区，不穿透到拍照等控件。 */
 @Composable
@@ -65,6 +72,7 @@ internal fun CompositionInstructionOverlay(state: VlmUiState, onEvent: (VlmInten
 
 /** 覆盖在预览上方的编辑区；草稿由 MVI 保存，仅确认后提交给原构图输入链路。 */
 @Composable
+@OptIn(ExperimentalMaterial3Api::class)
 internal fun CompositionInstructionBar(state: VlmUiState, onEvent: (VlmIntent) -> Unit) {
     val focusManager = LocalFocusManager.current
     val keyboard = LocalSoftwareKeyboardController.current
@@ -95,25 +103,52 @@ internal fun CompositionInstructionBar(state: VlmUiState, onEvent: (VlmIntent) -
             border = BorderStroke(1.dp, Color(0xFFFFD66A).copy(alpha = .65f)), shadowElevation = 6.dp) {
             Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedTextField(value = editorValue,
+                    val fieldInteraction = remember { MutableInteractionSource() }
+                    val fieldEnabled = state.canEditInstruction && state.instructionEditorVisible
+                    val hasModelChoice = state.settings.mode != ModelMode.OFFLINE
+                    val fieldColors = OutlinedTextFieldDefaults.colors(
+                        focusedTextColor = Color.White, unfocusedTextColor = Color.White,
+                        cursorColor = Color(0xFFFFD66A), focusedBorderColor = Color(0xFFFFD66A),
+                        unfocusedBorderColor = Color.White.copy(alpha = .5f),
+                        focusedLabelColor = Color(0xFFFFD66A), unfocusedLabelColor = Color.White,
+                        focusedPlaceholderColor = Color.White.copy(alpha = .6f),
+                        unfocusedPlaceholderColor = Color.White.copy(alpha = .6f))
+                    BasicTextField(value = editorValue,
                         onValueChange = { value ->
                             editorValue = if (value.text.length > 2000) TextFieldValue(value.text.take(2000), TextRange(2000)) else value
                             if (editorValue.text != state.instructionDraft) onEvent(VlmIntent.InstructionDraftChanged(editorValue.text))
                         },
-                        enabled = state.canEditInstruction && state.instructionEditorVisible,
-                        label = { Text(stringResource(R.string.vlm_ai_instruction_label)) },
-                        placeholder = { Text(stringResource(R.string.vlm_ai_instruction_placeholder)) },
+                        enabled = fieldEnabled, interactionSource = fieldInteraction,
+                        textStyle = MaterialTheme.typography.bodyLarge.copy(color = Color.White),
+                        cursorBrush = SolidColor(Color(0xFFFFD66A)),
                         minLines = 2, maxLines = 3,
                         keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
                         keyboardActions = KeyboardActions(onDone = { submit() }),
-                        colors = OutlinedTextFieldDefaults.colors(
-                            focusedTextColor = Color.White, unfocusedTextColor = Color.White,
-                            cursorColor = Color(0xFFFFD66A), focusedBorderColor = Color(0xFFFFD66A),
-                            unfocusedBorderColor = Color.White.copy(alpha = .5f),
-                            focusedLabelColor = Color(0xFFFFD66A), unfocusedLabelColor = Color.White,
-                            focusedPlaceholderColor = Color.White.copy(alpha = .6f),
-                            unfocusedPlaceholderColor = Color.White.copy(alpha = .6f)),
-                        modifier = Modifier.weight(1f).testTag("vlm_ai_instruction_input"))
+                        modifier = Modifier.weight(1f).testTag("vlm_ai_instruction_input"),
+                        decorationBox = { innerTextField ->
+                            OutlinedTextFieldDefaults.DecorationBox(value = editorValue.text,
+                                enabled = fieldEnabled, singleLine = false,
+                                visualTransformation = VisualTransformation.None,
+                                interactionSource = fieldInteraction, colors = fieldColors,
+                                contentPadding = PaddingValues(start = 16.dp, top = 16.dp,
+                                    end = if (hasModelChoice) 8.dp else 16.dp,
+                                    bottom = if (hasModelChoice) 8.dp else 16.dp),
+                                label = { Text(stringResource(R.string.vlm_ai_instruction_label)) },
+                                placeholder = { Text(stringResource(R.string.vlm_ai_instruction_placeholder)) },
+                                innerTextField = {
+                                    // 模型选择与输入共用内容区，不追加占位行或增加输入框高度。
+                                    Row(verticalAlignment = Alignment.Bottom) {
+                                        Box(Modifier.weight(1f).padding(bottom = if (hasModelChoice) 8.dp else 0.dp)) { innerTextField() }
+                                        if (hasModelChoice) {
+                                            Spacer(Modifier.width(4.dp))
+                                            GeneratedModelChoice(state, onEvent) {
+                                                focusManager.clearFocus()
+                                                keyboard?.hide()
+                                            }
+                                        }
+                                    }
+                                })
+                        })
                     Button(onClick = submit, enabled = state.canEditInstruction && state.instructionEditorVisible,
                         contentPadding = PaddingValues(horizontal = 12.dp),
                         colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFFD66A), contentColor = Color(0xFF202126)),
@@ -124,6 +159,36 @@ internal fun CompositionInstructionBar(state: VlmUiState, onEvent: (VlmIntent) -
                 Text(stringResource(R.string.vlm_ai_instruction_hint), style = MaterialTheme.typography.bodySmall,
                     color = Color.White.copy(alpha = .75f))
                 InstructionChoices(state, onEvent)
+            }
+        }
+    }
+}
+
+@Composable
+private fun GeneratedModelChoice(state: VlmUiState, onEvent: (VlmIntent) -> Unit, beforeOpen: () -> Unit) {
+    var expanded by remember(state.settings.preferred, state.settings.mode) { mutableStateOf(false) }
+    val supported = state.settings.supportsImageGeneration
+    val enabled = state.canEditInstruction && state.instructionEditorVisible && supported
+    val color = if (enabled) Color(0xFFFFD66A) else Color.White.copy(alpha = .55f)
+    Box {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(2.dp),
+            modifier = Modifier.testTag("vlm_generated_model_choice")
+                .clickable(enabled = enabled, role = Role.Button) { beforeOpen(); expanded = true }) {
+            Text(stringResource(when {
+                !supported -> R.string.vlm_generated_model_unsupported
+                state.settings.seedreamModel == SeedreamModel.FLASH -> R.string.vlm_generated_model_fast
+                else -> R.string.vlm_generated_model_expert
+            }), style = MaterialTheme.typography.labelMedium, color = color)
+            if (supported) Icon(Icons.Filled.ChevronRight, contentDescription = null,
+                tint = color, modifier = Modifier.size(14.dp))
+        }
+        DropdownMenu(expanded = expanded && enabled, onDismissRequest = { expanded = false }) {
+            SeedreamModel.entries.forEach { model ->
+                val selected = state.settings.seedreamModel == model
+                DropdownMenuItem(text = { Text(seedreamModelLabel(model)) },
+                    onClick = { expanded = false; onEvent(VlmIntent.SeedreamModelSelected(model)) },
+                    modifier = Modifier.testTag("vlm_seedream_model_${model.name}")
+                        .semantics { this.selected = selected })
             }
         }
     }

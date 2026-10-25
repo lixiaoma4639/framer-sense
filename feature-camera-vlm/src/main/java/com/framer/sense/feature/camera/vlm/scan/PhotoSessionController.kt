@@ -103,6 +103,9 @@ class PhotoSessionController(context: Context, private val vision: OpenCvSceneTo
     } }
 
     suspend fun align(sample: AnalysisSample, plan: CompositionPlan, scene: SceneSnapshot, targetPose: ScanPose?): BackgroundGuidance =
+        align(sample, plan.backgroundTarget(), scene, targetPose)
+
+    suspend fun align(sample: AnalysisSample, plan: BackgroundReferenceTarget, scene: SceneSnapshot, targetPose: ScanPose?): BackgroundGuidance =
         withContext(processingDispatcher) { mutex.withLock {
             if (sample.config.version != latestConfig) {
                 val now = android.os.SystemClock.elapsedRealtimeNanos()
@@ -125,7 +128,7 @@ class PhotoSessionController(context: Context, private val vision: OpenCvSceneTo
                     // 不按虚拟人像尺寸遮掉背景，实际遮挡由 RANSAC 与空间分布校验剔除。
                     referenceFeatures = vision.extract(cropped)
                     referenceId = key; stability.reset()
-                    android.util.Log.i("VlmScan", "背景对齐参考重建 plan=${plan.id} shot=${plan.shot} image=${scene.id.take(12)} revision=${plan.revision} config=${sample.config.version} referenceEpoch=${referenceEpoch.get()} referenceSize=${cropped.width}x${cropped.height} crop=${plan.crop} sceneZoom=${scene.currentZoom} targetZoom=${plan.zoom} photoDirection=${scene.orientation.deviceRotation} avatarHeight=${plan.avatar.height} avatarFoot=${plan.avatar.foot} featureSource=RAW_BACKGROUND avatarMask=NONE excludedArea=0 referencePoints=${referenceFeatures?.points?.size ?: 0}")
+                    android.util.Log.i("VlmScan", "背景对齐参考重建 plan=${plan.id} image=${scene.id.take(12)} revision=${plan.revision} config=${sample.config.version} referenceEpoch=${referenceEpoch.get()} referenceSize=${cropped.width}x${cropped.height} crop=${plan.crop} sceneZoom=${scene.currentZoom} targetZoom=${plan.zoom} photoDirection=${scene.orientation.deviceRotation} featureSource=RAW_BACKGROUND avatarMask=NONE excludedArea=0 referencePoints=${referenceFeatures?.points?.size ?: 0}")
                 } finally { if (cropped !== original) cropped.recycle(); original.recycle() }
             }
             val bitmap = sample.bitmap()

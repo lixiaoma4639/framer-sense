@@ -19,3 +19,4 @@ local.properties
 /artifacts/camera-photo-sample-v1/*.blend1
 /artifacts/camera-cartoon-sample-v1/*.blend[0-9]
 /feature-camera-vlm/scripts/__pycache__/
+.vlm-portraits/

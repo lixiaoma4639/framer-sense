@@ -28,7 +28,7 @@ class SeedSettingsStoreTest {
             store.save(original)
             val seed = original.copy(preferred = ProviderId.SEED, seedApiKey = "seed-secret")
             store.save(seed)
-            assertEquals(seed, SettingsStore(context).read())
+            assertEquals(seed.normalizeReferenceSource(), SettingsStore(context).read())
             val encoded = prefs.getString("settings", "")!!
             listOf(seed.seedApiKey, seed.qwenApiKey, seed.gatewayToken).forEach { assertFalse(encoded.contains(it)) }
             assertNotEquals(seed.seedApiKey, prefs.getString("seed-api-key", null))
@@ -61,6 +61,40 @@ class SeedSettingsStoreTest {
             assertEquals(settings.qwenApiKey, store.read().qwenApiKey)
             prefs.edit().remove("token").commit()
             assertEquals(SeedAccess.OFFICIAL, store.read().seedAccess)
+        } finally { prefs.edit().clear().commit() }
+    }
+
+    @Test fun fixedModesNormalizeLegacyReferenceSourcesOnReadAndSave() {
+        val context = context(); val prefs = context.getSharedPreferences("vlm-settings", Context.MODE_PRIVATE)
+        try {
+            val store = SettingsStore(context)
+            listOf(
+                ModelSettings(mode = ModelMode.CLOUD) to ReferenceSource.GENERATED_IMAGE,
+                ModelSettings(mode = ModelMode.OFFLINE, referenceSource = ReferenceSource.GENERATED_IMAGE) to ReferenceSource.LEGACY_GLB
+            ).forEach { (legacy, source) ->
+                prefs.edit().putString("settings", VlmJson.encodeToString(legacy)).commit()
+                val expected = legacy.copy(referenceSource = source)
+                assertEquals(expected, store.read())
+                store.save(legacy)
+                val persisted = VlmJson.decodeFromString<ModelSettings>(prefs.getString("settings", null)!!)
+                assertEquals(expected, persisted)
+                assertEquals(expected, SettingsStore(context).read())
+            }
+        } finally { prefs.edit().clear().commit() }
+    }
+
+    @Test fun autoModeMigratesLegacyReferenceChoicesAndKeepsImageConfiguration() {
+        val context = context(); val prefs = context.getSharedPreferences("vlm-settings", Context.MODE_PRIVATE)
+        try {
+            val store = SettingsStore(context)
+            ReferenceSource.entries.forEach { source ->
+                val legacy = ModelSettings(mode = ModelMode.AUTO, referenceSource = source, seedreamModel = SeedreamModel.PRO)
+                val expected = legacy.copy(referenceSource = ReferenceSource.GENERATED_IMAGE)
+                prefs.edit().putString("settings", VlmJson.encodeToString(legacy)).commit()
+                assertEquals(expected, store.read())
+                store.save(legacy)
+                assertEquals(expected, SettingsStore(context).read())
+            }
         } finally { prefs.edit().clear().commit() }
     }
 }

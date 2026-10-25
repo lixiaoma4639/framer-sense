@@ -97,6 +97,89 @@ class VlmCameraScreenTest {
         composeRule.onNodeWithTag("vlm_ai_instruction_toggle").assertIsNotEnabled()
     }
 
+    @Test fun instructionModelChoiceShowsShortLabelAndFullMenuWithoutChangingText() {
+        val state = mutableStateOf(VlmUiState(settings = ModelSettings(mode = ModelMode.CLOUD, preferred = ProviderId.SEED),
+            instructionEditorVisible = true, instructionDraft = "人物靠右"))
+        val events = mutableListOf<VlmIntent>()
+        composeRule.setContent { MaterialTheme {
+            CompositionInstructionBar(state.value) { event ->
+                events += event
+                if (event is VlmIntent.SeedreamModelSelected) state.value = state.value.copy(
+                    settings = state.value.settings.copy(seedreamModel = event.model))
+            }
+        } }
+        composeRule.onNodeWithTag("vlm_generated_model_choice").assertTextContains("快速")
+        val input = composeRule.onNodeWithTag("vlm_ai_instruction_input").fetchSemanticsNode().boundsInRoot
+        val choice = composeRule.onNodeWithTag("vlm_generated_model_choice").fetchSemanticsNode().boundsInRoot
+        assertTrue(input.contains(choice.center))
+        assertTrue(choice.center.x > input.center.x && choice.center.y > input.center.y)
+        composeRule.onNodeWithTag("vlm_generated_model_choice").performClick()
+        composeRule.onNodeWithTag("vlm_seedream_model_FLASH").assertTextContains("Seedream 5.0 Flash (快速)").assertIsSelected()
+        composeRule.onNodeWithTag("vlm_seedream_model_PRO").assertTextContains("Seedream 5.0 Pro (专家)").performClick()
+        composeRule.onNodeWithTag("vlm_generated_model_choice").assertTextContains("专家")
+        composeRule.onNodeWithTag("vlm_ai_instruction_input").assertTextContains("人物靠右")
+        assertEquals(listOf(VlmIntent.SeedreamModelSelected(SeedreamModel.PRO)), events)
+    }
+
+    @Test fun generatedReferenceReusesOriginalActionsAndGenerationConfirmation() {
+        val scene = SceneSnapshot("fixture-scene", 600, 800, 1f, "unused", "unused")
+        val candidate = GeneratedCandidate("fixture-candidate", "fixture-batch", scene, SeedreamModel.FLASH,
+            "自然", 0, null, status = GeneratedCandidateStatus.READY,
+            assets = GeneratedReferenceAssets("unused-full", "unused-person", 600, 800, "fixture", 2))
+        val state = VlmUiState(stage = VlmStage.READY, scene = scene,
+            settings = ModelSettings(mode = ModelMode.CLOUD, preferred = ProviderId.SEED),
+            generated = GeneratedReferenceState(candidates = listOf(candidate), selectedId = candidate.id), compositionDetailsVisible = true)
+        val rendered = mutableStateOf(state)
+        val events = mutableListOf<VlmIntent>()
+        composeRule.setContent { MaterialTheme { Controls(rendered.value, events::add, {}, Modifier.fillMaxWidth()) } }
+        composeRule.onNodeWithTag("vlm_camera_actions").assertExists()
+        composeRule.onNodeWithTag("vlm_composition_choices").assertExists()
+        composeRule.onNodeWithTag("vlm_composition_info_toggle").assertExists()
+        composeRule.onNodeWithTag("vlm_apply").assertExists()
+        composeRule.onNodeWithTag("vlm_generated_generate").assertDoesNotExist()
+        composeRule.onNodeWithTag("vlm_generated_apply").assertDoesNotExist()
+        val restart = composeRule.onNodeWithTag("vlm_restart_flow").fetchSemanticsNode().boundsInRoot
+        val generate = composeRule.onNodeWithTag("vlm_generate").fetchSemanticsNode().boundsInRoot
+        assertTrue(restart.left < generate.left)
+        val layouts = mutableListOf<TextLayoutResult>()
+        composeRule.onNodeWithTag("vlm_generate_label").performSemanticsAction(SemanticsActions.GetTextLayoutResult) { it(layouts) }
+        assertEquals(Color.White, layouts.single().layoutInput.style.color)
+        composeRule.onNodeWithTag("vlm_generate").performClick()
+        composeRule.onNodeWithTag("vlm_background_generate_dialog").assertExists()
+        composeRule.onNodeWithText("为备选 1 生成一张构图？已生成的构图会保留。").assertExists()
+        assertTrue(events.isEmpty())
+        composeRule.onNodeWithTag("vlm_background_generate_confirm").performClick()
+        assertEquals(listOf(VlmIntent.Generate), events)
+        composeRule.onNodeWithTag("vlm_apply").performClick()
+        assertEquals(VlmIntent.Apply, events.last())
+        composeRule.runOnIdle {
+            rendered.value = state.copy(generated = state.generated.copy(candidates = listOf(candidate,
+                candidate.copy(id = "pending-candidate", status = GeneratedCandidateStatus.RUNNING, assets = null))))
+        }
+        composeRule.onNodeWithTag("vlm_apply").assertIsEnabled()
+        composeRule.onNodeWithTag("vlm_generate").assertIsNotEnabled()
+        composeRule.runOnIdle {
+            rendered.value = state.copy(compositionDetailsExpanded = true,
+                generated = state.generated.copy(candidates = listOf(candidate.copy(
+                    assets = candidate.assets!!.copy(portraitPath = "", sourceLayerCount = 3)))))
+        }
+        composeRule.onNodeWithTag("vlm_apply").assertIsNotEnabled()
+        composeRule.onNodeWithTag("vlm_generated_enlarge").assertIsEnabled()
+        composeRule.onNodeWithText("已合成全部 3 张图层（含底图）").assertExists()
+    }
+
+    @Test fun instructionModelChoiceMarksOtherBrandsUnsupportedAndHidesOfflineChoice() {
+        val state = mutableStateOf(VlmUiState(settings = ModelSettings(mode = ModelMode.AUTO), instructionEditorVisible = true))
+        composeRule.setContent { MaterialTheme { CompositionInstructionBar(state.value, {}) } }
+        listOf(ProviderId.QWEN, ProviderId.GPT, ProviderId.GEMINI).forEach { brand ->
+            composeRule.runOnIdle { state.value = state.value.copy(settings = state.value.settings.copy(preferred = brand)) }
+            composeRule.onNodeWithTag("vlm_generated_model_choice").assertTextContains("不支持").assertIsNotEnabled()
+            composeRule.onNodeWithTag("vlm_seedream_model_FLASH").assertDoesNotExist()
+        }
+        composeRule.runOnIdle { state.value = state.value.copy(settings = state.value.settings.copy(mode = ModelMode.OFFLINE)) }
+        composeRule.onNodeWithTag("vlm_generated_model_choice").assertDoesNotExist()
+    }
+
     @Test fun historyDeleteDoesNotSelectRowAndRecommendationsMoveCursorToEnd() {
         val state = mutableStateOf(VlmUiState(instructionEditorVisible = true, instructionDraft = "保留建筑",
             instructionHistory = listOf("保留建筑")))
@@ -228,11 +311,17 @@ class VlmCameraScreenTest {
         composeRule.onNodeWithTag("vlm_cloud_offline_divider").assertDoesNotExist()
         composeRule.onNodeWithTag("vlm_cloud_configuration").assertDoesNotExist()
         composeRule.onNodeWithText("网关地址").assertDoesNotExist()
+        composeRule.onNodeWithTag("vlm_reference_source_LEGACY_GLB").assertDoesNotExist()
+        composeRule.onNodeWithTag("vlm_reference_source_GENERATED_IMAGE").assertDoesNotExist()
+        composeRule.onNodeWithTag("vlm_seedream_model_FLASH").assertDoesNotExist()
 
         composeRule.onNodeWithTag("vlm_model_mode_CLOUD").performScrollTo().performClick()
         composeRule.onNodeWithTag("vlm_cloud_configuration").assertExists()
         composeRule.onNodeWithTag("vlm_offline_configuration").assertDoesNotExist()
         composeRule.onNodeWithTag("vlm_download_local_divider").assertDoesNotExist()
+        composeRule.onNodeWithTag("vlm_reference_source_LEGACY_GLB").assertDoesNotExist()
+        composeRule.onNodeWithTag("vlm_reference_source_GENERATED_IMAGE").assertDoesNotExist()
+        composeRule.onNodeWithTag("vlm_seedream_model_FLASH").assertDoesNotExist()
         composeRule.onNodeWithText(initial.gateway).performScrollTo().performTextReplacement(editedGateway)
 
         composeRule.onNodeWithTag("vlm_model_mode_AUTO").performScrollTo().performClick()
@@ -245,6 +334,35 @@ class VlmCameraScreenTest {
         composeRule.onNodeWithTag("vlm_offline_configuration").assertExists()
         composeRule.onNodeWithText("保存").performClick()
         assertEquals(listOf(VlmIntent.SaveSettings(initial.copy(gateway = editedGateway))), events)
+    }
+
+    @Test fun cloudBrandsKeepKeysAndHideSeparateSeedreamConfigurationAcrossModeSwitches() {
+        val initial = ModelSettings(mode = ModelMode.CLOUD, preferred = ProviderId.SEED,
+            seedApiKey = "seed-original", qwenApiKey = "qwen-original", seedreamModel = SeedreamModel.PRO)
+        val events = mutableListOf<VlmIntent>()
+        composeRule.setContent { MaterialTheme {
+            ModelSettingsDialog(VlmUiState(settings = initial), events::add, {}, {})
+        } }
+        composeRule.onNodeWithText("摄影参考方式").assertDoesNotExist()
+        composeRule.onNodeWithTag("vlm_reference_source_LEGACY_GLB").assertDoesNotExist()
+        composeRule.onNodeWithTag("vlm_reference_source_GENERATED_IMAGE").assertDoesNotExist()
+        composeRule.onNodeWithTag("vlm_seedream_model_PRO").assertDoesNotExist()
+        composeRule.onNodeWithTag("vlm_seedream_api_key").assertDoesNotExist()
+        composeRule.onNodeWithTag("vlm_seed_api_key").performScrollTo().performTextReplacement("seed-edited")
+        composeRule.onNodeWithTag("vlm_cloud_brand_QWEN").performScrollTo().performClick()
+        composeRule.onNodeWithTag("vlm_seed_api_key").assertDoesNotExist()
+        assertKeyCanBeRevealedAndMasked("vlm_qwen_api_key", initial.qwenApiKey)
+        composeRule.onNodeWithTag("vlm_cloud_brand_SEED").performScrollTo().performClick()
+        assertKeyCanBeRevealedAndMasked("vlm_seed_api_key", "seed-edited")
+        composeRule.onNodeWithTag("vlm_model_mode_OFFLINE").performScrollTo().performClick()
+        composeRule.onNodeWithTag("vlm_seedream_model_PRO").assertDoesNotExist()
+        composeRule.onNodeWithTag("vlm_offline_configuration").assertExists()
+        composeRule.onNodeWithTag("vlm_model_mode_CLOUD").performScrollTo().performClick()
+        composeRule.onNodeWithTag("vlm_seedream_model_PRO").assertDoesNotExist()
+        composeRule.onNodeWithTag("vlm_cloud_brand_SEED").assertIsSelected()
+        composeRule.onNodeWithText("保存").performClick()
+        assertEquals(listOf(VlmIntent.SaveSettings(initial.copy(referenceSource = ReferenceSource.GENERATED_IMAGE,
+            seedApiKey = "seed-edited"))), events)
     }
 
     @Test fun modelModeButtonsShareOneRowAndShowFullLabelsWithLargerSystemFont() {
@@ -278,17 +396,18 @@ class VlmCameraScreenTest {
         composeRule.onNodeWithTag("vlm_open_model_market").assertDoesNotExist()
         composeRule.onNodeWithTag("vlm_cloud_configuration").assertExists()
         composeRule.onNodeWithTag("vlm_offline_configuration").assertDoesNotExist()
-        composeRule.onNodeWithText("✓ 中国").assertIsDisplayed()
-        composeRule.onNodeWithText("国际").assertIsDisplayed()
-        composeRule.onNodeWithText("✓ 阿里千问").assertIsDisplayed()
-        composeRule.onNodeWithText("豆包Seed").assertIsDisplayed().performClick()
-        composeRule.onNodeWithText("✓ 豆包Seed").assertIsDisplayed()
+        composeRule.onNodeWithText("中国").assertDoesNotExist()
+        composeRule.onNodeWithText("国际").assertDoesNotExist()
+        listOf(ProviderId.QWEN, ProviderId.SEED, ProviderId.GPT, ProviderId.GEMINI).forEach {
+            composeRule.onNodeWithTag("vlm_cloud_brand_${it.name}").assertExists()
+        }
+        composeRule.onNodeWithTag("vlm_cloud_brand_QWEN").assertIsSelected()
+        composeRule.onNodeWithTag("vlm_cloud_brand_SEED").performScrollTo().performClick().assertIsSelected()
         composeRule.onNodeWithTag("vlm_seed_official_configuration").assertExists()
         composeRule.onNodeWithTag("vlm_qwen_official_configuration").assertDoesNotExist()
-        composeRule.onNodeWithText("国际").performClick()
-        composeRule.onNodeWithText("✓ 国际").assertIsDisplayed()
-        composeRule.onNodeWithText("✓ GPT").assertIsDisplayed()
-        composeRule.onNodeWithText("Gemini").assertIsDisplayed()
+        composeRule.onNodeWithTag("vlm_cloud_brand_GPT").performScrollTo().performClick().assertIsSelected()
+        composeRule.onNodeWithTag("vlm_gateway_configuration").assertExists()
+        composeRule.onNodeWithTag("vlm_seed_official_configuration").assertDoesNotExist()
     }
 
     @Test fun officialQwenSettingsUseJsonAddressAndModelAndSaveUserKey() {
@@ -305,7 +424,7 @@ class VlmCameraScreenTest {
         composeRule.onNodeWithTag("vlm_qwen_api_key").performScrollTo().performTextReplacement("sk-fake-qwen-key")
         assertKeyCanBeRevealedAndMasked("vlm_qwen_api_key", "sk-fake-qwen-key")
         composeRule.onNodeWithText("保存").performClick()
-        assertEquals(listOf(VlmIntent.SaveSettings(CloudModelConfig.applyQwenConfiguration(initial).copy(qwenApiKey = "sk-fake-qwen-key"))), events)
+        assertEquals(listOf(VlmIntent.SaveSettings(CloudModelConfig.applyQwenConfiguration(initial).normalizeReferenceSource().copy(qwenApiKey = "sk-fake-qwen-key"))), events)
         composeRule.onNodeWithTag("vlm_qwen_check").performScrollTo().performClick()
         assertEquals(VlmIntent.CheckQwen, events.last())
         composeRule.onNodeWithTag("vlm_qwen_access_GATEWAY").performScrollTo().performClick()
@@ -328,7 +447,7 @@ class VlmCameraScreenTest {
         composeRule.onNodeWithTag("vlm_seed_api_key").performScrollTo().performTextReplacement("fake-seed-key")
         assertKeyCanBeRevealedAndMasked("vlm_seed_api_key", "fake-seed-key")
         composeRule.onNodeWithText("保存").performClick()
-        assertEquals(listOf(VlmIntent.SaveSettings(initial.copy(seedApiKey = "fake-seed-key"))), events)
+        assertEquals(listOf(VlmIntent.SaveSettings(initial.normalizeReferenceSource().copy(seedApiKey = "fake-seed-key"))), events)
         composeRule.onNodeWithTag("vlm_seed_check").performScrollTo().performClick()
         assertEquals(VlmIntent.CheckSeed, events.last())
         composeRule.onNodeWithTag("vlm_seed_access_GATEWAY").performScrollTo().performClick()
@@ -345,7 +464,7 @@ class VlmCameraScreenTest {
         } }
         assertKeyCanBeRevealedAndMasked("vlm_gateway_token", initial.gatewayToken)
         composeRule.onNodeWithText("保存").performClick()
-        assertEquals(listOf(VlmIntent.SaveSettings(CloudModelConfig.applyQwenConfiguration(initial))), events)
+        assertEquals(listOf(VlmIntent.SaveSettings(CloudModelConfig.applyQwenConfiguration(initial).normalizeReferenceSource())), events)
     }
 
     private fun assertKeyCanBeRevealedAndMasked(tag: String, value: String) {
@@ -358,14 +477,21 @@ class VlmCameraScreenTest {
         field.assert(password)
     }
 
-    @Test fun autoModeShowsBothOfficialProvidersAndOfflineWithoutRequiringGateway() {
+    @Test fun autoModeShowsSelectedBrandAndOfflineWithoutRequiringGateway() {
         composeRule.setContent { MaterialTheme {
             ModelSettingsDialog(VlmUiState(settings = ModelSettings(mode = ModelMode.AUTO)), {}, {}, {})
         } }
         composeRule.onNodeWithTag("vlm_qwen_official_configuration").assertExists()
-        composeRule.onNodeWithTag("vlm_seed_official_configuration").assertExists()
+        composeRule.onNodeWithTag("vlm_seed_official_configuration").assertDoesNotExist()
         composeRule.onNodeWithTag("vlm_offline_configuration").assertExists()
         composeRule.onNodeWithTag("vlm_gateway_configuration").assertDoesNotExist()
+        composeRule.onNodeWithTag("vlm_reference_source_LEGACY_GLB").assertDoesNotExist()
+        composeRule.onNodeWithTag("vlm_reference_source_GENERATED_IMAGE").assertDoesNotExist()
+        composeRule.onNodeWithText("摄影参考方式").assertDoesNotExist()
+        composeRule.onNodeWithTag("vlm_seedream_model_FLASH").assertDoesNotExist()
+        composeRule.onNodeWithTag("vlm_cloud_brand_SEED").performScrollTo().performClick()
+        composeRule.onNodeWithTag("vlm_seed_official_configuration").assertExists()
+        composeRule.onNodeWithTag("vlm_qwen_official_configuration").assertDoesNotExist()
     }
 
     @Test fun marketRoundTripRetainsUnsavedModelSettingsDraft() {
@@ -384,7 +510,7 @@ class VlmCameraScreenTest {
         composeRule.onNodeWithTag("market_test_back").performClick()
         composeRule.onNodeWithTag("vlm_model_mode_AUTO").assertIsSelected()
         composeRule.onNodeWithText("保存").performClick()
-        assertEquals(listOf(VlmIntent.SaveSettings(initial.copy(mode = ModelMode.AUTO))), events)
+        assertEquals(listOf(VlmIntent.SaveSettings(initial.copy(mode = ModelMode.AUTO).normalizeReferenceSource())), events)
     }
 
     @Test fun unsupportedVisionModelsCannotDownload() {

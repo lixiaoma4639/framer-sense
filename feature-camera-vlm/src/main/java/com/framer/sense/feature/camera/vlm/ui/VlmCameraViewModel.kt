@@ -19,6 +19,10 @@ import com.framer.sense.feature.camera.vlm.model.*
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.sync.withPermit
 import javax.inject.Inject
 
 /** 相机 MVI 状态机；通过请求令牌阻止取消后或旧场景结果写回。 */
@@ -33,10 +37,14 @@ class VlmCameraViewModel @Inject constructor(
     private val downloads: ModelDownloadRepository,
     savedStateHandle: SavedStateHandle,
     private val sessions: PhotoSessionController,
-    private val marketDownloads: com.framer.sense.feature.camera.vlm.market.MarketDownloadManager? = null
+    private val marketDownloads: com.framer.sense.feature.camera.vlm.market.MarketDownloadManager? = null,
+    private val generatedRepository: GeneratedReferenceGenerator? = null,
+    private val referenceNetwork: ReferenceNetworkState = ReferenceNetworkState { true }
 ) : ViewModel() {
     private val initialPhotoPreferences = settingsStore.readPhotoPreferences()
-    private val _state = MutableStateFlow(VlmUiState(settings = settingsStore.read(), modelStatus = modelDescription(),
+    private val initialSettings = settingsStore.read()
+    private val _state = MutableStateFlow(VlmUiState(settings = initialSettings,
+        automaticReferenceSource = resolveReferenceSource(initialSettings), modelStatus = modelDescription(),
         photoPreferences = initialPhotoPreferences, selectedAvatar = initialPhotoPreferences.avatar,
         instructionHistory = settingsStore.readInstructionHistory(),
         faceVisible = initialPhotoPreferences.showFace,
@@ -56,6 +64,10 @@ class VlmCameraViewModel @Inject constructor(
     private var captureToken: String? = null
     private var pendingCaptureWorkflow: CameraWorkflowKey? = null
     private var work: Job? = null
+    private val settingsWrites = Mutex()
+    private var generationModelRevision = 0L
+    private val generatedJobs = mutableMapOf<String, Job>()
+    private val generatedPermits = Semaphore(1)
     private var renderWork: Job? = null
     private var faceWork: Job? = null
     private var sampleWork: Job? = null
@@ -80,7 +92,7 @@ class VlmCameraViewModel @Inject constructor(
         guideWork = viewModelScope.launch {
             for (sample in guideQueue) {
                 val s = _state.value
-                val plan = s.referencePlan ?: continue
+                val plan = s.activeBackgroundTarget ?: continue
                 val scene = s.scene ?: continue
                 val rejection = when {
                     s.ar.source == com.framer.sense.feature.camera.vlm.ar.ArSource.SHARED_CAMERA && s.ar.tracking in listOf(com.framer.sense.feature.camera.vlm.ar.ArTrackingState.LOST, com.framer.sense.feature.camera.vlm.ar.ArTrackingState.PAUSED) -> "tracking"
@@ -113,12 +125,12 @@ class VlmCameraViewModel @Inject constructor(
                         Log.i("VlmScan", "背景匹配性能 alignMs=${(alignEnd-alignStart)/1_000_000} queueMs=${(alignStart-sample.receivedNs)/1_000_000} status=${aligned.status} config=${sample.config.version}")
                     }
                     _state.update { current ->
-                        if (!foreground || epoch != guidanceEpoch || token != requestToken || current.referencePlan != plan || current.cameraConfigVersion != sample.config.version || current.stage != VlmStage.LIVE) current
+                        if (!foreground || epoch != guidanceEpoch || token != requestToken || current.activeBackgroundTarget != plan || current.cameraConfigVersion != sample.config.version || current.stage != VlmStage.LIVE) current
                         else current.withBackgroundGuidance(mergeBackgroundAlignment(current.background, aligned))
                     }
                     if (s.background.status != BackgroundStatus.ALIGNED_AUTO && aligned.status == BackgroundStatus.ALIGNED_AUTO) {
                         val committed = _state.value
-                        Log.i("VlmScan", "自动对齐结果提交 observed=${aligned.status} applied=${committed.background.status} sameReference=${committed.referencePlan == plan} sameEpoch=${epoch == guidanceEpoch} sameRequest=${token == requestToken} foreground=$foreground stage=${committed.stage} referenceReady=${committed.reference?.appliedPlan == plan} presentation=${referencePresentation(committed.referencePlan, committed.background.status, committed.ar)}")
+                        Log.i("VlmScan", "自动对齐结果提交 observed=${aligned.status} applied=${committed.background.status} sameReference=${committed.activeBackgroundTarget == plan} sameEpoch=${epoch == guidanceEpoch} sameRequest=${token == requestToken} foreground=$foreground stage=${committed.stage}")
                     }
                 } catch (cancel: CancellationException) { throw cancel }
                 catch (failure: Exception) {
@@ -149,8 +161,25 @@ class VlmCameraViewModel @Inject constructor(
         _state.update { it.copy(photoPreferences = value) }
     }
 
+    private fun resolveReferenceSource(settings: ModelSettings): ReferenceSource =
+        CameraReferenceRouting.source(settings, settings.mode != ModelMode.AUTO || referenceNetwork.isAvailable())
+
+    /** 仅在尚无构图任务的新流程重新判断网络；在途或已生成参考不随网络抖动切换。 */
+    private fun refreshAutomaticReferenceRoute() {
+        val current = _state.value
+        if (current.settings.mode != ModelMode.AUTO || current.operationBusy || current.result != null ||
+            current.compositionCache.isNotEmpty() || current.generated.candidates.isNotEmpty()) return
+        val source = resolveReferenceSource(current.settings)
+        _state.update { it.copy(automaticReferenceSource = source) }
+        if (source == ReferenceSource.GENERATED_IMAGE && current.cameraMode == CameraMode.AR)
+            switchCameraMode(CameraMode.NORMAL)
+    }
+
     private fun switchCameraMode(mode: CameraMode) {
         val old = _state.value
+        if (old.usesGeneratedReference && mode == CameraMode.AR) {
+            _state.update { it.copy(error = models.message(R.string.vlm_generated_normal_required)) }; return
+        }
         if (old.cameraMode == mode) return
         guidanceEpoch++
         _state.update { it.copy(cameraMode = mode, cameraEpoch = it.cameraEpoch + 1, cameraReady = false,
@@ -172,7 +201,7 @@ class VlmCameraViewModel @Inject constructor(
 
     /** 非指定云端模式在前台空闲时自动加载目录；失败或卸载后不循环重试。 */
     private fun maybeAutoLoad() {
-        if (_state.value.settings.mode == ModelMode.CLOUD || !foreground || busy() || _state.value.instructionEditorVisible) return
+        if (_state.value.usesGeneratedReference || _state.value.settings.mode == ModelMode.CLOUD || !foreground || busy() || _state.value.instructionEditorVisible) return
         // 候选指针只在下载校验完成后发布；队列中其他模型下载不影响已完成候选。
         val dir = models.pendingDirectory() ?: models.activeDirectory() ?: return
         if (modelLoaded && local.loadState.value.path == dir.path) return
@@ -232,6 +261,10 @@ class VlmCameraViewModel @Inject constructor(
      */
     fun onIntent(intent: VlmIntent) {
         when (intent) {
+            is VlmIntent.SelectGenerated -> selectGenerated(intent.id)
+            is VlmIntent.RetryGenerated -> composeGenerated(intent.id)
+            VlmIntent.ReplaceGenerated -> composeGenerated(_state.value.generated.selectedId)
+            is VlmIntent.GeneratedZoomVisible -> _state.update { it.copy(generated = it.generated.copy(zoomVisible = intent.visible)) }
             is VlmIntent.PhotoOrientationChanged -> {
                 if (intent.orientation == _state.value.photoOrientation) return
                 // 方向不是相机重绑：保留扫描、已冻结照片、请求令牌及生成结果。
@@ -296,7 +329,7 @@ class VlmCameraViewModel @Inject constructor(
                 if (_state.value.stage == VlmStage.SCANNING) scanQueue?.trySend(intent.sample)
                 else if (_state.value.stage == VlmStage.LIVE) guideQueue.trySend(intent.sample)
             }
-            VlmIntent.ConfirmBackground -> if (_state.value.stage == VlmStage.LIVE && _state.value.referencePlan?.viewBinding != null) {
+            VlmIntent.ConfirmBackground -> if (_state.value.stage == VlmStage.LIVE && _state.value.activeBackgroundTarget?.viewBinding != null) {
                 _state.update { it.copy(background = it.background.copy(status = BackgroundStatus.ALIGNED_MANUAL)) }
                 val confirmed = _state.value
                 Log.i("VlmScan", "手动对齐结果提交 applied=${confirmed.background.status} referenceReady=${confirmed.reference != null && confirmed.reference.appliedPlan == confirmed.referencePlan} presentation=${referencePresentation(confirmed.referencePlan, confirmed.background.status, confirmed.ar)}")
@@ -326,6 +359,7 @@ class VlmCameraViewModel @Inject constructor(
             is VlmIntent.ZoomReported -> if (intent.epoch == _state.value.cameraEpoch && _state.value.cameraMode == CameraMode.NORMAL)
                 _state.update { it.copy(actualZoom = intent.zoom) }
             is VlmIntent.AspectRatioSelected -> if (_state.value.framingUnlocked && intent.ratio != _state.value.photoPreferences.aspectRatio) {
+                if (_state.value.usesGeneratedReference) cancelScan()
                 guidanceEpoch++
                 updatePhotoPreferences { it.copy(aspectRatio = intent.ratio) }
                 _state.update { it.copy(cameraEpoch = it.cameraEpoch + 1, cameraReady = false,
@@ -339,7 +373,8 @@ class VlmCameraViewModel @Inject constructor(
                 compositionDetailsExpanded = false,
                 capturedWorkflow = if (intent.visible) null else it.capturedWorkflow) }
             is VlmIntent.CompositionDetailsExpanded -> if (!intent.expanded || !busy()) _state.update {
-                it.copy(compositionDetailsExpanded = intent.expanded && it.result != null,
+                it.copy(compositionDetailsExpanded = intent.expanded && (it.result != null ||
+                    it.usesGeneratedReference && it.generated.selected?.ready == true),
                     capturedWorkflow = if (intent.expanded) null else it.capturedWorkflow)
             }
             is VlmIntent.PreferredEthnicity -> if (!busy()) {
@@ -357,6 +392,23 @@ class VlmCameraViewModel @Inject constructor(
                     instructionDraftRevision = it.instructionDraftRevision + 1) }
             is VlmIntent.InstructionDraftChanged -> if (_state.value.instructionEditorVisible && _state.value.canEditInstruction && intent.text != _state.value.instructionDraft)
                 _state.update { it.copy(instructionDraft = intent.text.take(2000), instructionDraftFromRecommendation = false) }
+            is VlmIntent.SeedreamModelSelected -> if (_state.value.instructionEditorVisible && _state.value.canEditInstruction &&
+                _state.value.settings.mode != ModelMode.OFFLINE && _state.value.settings.supportsImageGeneration) {
+                val before = _state.value.settings
+                if (before.seedreamModel == intent.model) return
+                val revision = ++generationModelRevision
+                val settings = before.copy(seedreamModel = intent.model)
+                _state.update { it.copy(settings = settings) }
+                viewModelScope.launch {
+                    try { settingsWrites.withLock { withContext(Dispatchers.IO) { settingsStore.save(settings) } } }
+                    catch (cancel: CancellationException) { throw cancel }
+                    catch (_: Exception) {
+                        if (revision == generationModelRevision) _state.update { it.copy(
+                            settings = it.settings.copy(seedreamModel = before.seedreamModel),
+                            error = models.message(R.string.vlm_generated_model_save_failed)) }
+                    }
+                }
+            }
             is VlmIntent.InstructionRecommendationSelected -> if (_state.value.instructionEditorVisible && _state.value.canEditInstruction)
                 _state.update { it.copy(instructionDraft = intent.text.take(2000), instructionDraftFromRecommendation = true,
                     instructionDraftRevision = it.instructionDraftRevision + 1) }
@@ -382,9 +434,9 @@ class VlmCameraViewModel @Inject constructor(
             }
             VlmIntent.Generate -> compose(false)
             VlmIntent.Revise -> compose(true)
-            VlmIntent.Cancel -> { if (_state.value.stage == VlmStage.SCANNING || _state.value.stage == VlmStage.SCAN_PROCESSING) { cancelScan(); return }; if (busy() && _state.value.modelBusy) return; cancelWork(); _state.update { it.copy(stage = if (it.scanSnapshot != null && it.scene == null) VlmStage.SCAN_REVIEW else if (it.scene == null) VlmStage.LIVE else if (it.result == null) VlmStage.FROZEN else VlmStage.READY, error = null, directorProgress = null) } }
+            VlmIntent.Cancel -> { if (_state.value.stage == VlmStage.SCANNING || _state.value.stage == VlmStage.SCAN_PROCESSING) { cancelScan(); return }; if (busy() && _state.value.modelBusy) return; cancelGenerated(); cancelWork(); _state.update { it.copy(stage = if (it.scanSnapshot != null && it.scene == null) VlmStage.SCAN_REVIEW else if (it.scene == null) VlmStage.LIVE else if (it.generated.hasReady || it.result != null) VlmStage.READY else VlmStage.FROZEN, error = null, directorProgress = null) } }
             // 相机是否就绪由绑定生命周期更新；退出构图不能把仍在运行的相机标记为未就绪。
-            VlmIntent.ResumeCamera -> { if (_state.value.scanSnapshot != null) { cancelScan(); return }; cancelWork(); _state.update { it.copy(stage = VlmStage.LIVE, capturedWorkflow = null, reference = null, referencePlan = null, error = null, directorProgress = null) } }
+            VlmIntent.ResumeCamera -> { if (_state.value.scanSnapshot != null && !_state.value.usesGeneratedReference) { cancelScan(); return }; cancelWork(); _state.update { it.copy(stage = VlmStage.LIVE, capturedWorkflow = null, reference = null, referencePlan = null, generated = it.generated.copy(applied = null), error = null, directorProgress = null) } }
             is VlmIntent.Select -> if (!busy() &&
                 (intent.sceneId != null && intent.sceneId != _state.value.scene?.id ||
                     intent.batchId != null && intent.batchId != _state.value.compositionBatchId)) {
@@ -418,20 +470,35 @@ class VlmCameraViewModel @Inject constructor(
                 guidanceEpoch++
                 _state.update { it.copy(zoom = CameraZoomPolicy.clamp(intent.zoom, it.camera.minZoom, it.camera.maxZoom),
                     normalZoom = CameraZoomPolicy.clamp(intent.zoom, it.camera.minZoom, it.camera.maxZoom),
-                    reference = null, referencePlan = null, background = BackgroundGuidance()) }
+                    reference = null, referencePlan = null, generated = it.generated.copy(applied = null), background = BackgroundGuidance()) }
             }
             is VlmIntent.SettingsVisible -> if (_state.value.stage !in listOf(VlmStage.SCANNING, VlmStage.SCAN_PROCESSING, VlmStage.VIEW_SELECTING)) _state.update { it.copy(settingsVisible = intent.visible, instructionEditorVisible = false) }
             is VlmIntent.SaveSettings -> {
+                generationModelRevision++
                 cancelWork()
                 viewModelScope.launch {
                     try {
-                        val settings = CloudModelConfig.applyQwenConfiguration(intent.settings)
-                        if (settings.mode == ModelMode.CLOUD && settings.region == Region.CN && settings.preferred == ProviderId.QWEN &&
-                            settings.qwenAccess == QwenAccess.OFFICIAL) QwenOfficialProtocol.validate(settings)
-                        if (settings.mode == ModelMode.CLOUD && settings.region == Region.CN && settings.preferred == ProviderId.SEED &&
-                            settings.seedAccess == SeedAccess.OFFICIAL) SeedOfficialProtocol.validate(settings)
-                        withContext(Dispatchers.IO) { settingsStore.save(settings) }
-                        _state.update { it.copy(settings = settings, stage = if (it.scanSnapshot != null && it.scene == null) VlmStage.SCAN_REVIEW else if (it.scene == null || it.stage == VlmStage.LIVE) VlmStage.LIVE else VlmStage.FROZEN, settingsVisible = false, error = null) }
+                        val settings = CloudModelConfig.applyQwenConfiguration(intent.settings).normalizeReferenceSource()
+                        settingsWrites.withLock { withContext(Dispatchers.IO) { settingsStore.save(settings) } }
+                        val before = _state.value
+                        val source = if (settings.mode == before.settings.mode && settings.preferred == before.settings.preferred &&
+                            (before.result != null || before.generated.candidates.isNotEmpty())) before.referenceSource
+                            else resolveReferenceSource(settings)
+                        val sourceChanged = source != before.referenceSource || settings.preferred != before.settings.preferred
+                        if (sourceChanged) cancelGenerated(clear = true)
+                        if (source == ReferenceSource.GENERATED_IMAGE && _state.value.cameraMode == CameraMode.AR)
+                            switchCameraMode(CameraMode.NORMAL)
+                        _state.update { current ->
+                            val changed = if (sourceChanged) current.copy(result = null, diagnostics = null, previews = emptyMap(),
+                                reference = null, referencePlan = null, compositionCache = emptyMap(), selectedId = null,
+                                background = BackgroundGuidance(), capturedWorkflow = null, facePreview = null,
+                                compositionDetailsVisible = false) else current
+                            changed.copy(settings = settings, automaticReferenceSource = source,
+                                stage = if (!sourceChanged && source == ReferenceSource.GENERATED_IMAGE)
+                                changed.stage else if (changed.scanSnapshot != null && changed.scene == null) VlmStage.SCAN_REVIEW
+                                else if (changed.scene == null || changed.stage == VlmStage.LIVE) VlmStage.LIVE else VlmStage.FROZEN,
+                                settingsVisible = false, error = null)
+                        }
                     } catch (e: Exception) { _state.update { it.copy(error = cloudFailureMessage(e) ?: "设置保存失败：${e.message}") } }
                 }
             }
@@ -518,6 +585,7 @@ class VlmCameraViewModel @Inject constructor(
             }
             is VlmIntent.ImportImage -> {
                 if (busy()) return
+                cancelGenerated(clear = true)
                 cancelWork()
                 val token = requestToken
                 work = viewModelScope.launch {
@@ -544,7 +612,7 @@ class VlmCameraViewModel @Inject constructor(
                 pendingCaptureWorkflow = null
                 _state.update { it.copy(saving = false,
                     capturedWorkflow = completed?.takeIf { workflow -> workflow == it.workflowKey &&
-                        (it.referencePlan == null || it.workflowProgress().take(4).all { status -> status == CameraStepStatus.COMPLETE }) },
+                        (it.activeBackgroundTarget == null || it.workflowProgress().take(4).all { status -> status == CameraStepStatus.COMPLETE }) },
                     error = intent.error, notice = if (intent.error == null) models.message(R.string.vlm_photo_saved) else null) }
             }
             VlmIntent.OpenGallery -> if (_state.value.canOpenGallery) _effects.tryEmit(VlmEffect.OpenGallery)
@@ -594,6 +662,8 @@ class VlmCameraViewModel @Inject constructor(
     }
 
     private fun startScan() {
+        if (_state.value.canRestartScan) cancelGenerated(clear = true)
+        if (_state.value.canRestartScan) refreshAutomaticReferenceRoute()
         val old = _state.value
         if (!old.canRestartScan) return
         val previousWork = work
@@ -683,6 +753,7 @@ class VlmCameraViewModel @Inject constructor(
         captureToken = null
         pendingCaptureWorkflow = null
         cancelScan()
+        refreshAutomaticReferenceRoute()
         _state.update { current ->
             val initialZoom = CameraZoomPolicy.clamp(1f, current.camera.minZoom, current.camera.maxZoom)
             current.copy(compositionDetailsVisible = false, compositionDetailsExpanded = false,
@@ -694,6 +765,7 @@ class VlmCameraViewModel @Inject constructor(
     }
 
     private fun cancelScan() {
+        cancelGenerated(clear = true)
         val previousWork = work; val previousRender = renderWork; val previousFace = faceWork
         cancelWork(); scanQueue?.close(); scanTimer?.cancel()
         val previous = scanWork
@@ -707,6 +779,7 @@ class VlmCameraViewModel @Inject constructor(
     }
 
     private fun analyzeScan() {
+        refreshAutomaticReferenceRoute()
         val s = _state.value
         val scan = s.scanSnapshot ?: return
         if (busy() || scan.frames.isEmpty()) {
@@ -719,8 +792,8 @@ class VlmCameraViewModel @Inject constructor(
         Log.i("VlmScan", "选景状态开始 scan=${scan.session.id.take(8)} token=${token.take(8)} mode=${s.settings.mode} stage=${_state.value.stage} cachedFrames=${scan.frames.size} scenePresent=${s.scene != null}")
         work = viewModelScope.launch {
             try {
-                if (s.settings.mode == ModelMode.OFFLINE) awaitPreviousNative(token)
-                val selected = if (s.settings.mode == ModelMode.OFFLINE)
+                if (!s.usesGeneratedReference) awaitPreviousNative(token)
+                val selected = if (!s.usesGeneratedReference)
                     OfflineScanViewAgent(scanLogger).select(scan, s.instruction, OfflineViewInference(local::compareViews))
                 else ScanViewAgent(logger = scanLogger).select(scan, s.settings, s.instruction, sessions.budget)
                 if (token != requestToken) {
@@ -750,7 +823,7 @@ class VlmCameraViewModel @Inject constructor(
                     error = cloudFailureMessage(failure) ?: if ((failure as? ModelFailure)?.code == "SELECTION_ATTEMPTS_EXHAUSTED")
                         models.message(R.string.vlm_scan_selection_attempts_exhausted) else if (failure.message == "SESSION_BUDGET_EXHAUSTED" || (failure as? ModelFailure)?.code == "SESSION_BUDGET_EXHAUSTED")
                         models.message(R.string.vlm_scan_budget_exhausted) else if ((failure as? ModelFailure)?.code == "LOCAL_VIEW_INVALID_OUTPUT") models.message(R.string.vlm_scan_local_invalid_output)
-                    else if (s.settings.mode == ModelMode.OFFLINE) failure.message?.takeIf { it.isNotBlank() } ?: models.message(R.string.vlm_scan_local_select_failed)
+                    else if (!s.usesGeneratedReference) failure.message?.takeIf { it.isNotBlank() } ?: models.message(R.string.vlm_scan_local_select_failed)
                     else models.message(R.string.vlm_scan_select_failed)) }
                 val current = _state.value
                 Log.i("VlmScan", "选景失败后的界面状态 scan=${scan.session.id.take(8)} stage=${current.stage} scenePresent=${current.scene != null} displayScene=${current.displayScene?.id?.take(8)} provisional=${current.scene == null && current.displayScene != null} selectedFrame=${current.selectedFrameId?.take(8)} cachedFrames=${current.scanSnapshot?.frames?.size ?: 0} errorPresent=${current.error != null}")
@@ -763,6 +836,15 @@ class VlmCameraViewModel @Inject constructor(
         if (busy()) return
         val state = _state.value
         val frame = state.scanSnapshot?.frames?.firstOrNull { it.id == frameId } ?: return
+        if (state.usesGeneratedReference) {
+            state.generated.candidates.firstOrNull { it.scene.id == frame.scene.id && it.ready }?.let { selectGenerated(it.id); return }
+            cancelWork()
+            _state.update { it.copy(scene = frame.scene, selectedFrameId = frame.id, stage = VlmStage.FROZEN,
+                generated = it.generated.copy(selectedId = null, applied = null),
+                reference = null, referencePlan = null, background = BackgroundGuidance(), capturedWorkflow = null,
+                compositionDetailsVisible = true, manualScanSelectionVisible = false, error = null) }
+            return
+        }
         state.rememberedBackgrounds()[frame.scene.id]?.let {
             selectBackground(it)
             return
@@ -779,6 +861,11 @@ class VlmCameraViewModel @Inject constructor(
         }
         val frame = s.scanSnapshot?.frames?.firstOrNull { it.id == frameId } ?: run {
             Log.w("VlmScan", "冻结选景失败 frame=${frameId.take(8)} reason=FRAME_NOT_IN_SNAPSHOT cachedFrames=${s.scanSnapshot?.frames?.size ?: 0}")
+            return
+        }
+        if (s.usesGeneratedReference) {
+            previewScanFrame(frameId)
+            if (!_state.value.generated.candidates.any { it.scene.id == frame.scene.id && it.ready }) compose(false)
             return
         }
         val saved = s.rememberedBackgrounds()
@@ -840,7 +927,8 @@ class VlmCameraViewModel @Inject constructor(
             photoReferences = actor == AvatarId.ADULT_FEMALE, ethnicity = ethnicity, arMode = s.ar.source == com.framer.sense.feature.camera.vlm.ar.ArSource.SHARED_CAMERA)
     }
 
-    private fun guidanceTarget(plan: CompositionPlan) = "guide:${plan.viewBinding?.frameId}:${plan.id}:${plan.revision}"
+    private fun guidanceTarget(plan: BackgroundReferenceTarget) = "guide:${plan.viewBinding?.frameId}:${plan.id}:${plan.revision}"
+    private fun guidanceTarget(plan: CompositionPlan) = guidanceTarget(plan.backgroundTarget())
 
     /** 判断互斥工作是否运行；无参数，用于限制点击和模型资源操作。 */
     private fun busy(): Boolean = _state.value.let { it.photoSample != null || it.modelBusy || it.saving || it.stage in listOf(VlmStage.FREEZING, VlmStage.GENERATING, VlmStage.MODIFYING, VlmStage.SCANNING, VlmStage.SCAN_PROCESSING, VlmStage.VIEW_SELECTING) }
@@ -867,10 +955,164 @@ class VlmCameraViewModel @Inject constructor(
         }
     }
 
+    /** 每次只提交一个候选，已有生图任务时不再提交，应用参考不会取消任务。 */
+    private fun composeGenerated(replacesId: String? = null) {
+        val current = _state.value
+        Log.i(GeneratedReferenceDiagnostics.TAG, "生成入口 stage=${current.stage} provider=${current.settings.preferred} mode=${current.settings.mode} model=${current.settings.seedreamModel.apiId} access=${current.settings.seedAccess} keyConfigured=${current.settings.seedApiKey.isNotBlank()} serviceConfigured=${generatedRepository != null}")
+        if (!current.usesGeneratedReference || current.modelBusy || current.saving || current.photoSample != null ||
+            current.stage !in listOf(VlmStage.FROZEN, VlmStage.READY, VlmStage.LIVE)) return
+        val scene = current.scene ?: return
+        if (!current.settings.supportsImageGeneration) {
+            _state.update { it.copy(error = models.message(R.string.vlm_generated_brand_unsupported)) }; return
+        }
+        if (current.settings.mode == ModelMode.OFFLINE) {
+            _state.update { it.copy(error = models.message(R.string.vlm_generated_cloud_required)) }; return
+        }
+        if (current.cameraMode != CameraMode.NORMAL) {
+            _state.update { it.copy(error = models.message(R.string.vlm_generated_normal_required)) }; return
+        }
+        if (current.settings.seedAccess == SeedAccess.OFFICIAL && current.settings.seedApiKey.isBlank()) {
+            _state.update { it.copy(error = models.message(R.string.vlm_seed_key_missing)) }; return
+        }
+        if (current.generated.running) return
+        val replacing = replacesId?.let { id -> current.generated.candidates.find { it.id == id } ?: return }
+        val source = replacing?.scene ?: scene
+        val backgrounds = current.generated.candidates.map { it.scene.id }.distinct()
+        if (source.id !in backgrounds && backgrounds.size >= ScanLimits.MAX_COMPOSITION_BACKGROUNDS) {
+            _state.update { it.copy(error = models.message(R.string.vlm_background_cache_limit)) }; return
+        }
+        val frame = current.scanSnapshot?.frames?.find { it.scene.id == source.id }
+        val binding = replacing?.viewBinding ?: frame?.let { PhotoViewBinding(it.scanId, it.id, it.config.version, it.config.arSessionId) }
+            ?: source.captureBinding
+        val batchId = newVlmId()
+        val epoch = current.generated.epoch
+        val candidates = listOf(
+            GeneratedCandidate(newVlmId(), batchId, source, current.settings.seedreamModel, current.instruction,
+                current.generated.candidates.size, binding, replacesId = replacing?.id)
+        )
+        _state.update {
+            val alreadyVisible = it.generated.hasReady
+            it.copy(generated = it.generated.copy(candidates = it.generated.candidates + candidates),
+                stage = if (alreadyVisible) it.stage else VlmStage.GENERATING,
+                compositionDetailsVisible = if (alreadyVisible) it.compositionDetailsVisible else true,
+                error = null, notice = null)
+        }
+        candidates.forEach { candidate ->
+            Log.i(GeneratedReferenceDiagnostics.TAG, "候选提交 candidate=${candidate.id} batch=$batchId scene=${source.id} model=${candidate.model.apiId} provider=${current.settings.preferred} access=${current.settings.seedAccess}")
+            val job = viewModelScope.launch(start = CoroutineStart.LAZY) {
+                try {
+                    generatedPermits.withPermit {
+                        acceptGenerated(epoch, candidate.copy(status = GeneratedCandidateStatus.RUNNING))
+                        val assets = (generatedRepository ?: throw GeneratedReferenceFailure("SERVICE"))
+                            .generate(candidate, current.settings)
+                        acceptGenerated(epoch, candidate.copy(status = GeneratedCandidateStatus.READY, assets = assets))
+                    }
+                } catch (cancel: CancellationException) {
+                    acceptGenerated(epoch, candidate.copy(status = GeneratedCandidateStatus.CANCELLED))
+                    throw cancel
+                } catch (failure: Exception) {
+                    val code = (failure as? GeneratedReferenceFailure)?.code ?: "SERVICE"
+                    Log.e(GeneratedReferenceDiagnostics.TAG, "候选失败 candidate=${candidate.id} resultCode=$code ${GeneratedReferenceDiagnostics.failure(failure)}")
+                    acceptGenerated(epoch, candidate.copy(status = GeneratedCandidateStatus.FAILED, errorCode = code))
+                } finally { generatedJobs.remove(candidate.id) }
+            }
+            generatedJobs[candidate.id] = job
+            job.start()
+        }
+    }
+
+    private fun acceptGenerated(epoch: String, candidate: GeneratedCandidate) {
+        _state.update { current ->
+            val before = current.generated
+            var updated = before.update(epoch, candidate)
+            if (before == updated) return@update current
+            val sameScene = current.scene?.id == candidate.scene.id
+            if (!sameScene && before.selectedId == null) updated = updated.copy(selectedId = null)
+            val firstReady = candidate.ready && before.selectedId == null && sameScene
+            val stillRunning = updated.candidates.any { it.scene.id == current.scene?.id &&
+                it.status in listOf(GeneratedCandidateStatus.QUEUED, GeneratedCandidateStatus.RUNNING) }
+            val finishedEmpty = !stillRunning && !updated.hasReady && current.stage == VlmStage.GENERATING
+            current.copy(generated = updated,
+                stage = when {
+                    firstReady && current.stage in listOf(VlmStage.GENERATING, VlmStage.FROZEN) -> VlmStage.READY
+                    finishedEmpty -> VlmStage.FROZEN
+                    else -> current.stage
+                },
+                compositionDetailsVisible = if (firstReady && current.stage in listOf(VlmStage.GENERATING, VlmStage.FROZEN)) true else current.compositionDetailsVisible,
+                error = if (finishedEmpty) generatedFailureMessage(candidate.errorCode) else current.error)
+        }
+        val current = _state.value
+        Log.i(GeneratedReferenceDiagnostics.TAG, "候选回传 candidate=${candidate.id} status=${candidate.status} epochMatches=${current.generated.epoch == epoch} selected=${current.generated.selectedId} stage=${current.stage}")
+        if (current.generated.epoch == epoch && current.usesGeneratedReference &&
+            current.stage == VlmStage.FROZEN && CameraReferenceRouting.shouldFallback(current.settings, current.generated)) {
+            // 保留失败任务身份，隔离迟到回传；仅切换到本地流程，不再发起收费请求。
+            Log.i(GeneratedReferenceDiagnostics.TAG, "候选批次转离线 stage=FALLBACK_OFFLINE batch=${candidate.batchId}")
+            _state.update { it.copy(automaticReferenceSource = ReferenceSource.LEGACY_GLB,
+                error = null, notice = models.message(R.string.vlm_reference_auto_offline)) }
+            compose(false)
+        }
+    }
+
+    private fun generatedFailureMessage(code: String?): String = models.message(when (code) {
+        "UNSUPPORTED" -> R.string.vlm_generated_brand_unsupported
+        "AUTH", "KEY" -> R.string.vlm_seed_key_missing
+        "OFFLINE" -> R.string.vlm_generated_cloud_required
+        "INPUT" -> R.string.vlm_generated_input_invalid
+        "IMAGE_REJECTED" -> R.string.vlm_generated_image_rejected
+        "LAYERS_MISSING", "PERSON_AMBIGUOUS", "ALPHA", "BOUNDS", "ASPECT" -> R.string.vlm_generated_layers_invalid
+        "LIMIT" -> R.string.vlm_generated_rate_limit
+        "NETWORK", "TIMEOUT", "DOWNLOAD" -> R.string.vlm_generated_network_failed
+        else -> R.string.vlm_generated_failed
+    })
+
+    private fun selectGenerated(id: String) {
+        if (busy()) return
+        val candidate = _state.value.generated.candidates.find { it.id == id && it.ready } ?: return
+        cancelWork()
+        guidanceEpoch++
+        sessions.resetReference()
+        _state.update { it.copy(scene = candidate.scene, selectedFrameId = candidate.viewBinding?.frameId,
+            stage = VlmStage.READY, generated = it.generated.copy(selectedId = id, applied = null),
+            reference = null, referencePlan = null, background = BackgroundGuidance(), capturedWorkflow = null,
+            compositionDetailsVisible = true, error = null, notice = null) }
+    }
+
+    private fun applyGenerated() {
+        if (busy()) return
+        val candidate = _state.value.generated.selected?.takeIf { it.ready } ?: return
+        val assets = candidate.assets ?: return
+        if (!candidate.canApply) {
+            _state.update { it.copy(error = models.message(R.string.vlm_generated_portrait_unavailable)) }; return
+        }
+        if (!File(assets.compositePath).isFile || !File(assets.portraitPath).isFile) {
+            _state.update { it.copy(error = models.message(R.string.vlm_generated_assets_missing)) }; return
+        }
+        cancelWork()
+        guidanceEpoch++
+        sessions.resetReference()
+        _state.update { it.copy(stage = VlmStage.LIVE, scene = candidate.scene,
+            generated = it.generated.copy(applied = candidate), reference = null, referencePlan = null,
+            compositionDetailsVisible = false, compositionDetailsExpanded = false, capturedWorkflow = null,
+            background = BackgroundGuidance(), zoom = candidate.scene.currentZoom, error = null, notice = null) }
+    }
+
+    private fun cancelGenerated(clear: Boolean = false) {
+        val pending = generatedJobs.values.toList()
+        generatedJobs.clear()
+        _state.update { it.copy(generated = if (clear) GeneratedReferenceState(epoch = newVlmId())
+            else it.generated.cancelPending().copy(epoch = newVlmId())) }
+        pending.forEach { it.cancel() }
+    }
+
     /** 启动两轮以内的导演流程。
      * @param revise true 表示只修改当前选中方案，false 表示追加一批三个方案。
      */
     private fun compose(revise: Boolean) {
+        refreshAutomaticReferenceRoute()
+        if (_state.value.usesGeneratedReference) {
+            composeGenerated(if (revise) _state.value.generated.selectedId else null)
+            return
+        }
         val previous = _state.value
         val scene = previous.scene ?: return
         if (!previous.canGenerate || revise && previous.stage != VlmStage.READY) return
@@ -885,17 +1127,19 @@ class VlmCameraViewModel @Inject constructor(
         cancelWork()
         val token = requestToken
         val input = inputFor(previous, if (revise) previous.result!!.plans else emptyList(), if (revise) previous.selectedId else null)
+        val offlineSettings = previous.settings.copy(mode = ModelMode.OFFLINE).normalizeReferenceSource()
         Log.i(LOG_TAG, "启动${if (revise) "修改方案" else "生成方案"}任务 token=${token.take(8)} image=${scene.id.take(8)} mode=${previous.settings.mode} modelStatus=${previous.modelStatus}")
         _state.update { it.copy(stage = if (revise) VlmStage.MODIFYING else VlmStage.GENERATING,
             compositionCache = it.rememberedBackgrounds(), capturedWorkflow = null, error = null,
-            notice = if (local.isInferenceRunning) models.message(R.string.vlm_flow_waiting_native) else null,
+            notice = if (local.isInferenceRunning) models.message(R.string.vlm_flow_waiting_native)
+                else if (previous.settings.mode == ModelMode.AUTO) models.message(R.string.vlm_reference_auto_offline) else null,
             directorProgress = if (local.isInferenceRunning) DirectorProgress.WaitingPreviousTask else DirectorProgress.PreparingRequest, facePreview = null) }
         work = viewModelScope.launch {
             var actualTrace: CallTrace? = null
             try {
                 previousWork?.join(); previousRender?.join(); previousFace?.join()
                 awaitPreviousNative(token)
-                val result = repository.compose(input, previous.settings, previews) { progress ->
+                val result = repository.compose(input, offlineSettings, previews) { progress ->
                     if (token == requestToken) {
                         Log.i(LOG_TAG, "构图步骤 token=${token.take(8)} image=${scene.id.take(8)} progress=$progress")
                         _state.update { it.copy(directorProgress = progress) }
@@ -1047,6 +1291,7 @@ class VlmCameraViewModel @Inject constructor(
     }
 
     private fun requestFace() {
+        if (_state.value.usesGeneratedReference) return
         faceWork?.cancel()
         val s = _state.value
         if (!s.faceVisible || s.stage !in listOf(VlmStage.READY, VlmStage.LIVE) || busy()) return
@@ -1077,6 +1322,10 @@ class VlmCameraViewModel @Inject constructor(
 
     /** 校验并应用选中方案；无参数，真实空间定位不由冻结图保证。 */
     private fun applyPlan() {
+        if (_state.value.usesGeneratedReference) {
+            applyGenerated()
+            return
+        }
         if (busy()) return
         val s = _state.value
         val result = s.result ?: return
@@ -1171,6 +1420,7 @@ class VlmCameraViewModel @Inject constructor(
     }
 
     override fun onCleared() {
+        cancelGenerated()
         scanQueue?.close(); guideQueue.close(); scanTimer?.cancel()
         val retiring = listOfNotNull(work, renderWork, faceWork, sampleWork, scanWork, guideWork, cleanupWork)
         retiring.forEach { it.cancel() }

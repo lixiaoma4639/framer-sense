@@ -4,6 +4,7 @@ import android.graphics.Bitmap
 import android.net.Uri
 import com.framer.sense.feature.camera.vlm.agent.DirectorProgress
 import com.framer.sense.feature.camera.vlm.data.ModelDownloadState
+import com.framer.sense.feature.camera.vlm.data.CameraReferenceRouting
 import com.framer.sense.feature.camera.vlm.avatar.PlanPreview
 import com.framer.sense.feature.camera.vlm.avatar.PhotoActionDefinition
 import com.framer.sense.feature.camera.vlm.model.*
@@ -81,14 +82,24 @@ data class VlmUiState(
     val settingsVisible: Boolean = false,
     val fromImportedImage: Boolean = false,
     val directorProgress: DirectorProgress? = null,
-    val photoSample: PhotoSampleState? = null
+    val photoSample: PhotoSampleState? = null,
+    val generated: GeneratedReferenceState = GeneratedReferenceState(),
+    val automaticReferenceSource: ReferenceSource = CameraReferenceRouting.source(settings, networkAvailable = true)
 ) {
+    val referenceSource: ReferenceSource get() = when (settings.mode) {
+        ModelMode.OFFLINE -> ReferenceSource.LEGACY_GLB
+        ModelMode.CLOUD -> ReferenceSource.GENERATED_IMAGE
+        ModelMode.AUTO -> automaticReferenceSource
+    }
+    val usesGeneratedReference: Boolean get() = referenceSource == ReferenceSource.GENERATED_IMAGE
+    val activeBackgroundTarget: BackgroundReferenceTarget?
+        get() = generated.applied?.backgroundTarget() ?: referencePlan?.backgroundTarget()
     /** 收起构图编辑时显示当前参考的顶部提示，两组界面始终互斥。 */
     val showReferenceGuidanceOverlay: Boolean
-        get() = stage == VlmStage.LIVE && referencePlan != null && !compositionDetailsVisible
+        get() = stage == VlmStage.LIVE && activeBackgroundTarget != null && !compositionDetailsVisible
 
     val showBackgroundAlignmentControls: Boolean
-        get() = showReferenceGuidanceOverlay && referencePlan?.viewBinding != null
+        get() = showReferenceGuidanceOverlay && activeBackgroundTarget?.viewBinding != null
 
     val operationBusy: Boolean
         get() = modelBusy || saving || photoSample != null || stage in listOf(VlmStage.FREEZING,
@@ -107,7 +118,7 @@ data class VlmUiState(
     /** 扫描／单张冻结仍属于第一步；有背景或构图后必须显式重置流程。 */
     val isFirstCaptureStep: Boolean
         get() = stage in listOf(VlmStage.LIVE, VlmStage.SCANNING, VlmStage.FREEZING) &&
-            scene == null && scanSnapshot == null && result == null && compositionCache.isEmpty() && referencePlan == null
+            scene == null && scanSnapshot == null && result == null && compositionCache.isEmpty() && referencePlan == null && generated.candidates.isEmpty()
     /** 可取消本轮工作回到第一步，但不能打断模型管理、保存或样片资源操作。 */
     val canRestartFlow: Boolean
         get() = !modelBusy && !saving && !settingsVisible && !photoSettingsVisible && !instructionEditorVisible && photoSample == null
@@ -130,6 +141,10 @@ data class VlmUiState(
 }
 
 sealed interface VlmIntent {
+    data class SelectGenerated(val id: String) : VlmIntent
+    data class RetryGenerated(val id: String) : VlmIntent
+    data object ReplaceGenerated : VlmIntent
+    data class GeneratedZoomVisible(val visible: Boolean) : VlmIntent
     data class PhotoOrientationChanged(val orientation: PhotoOrientation) : VlmIntent
     data class ArUpdated(val state: com.framer.sense.feature.camera.vlm.ar.ArUiState, val epoch: Int? = null) : VlmIntent
     data object OpenPhotoSample : VlmIntent
@@ -171,6 +186,7 @@ sealed interface VlmIntent {
     data class InstructionHistorySelected(val text: String) : VlmIntent
     data class DeleteInstructionHistory(val text: String) : VlmIntent
     data object SubmitInstruction : VlmIntent
+    data class SeedreamModelSelected(val model: SeedreamModel) : VlmIntent
     data class AvatarSelected(val avatarId: AvatarId) : VlmIntent
     data object Generate : VlmIntent
     data object Revise : VlmIntent

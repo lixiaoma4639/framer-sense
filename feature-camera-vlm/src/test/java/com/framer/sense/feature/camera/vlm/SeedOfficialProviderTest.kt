@@ -46,7 +46,7 @@ class SeedOfficialProviderTest {
         assertTrue(CloudProviders.views(settings, ProviderId.QWEN) is QwenOfficialProvider)
         assertTrue(CloudProviders.vision(settings.copy(qwenAccess = QwenAccess.GATEWAY), ProviderId.QWEN) is GatewayProvider)
         assertEquals(listOf(ProviderId.LOCAL), ModelRouting.candidates(settings.copy(mode = ModelMode.OFFLINE)))
-        assertEquals(listOf(ProviderId.QWEN, ProviderId.SEED, ProviderId.LOCAL), ModelRouting.candidates(ModelSettings(mode = ModelMode.AUTO)))
+        assertEquals(listOf(ProviderId.QWEN, ProviderId.LOCAL), ModelRouting.candidates(ModelSettings(mode = ModelMode.AUTO)))
         val encoded = VlmJson.encodeToString(settings)
         assertFalse(encoded.contains(settings.seedApiKey)); assertFalse(encoded.contains(settings.qwenApiKey))
         assertFalse(encoded.contains("seedApiKey"))

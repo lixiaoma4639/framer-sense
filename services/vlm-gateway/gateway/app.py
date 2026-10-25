@@ -5,13 +5,15 @@ import os
 import secrets
 import time
 from contextlib import asynccontextmanager
+from pathlib import Path
 import httpx
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, FileResponse
 from .models import PhotoStepRequest, PhotoReferenceDecision, Decision, Provider, StepReply, StepRequest, ViewRequest, ViewReply, ViewSelection
 from .providers import ProviderFailure, config_for, invoke, multi_image_limit
 from .config import GATEWAY
+from .portraits import IMAGE_CONFIG, PortraitJobs, PortraitRequest
 
 
 @asynccontextmanager
@@ -19,7 +21,11 @@ async def lifespan(app: FastAPI):
     """管理共享 HTTP 连接池。参数 app 为 FastAPI 实例；退出时关闭连接，不保留图片。"""
     async with httpx.AsyncClient(timeout=httpx.Timeout(60, connect=10), follow_redirects=False) as client:
         app.state.client = client
-        yield
+        app.state.portraits = PortraitJobs(client, Path(os.getenv("VLM_PORTRAIT_DIR", ".vlm-portraits")))
+        try:
+            yield
+        finally:
+            await app.state.portraits.close()
 
 
 app = FastAPI(title="Framer Sense VLM Gateway", lifespan=lifespan)
@@ -32,6 +38,23 @@ async def authorize(authorization: str | None = Header(default=None)) -> None:
         raise HTTPException(503, detail={"code": "UNAVAILABLE", "message": "网关令牌尚未配置"})
     if not secrets.compare_digest((authorization or "").encode(), ("Bearer " + expected).encode()):
         raise HTTPException(401, detail={"code": "AUTH", "message": "网关令牌无效"})
+
+
+@app.post(IMAGE_CONFIG["gateway_path"], dependencies=[Depends(authorize)])
+async def submit_portrait(body: PortraitRequest, request: Request):
+    return request.app.state.portraits.submit(body)
+
+
+@app.get(IMAGE_CONFIG["gateway_path"] + "/{job_id}", dependencies=[Depends(authorize)])
+async def portrait_status(job_id: str, request: Request):
+    return request.app.state.portraits.status(job_id)
+
+
+@app.get(IMAGE_CONFIG["gateway_path"] + "/{job_id}/assets/{index}", dependencies=[Depends(authorize)])
+async def portrait_asset(job_id: str, index: int, request: Request):
+    if len(job_id) > 80 or not all(c.isalnum() or c == "-" for c in job_id) or not 0 <= index < 17:
+        raise HTTPException(404, detail={"code": "NOT_FOUND"})
+    return FileResponse(request.app.state.portraits.asset(job_id, index), media_type="image/png")
 
 
 @app.exception_handler(RequestValidationError)

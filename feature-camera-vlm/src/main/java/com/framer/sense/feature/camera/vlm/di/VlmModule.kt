@@ -18,6 +18,8 @@ import javax.inject.Singleton
 @Module
 @InstallIn(SingletonComponent::class)
 object VlmModule {
+    @Provides @Singleton fun referenceNetwork(@ApplicationContext context: Context): ReferenceNetworkState = AndroidReferenceNetworkState(context)
+    @Provides @Singleton fun generatedReferences(@ApplicationContext context: Context): GeneratedReferenceGenerator = GeneratedReferenceRepository(context)
     /** 提供模型文件仓库。@param context 应用上下文，避免持有 Activity。 */
     @Provides @Singleton fun modelStore(@ApplicationContext context: Context): LocalModelStore = LocalModelStore(context)
     /** 提供进程共享下载状态。@param context 应用上下文。@param store 私有模型目录仓库。 */

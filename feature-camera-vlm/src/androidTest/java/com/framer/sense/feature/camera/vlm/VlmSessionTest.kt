@@ -22,6 +22,224 @@ import java.util.UUID
 
 /** 验证相机事件门控，不调用摄像头、网络、GPU 或原生模型。 */
 class VlmSessionTest {
+    @Test fun generatedReferenceSubmitsOneRequestAndBlocksRepeatedSubmission() = exerciseGeneratedReference(ModelMode.CLOUD)
+
+    @Test fun automaticCloudReferenceSurvivesNetworkLossUntilRestart() = exerciseGeneratedReference(ModelMode.AUTO)
+
+    private fun exerciseGeneratedReference(mode: ModelMode) = runBlocking {
+        withContext(Dispatchers.Main) {
+            var online = true
+            val entered = kotlinx.coroutines.channels.Channel<GeneratedCandidate>(2)
+            val gates = mutableMapOf<String, CompletableDeferred<Unit>>()
+            val asset = File.createTempFile("generated-reference", ".png", InstrumentationRegistry.getInstrumentation().targetContext.cacheDir)
+            val vm = viewModel(networkAvailable = { online }, generated = GeneratedReferenceGenerator { candidate, _ ->
+                val gate = CompletableDeferred<Unit>()
+                gates[candidate.id] = gate
+                entered.send(candidate)
+                gate.await()
+                GeneratedReferenceAssets(asset.path, asset.path, 60, 80, "fake-seedream", 2)
+            })
+            val effects = mutableListOf<VlmEffect>()
+            val listener = launch(start = CoroutineStart.UNDISPATCHED) { vm.effects.collect { effects += it } }
+            try {
+                vm.onIntent(VlmIntent.SaveSettings(ModelSettings(mode = mode, preferred = ProviderId.SEED, seedApiKey = "fixture-key")))
+                withTimeout(5_000) { vm.state.first { it.usesGeneratedReference } }
+                vm.onIntent(VlmIntent.CameraReady(CameraCapabilities(1f, 3f)))
+                vm.onIntent(VlmIntent.StartComposition)
+                yield()
+                val token = (effects.single() as VlmEffect.Freeze).token
+                vm.onIntent(VlmIntent.FrameReady(token, Bitmap.createBitmap(60, 80, Bitmap.Config.ARGB_8888), 1f))
+                val firstRequest = withTimeout(5_000) { entered.receive() }
+                vm.onIntent(VlmIntent.Generate)
+                vm.onIntent(VlmIntent.RetryGenerated(firstRequest.id))
+                yield()
+                assertEquals(1, vm.state.value.generated.candidates.size)
+                assertTrue(entered.tryReceive().isFailure)
+                gates.getValue(firstRequest.id).complete(Unit)
+                withTimeout(5_000) { vm.state.first { it.stage == VlmStage.READY } }
+                assertEquals(firstRequest.id, vm.state.value.generated.selectedId)
+                assertFalse(vm.state.value.generated.running)
+                vm.onIntent(VlmIntent.Apply)
+                vm.onIntent(VlmIntent.ConfirmBackground)
+                val applied = vm.state.value
+                assertEquals(VlmStage.LIVE, applied.stage)
+                assertTrue(applied.canCapture)
+                assertEquals(BackgroundStatus.ALIGNED_MANUAL, applied.background.status)
+                vm.onIntent(VlmIntent.Generate)
+                val nextRequest = withTimeout(5_000) { entered.receive() }
+                vm.onIntent(VlmIntent.Generate)
+                vm.onIntent(VlmIntent.RetryGenerated(firstRequest.id))
+                yield()
+                assertEquals(2, vm.state.value.generated.candidates.size)
+                assertTrue(entered.tryReceive().isFailure)
+                assertEquals(applied.generated.applied, vm.state.value.generated.applied)
+                gates.getValue(nextRequest.id).complete(Unit)
+                val complete = withTimeout(5_000) { vm.state.first { !it.generated.running } }
+                assertEquals(listOf(firstRequest.id, nextRequest.id), complete.generated.ordered.map { it.id })
+                assertEquals(applied.generated.applied, complete.generated.applied)
+                assertEquals(applied.background, complete.background)
+                assertEquals(applied.workflowKey, complete.workflowKey)
+                assertEquals(VlmStage.LIVE, complete.stage)
+                if (mode == ModelMode.AUTO) {
+                    online = false
+                    vm.onIntent(VlmIntent.InstructionEditorVisible(true))
+                    vm.onIntent(VlmIntent.SeedreamModelSelected(SeedreamModel.PRO))
+                    vm.onIntent(VlmIntent.InstructionEditorVisible(false))
+                    withTimeout(5_000) { vm.state.first { it.settings.seedreamModel == SeedreamModel.PRO } }
+                    assertTrue(vm.state.value.usesGeneratedReference)
+                    assertEquals(applied.generated.applied, vm.state.value.generated.applied)
+                    assertEquals(applied.background, vm.state.value.background)
+                }
+                vm.onIntent(VlmIntent.RestartFlow)
+                assertTrue(vm.state.value.generated.candidates.isEmpty())
+                assertNull(vm.state.value.activeBackgroundTarget)
+                assertEquals(mode == ModelMode.CLOUD, vm.state.value.usesGeneratedReference)
+            } finally {
+                gates.values.forEach { it.complete(Unit) }
+                listener.cancel(); vm.onIntent(VlmIntent.RestartFlow); vm.onLeave(); asset.delete()
+            }
+        }
+    }
+
+    @Test fun automaticServiceFailureFallsBackAfterSingleCandidateFails() = runBlocking {
+        withContext(Dispatchers.Main) {
+            val entered = kotlinx.coroutines.channels.Channel<GeneratedCandidate>(2)
+            val gates = mutableMapOf<String, CompletableDeferred<Unit>>()
+            val localCalled = CompletableDeferred<Unit>()
+            val vm = viewModel(provider = object : VisionModelProvider {
+                override suspend fun step(call: ModelCall): StepReply {
+                    localCalled.complete(Unit)
+                    throw ModelFailure("LOCAL_UNAVAILABLE", "fixture", false)
+                }
+            }, generated = GeneratedReferenceGenerator { candidate, _ ->
+                val gate = CompletableDeferred<Unit>()
+                gates[candidate.id] = gate
+                entered.send(candidate)
+                gate.await()
+                throw GeneratedReferenceFailure("NETWORK")
+            })
+            val effects = mutableListOf<VlmEffect>()
+            val listener = launch(start = CoroutineStart.UNDISPATCHED) { vm.effects.collect { effects += it } }
+            try {
+                vm.onIntent(VlmIntent.SaveSettings(ModelSettings(mode = ModelMode.AUTO, preferred = ProviderId.SEED, seedApiKey = "fixture-key")))
+                withTimeout(5_000) { vm.state.first { it.settings.mode == ModelMode.AUTO } }
+                vm.onIntent(VlmIntent.CameraReady(CameraCapabilities(1f, 3f)))
+                vm.onIntent(VlmIntent.StartComposition)
+                yield()
+                val token = (effects.single() as VlmEffect.Freeze).token
+                vm.onIntent(VlmIntent.FrameReady(token, Bitmap.createBitmap(60, 80, Bitmap.Config.ARGB_8888), 1f))
+                val one = withTimeout(5_000) { entered.receive() }
+                assertEquals(1, vm.state.value.generated.candidates.size)
+                assertTrue(entered.tryReceive().isFailure)
+                assertFalse(localCalled.isCompleted)
+                gates.getValue(one.id).complete(Unit)
+                withTimeout(5_000) { localCalled.await() }
+                assertEquals(ModelMode.AUTO, vm.state.value.settings.mode)
+                assertFalse(vm.state.value.usesGeneratedReference)
+                assertEquals(1, vm.state.value.generated.candidates.size)
+            } finally {
+                gates.values.forEach { it.complete(Unit) }
+                listener.cancel(); vm.onIntent(VlmIntent.RestartFlow); vm.onLeave()
+            }
+        }
+    }
+
+    @Test fun automaticOfflineRouteSkipsImageGenerationAndRechecksOnRestart() = runBlocking {
+        withContext(Dispatchers.Main) {
+            var online = false
+            val localCalled = CompletableDeferred<Unit>()
+            val vm = viewModel(networkAvailable = { online }, provider = object : VisionModelProvider {
+                override suspend fun step(call: ModelCall): StepReply {
+                    localCalled.complete(Unit)
+                    throw ModelFailure("LOCAL_UNAVAILABLE", "fixture", false)
+                }
+            }, generated = GeneratedReferenceGenerator { _, _ -> error("离线不应调用生图") })
+            val effects = mutableListOf<VlmEffect>()
+            val listener = launch(start = CoroutineStart.UNDISPATCHED) { vm.effects.collect { effects += it } }
+            try {
+                vm.onIntent(VlmIntent.SaveSettings(ModelSettings(mode = ModelMode.AUTO, preferred = ProviderId.SEED, seedApiKey = "fixture-key")))
+                withTimeout(5_000) { vm.state.first { it.settings.mode == ModelMode.AUTO } }
+                assertFalse(vm.state.value.usesGeneratedReference)
+                vm.onIntent(VlmIntent.CameraReady(CameraCapabilities(1f, 3f)))
+                vm.onIntent(VlmIntent.StartComposition)
+                yield()
+                val token = (effects.single() as VlmEffect.Freeze).token
+                vm.onIntent(VlmIntent.FrameReady(token, Bitmap.createBitmap(60, 80, Bitmap.Config.ARGB_8888), 1f))
+                withTimeout(5_000) { localCalled.await() }
+                withTimeout(5_000) { vm.state.first { it.stage == VlmStage.FROZEN } }
+                assertTrue(vm.state.value.generated.candidates.isEmpty())
+                online = true
+                vm.onIntent(VlmIntent.RestartFlow)
+                assertTrue(vm.state.value.usesGeneratedReference)
+            } finally { listener.cancel(); vm.onLeave() }
+        }
+    }
+
+    @Test fun unsupportedBrandsNeverUseSeedreamOrOfflineEvenWhenSeedKeyExists() = runBlocking {
+        withContext(Dispatchers.Main) {
+            listOf(ModelMode.CLOUD, ModelMode.AUTO).forEach { mode ->
+                var generatedCalls = 0
+                var offlineCalls = 0
+                val vm = viewModel(networkAvailable = { false }, provider = object : VisionModelProvider {
+                    override suspend fun step(call: ModelCall): StepReply { offlineCalls++; error("不应转离线") }
+                }, generated = GeneratedReferenceGenerator { _, _ -> generatedCalls++; error("不应调用 Seedream") })
+                val effects = mutableListOf<VlmEffect>()
+                val listener = launch(start = CoroutineStart.UNDISPATCHED) { vm.effects.collect { effects += it } }
+                try {
+                    vm.onIntent(VlmIntent.SaveSettings(ModelSettings(mode = mode, preferred = ProviderId.QWEN, seedApiKey = "fixture-key")))
+                    withTimeout(5_000) { vm.state.first { it.settings.mode == mode } }
+                    vm.onIntent(VlmIntent.CameraReady(CameraCapabilities(1f, 3f)))
+                    vm.onIntent(VlmIntent.StartComposition)
+                    yield()
+                    val token = (effects.single() as VlmEffect.Freeze).token
+                    vm.onIntent(VlmIntent.FrameReady(token, Bitmap.createBitmap(60, 80, Bitmap.Config.ARGB_8888), 1f))
+                    withTimeout(5_000) { vm.state.first { it.stage == VlmStage.FROZEN && it.error != null } }
+                    assertEquals(0, generatedCalls)
+                    assertEquals(0, offlineCalls)
+                    assertTrue(vm.state.value.usesGeneratedReference)
+                    assertTrue(vm.state.value.generated.candidates.isEmpty())
+                    vm.onIntent(VlmIntent.InstructionEditorVisible(true))
+                    vm.onIntent(VlmIntent.SeedreamModelSelected(SeedreamModel.PRO))
+                    assertEquals(SeedreamModel.FLASH, vm.state.value.settings.seedreamModel)
+                } finally { listener.cancel(); vm.onLeave() }
+            }
+        }
+    }
+
+    @Test fun switchingBrandCancelsOldGenerationAndDiscardsLateAssets() = runBlocking {
+        withContext(Dispatchers.Main) {
+            val entered = kotlinx.coroutines.channels.Channel<Unit>(2)
+            val returned = kotlinx.coroutines.channels.Channel<Unit>(2)
+            val gate = CompletableDeferred<Unit>()
+            val vm = viewModel(generated = GeneratedReferenceGenerator { _, _ ->
+                entered.send(Unit)
+                withContext(NonCancellable) { gate.await() }
+                returned.trySend(Unit)
+                GeneratedReferenceAssets("unused-full", "unused-person", 60, 80, "fixture", 2)
+            })
+            val effects = mutableListOf<VlmEffect>()
+            val listener = launch(start = CoroutineStart.UNDISPATCHED) { vm.effects.collect { effects += it } }
+            try {
+                vm.onIntent(VlmIntent.SaveSettings(ModelSettings(mode = ModelMode.CLOUD, preferred = ProviderId.SEED, seedApiKey = "fixture-key")))
+                withTimeout(5_000) { vm.state.first { it.settings.preferred == ProviderId.SEED } }
+                vm.onIntent(VlmIntent.CameraReady(CameraCapabilities(1f, 3f)))
+                vm.onIntent(VlmIntent.StartComposition)
+                yield()
+                val token = (effects.single() as VlmEffect.Freeze).token
+                vm.onIntent(VlmIntent.FrameReady(token, Bitmap.createBitmap(60, 80, Bitmap.Config.ARGB_8888), 1f))
+                withTimeout(5_000) { entered.receive() }
+                vm.onIntent(VlmIntent.SaveSettings(vm.state.value.settings.copy(preferred = ProviderId.QWEN)))
+                withTimeout(5_000) { vm.state.first { it.settings.preferred == ProviderId.QWEN } }
+                assertTrue(vm.state.value.generated.candidates.isEmpty())
+                gate.complete(Unit)
+                withTimeout(5_000) { returned.receive() }
+                yield()
+                assertTrue(vm.state.value.generated.candidates.isEmpty())
+                assertNull(vm.state.value.generated.applied)
+            } finally { gate.complete(Unit); listener.cancel(); vm.onLeave() }
+        }
+    }
+
     @Test fun singleCompositionRequiresFreshBackgroundConfirmationAfterEveryRestart() = runBlocking {
         withContext(Dispatchers.Main) {
             val vm = viewModel(provider = object : VisionModelProvider {
@@ -905,10 +1123,12 @@ class VlmSessionTest {
             /** 禁止测试访问真实模型。@param call 当前输入，任何调用都会失败。 */
             override suspend fun step(call: ModelCall): StepReply = error("本测试不应推理")
         },
+        generated: GeneratedReferenceGenerator? = null,
         renderer: AvatarRenderer = object : AvatarRenderer {
             /** 禁止访问 GPU。plan 为方案，width/height 为尺寸，warmth/brightness 为光照；均不执行。 */
             override suspend fun render(plan: CompositionPlan, width: Int, height: Int, warmth: Float, brightness: Float): AvatarPreview = error("本测试不应渲染")
-        }
+        },
+        networkAvailable: () -> Boolean = { true }
     ): VlmCameraViewModel {
         val context = object : ContextWrapper(InstrumentationRegistry.getInstrumentation().targetContext) {
             private val name = "vlm-session-${UUID.randomUUID()}"
@@ -918,7 +1138,8 @@ class VlmSessionTest {
             override fun getSharedPreferences(name: String, mode: Int) = super.getSharedPreferences("${this.name}-$name", mode)
         }
         val store = LocalModelStore(context)
-        return VlmCameraViewModel(CompositionRepository(provider), SnapshotStore(context), PreviewStore(renderer), SettingsStore(context), store, MnnProvider(store), ModelDownloadRepository(context, store), saved, com.framer.sense.feature.camera.vlm.scan.PhotoSessionController(context))
+        return VlmCameraViewModel(CompositionRepository(provider), SnapshotStore(context), PreviewStore(renderer), SettingsStore(context), store, MnnProvider(store), ModelDownloadRepository(context, store), saved, com.framer.sense.feature.camera.vlm.scan.PhotoSessionController(context), generatedRepository = generated,
+            referenceNetwork = ReferenceNetworkState(networkAvailable))
     }
 
     /** 返回可通过基础和投影校验的三份方案。 */

@@ -173,8 +173,27 @@ val VlmJson = Json { encodeDefaults = true; explicitNulls = true }
     val qwenModel: String = CloudModelConfig.qwenModel,
     @kotlinx.serialization.Transient val qwenApiKey: String = "",
     val seedAccess: SeedAccess = SeedAccess.OFFICIAL,
-    @kotlinx.serialization.Transient val seedApiKey: String = ""
-)
+    @kotlinx.serialization.Transient val seedApiKey: String = "",
+    val referenceSource: ReferenceSource = ReferenceSource.LEGACY_GLB,
+    val seedreamModel: SeedreamModel = SeedreamModel.FLASH,
+    /** 兼容已保存的旧字段；实际生图接入始终复用 seedAccess。 */
+    val imageAccess: SeedAccess = SeedAccess.OFFICIAL
+) {
+    val supportsImageGeneration: Boolean get() = preferred == ProviderId.SEED
+
+    /** 区域兼容旧协议；生图与视觉分析共用同一品牌的接入方式和密钥。 */
+    fun normalizeCloudSelection(): ModelSettings = copy(
+        region = if (preferred in listOf(ProviderId.GPT, ProviderId.GEMINI)) Region.GLOBAL else Region.CN,
+        imageAccess = seedAccess
+    )
+
+    /** 兼容旧持久化字段；自动模式默认尝试云端，实际参考来源由本次任务路由决定。 */
+    fun normalizeReferenceSource(): ModelSettings = copy(referenceSource = when (mode) {
+        ModelMode.OFFLINE -> ReferenceSource.LEGACY_GLB
+        ModelMode.CLOUD -> ReferenceSource.GENERATED_IMAGE
+        ModelMode.AUTO -> ReferenceSource.GENERATED_IMAGE
+    })
+}
 @Serializable data class ToolIssue(val code: String, val message: String, val planId: String? = null)
 
 @Serializable data class ToolObservation(

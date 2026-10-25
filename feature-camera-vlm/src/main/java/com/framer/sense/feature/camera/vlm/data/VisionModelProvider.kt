@@ -110,7 +110,7 @@ class GatewayProvider(
     }
 }
 
-/** 生成区域内的有限候选集合，不依赖设备语言猜测数据区域。 */
+/** 固定使用所选品牌，自动模式只允许退到本地，不跨品牌调用。 */
 object ModelRouting {
     /** 获取候选顺序。
      * @param settings 用户明确设置的区域、模式和首选供应商。
@@ -118,8 +118,7 @@ object ModelRouting {
      */
     fun candidates(settings: ModelSettings): List<ProviderId> {
         if (settings.mode == ModelMode.OFFLINE) return listOf(ProviderId.LOCAL)
-        val regional = if (settings.region == Region.CN) listOf(ProviderId.QWEN, ProviderId.SEED) else listOf(ProviderId.GPT, ProviderId.GEMINI)
-        val preferred = settings.preferred.takeIf { it in regional } ?: regional.first()
-        return if (settings.mode == ModelMode.CLOUD) listOf(preferred) else listOf(preferred) + regional.filter { it != preferred } + ProviderId.LOCAL
+        val preferred = settings.preferred.takeUnless { it == ProviderId.LOCAL } ?: ProviderId.QWEN
+        return if (settings.mode == ModelMode.CLOUD) listOf(preferred) else listOf(preferred, ProviderId.LOCAL)
     }
 }

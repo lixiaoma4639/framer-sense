@@ -14,6 +14,7 @@ import com.framer.sense.feature.camera.vlm.model.*
 @Composable
 internal fun SeedModelPanel(draft: ModelSettings, update: (ModelSettings) -> Unit, busy: Boolean, onEvent: (VlmIntent) -> Unit) {
     Text(stringResource(R.string.vlm_seed_settings_title), style = MaterialTheme.typography.titleSmall)
+    Text(stringResource(R.string.vlm_seed_shared_configuration_hint), style = MaterialTheme.typography.bodySmall)
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         SeedAccess.entries.forEach { access ->
             FilterChip(selected = draft.seedAccess == access, onClick = { update(draft.copy(seedAccess = access)) },

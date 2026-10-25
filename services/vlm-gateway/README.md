@@ -1,6 +1,6 @@
 # 本地 VLM 云端网关
 
-Python 3.10+。本服务只执行一轮供应商请求，会话、工具循环和自动切换由 Android 客户端管理。P3＋P4 已执行 35 项模拟上游测试；未请求真实供应商。
+Python 3.10+。原 VLM 接口只执行一轮供应商请求，会话、工具循环和自动切换由 Android 客户端管理；新增摄影图层任务独立执行并持久化。P3＋P4 历史已执行 35 项模拟上游测试；本轮新增摄影任务测试仅编写，未运行，也未请求真实供应商。
 
 ## 启动
 
@@ -28,6 +28,26 @@ uvicorn gateway.app:app --host 0.0.0.0 --port 8000
 Android 模拟器地址通常是 `http://10.0.2.2:8000`；真机使用开发电脑局域网 IP。也可执行 `adb reverse tcp:8000 tcp:8000` 后在真机填 `http://127.0.0.1:8000`。这些 HTTP 地址仅供 Debug；Release 使用部署好的 HTTPS 地址。
 
 ## 配置与协议
+
+### Seedream 双候选摄影参考（2026-10-24）
+
+仅接入 `config/cloud-models.json.image_generation` 中的 Flash／Pro，不添加 4.0，也不修改原 Seed 视觉模型。密钥读取 `SEEDREAM_API_KEY`，未设置时复用 `SEED_API_KEY`。每个候选只提交一次官方 `layer_decomposition=true` 请求，不调用 VLM 复查或追加第二次生图。姿势创作与图层拆分能否在该模式中同时满足，仍待真实 API 验收。
+
+新增受保护接口：
+
+| 接口 | 行为 |
+|---|---|
+| `POST /v1/portraits` | 提交一个候选；字段为 `requestId`、`model`、`imageBase64`（JPEG）和 `prompt` |
+| `GET /v1/portraits/{requestId}` | 查询 `QUEUED/RUNNING/READY/FAILED/INTERRUPTED`；就绪后返回原生图层结构 |
+| `GET /v1/portraits/{requestId}/assets/{index}` | 使用同一网关令牌下载持久化 PNG |
+
+App 当前每次仅提交一个 `requestId` 并查询；该候选完成后才允许用户主动提交下一张，不预排第二张。相同 ID 和相同内容重复提交会复用已有状态，内容冲突返回 409；不同 ID 代表新的收费请求。服务端并发上限为 2，未决队列最多 16，不做自动重试。取消客户端等待不保证上游停止计费。
+
+`VLM_PORTRAIT_DIR` 配置 SQLite 和图层文件目录，默认当前工作目录的 `.vlm-portraits/`。终态任务与文件默认保留七天，在服务启动时清理；需持久卷及额外磁盘监控。当前工作队列采用**单进程**，请使用 `uvicorn gateway.app:app --workers 1`；重启后未决任务标为 `INTERRUPTED`，不会不确定地重新向供应商提交。目录、资源链接和接口响应都不应公开；线上继续要求 HTTPS 和独立令牌，面向多用户部署前需接入用户身份与配额隔离。
+
+服务端保存原生底图及全部图层；Android 按 `z_index` 升序合成全部前景，优先用 `bounding_box.absolute`，随底图解码缩放同步映射，无绝对坐标时才用 `normalized`。完整图预览独立于人像筛选；未取得可用人像时仍可查看、放大完整图，但不能应用人像。协议允许只返回一张底图供观察。不能把去人物底图冒充完整构图。真实输出数量由 `usage.generated_images` 记录，不能把一次候选任务视作只计一张输出图。
+
+原 VLM 接口说明如下。
 
 | 前缀 | 接口 | 输出模式 |
 | --- | --- | --- |
@@ -58,6 +78,8 @@ Android 模拟器地址通常是 `http://10.0.2.2:8000`；真机使用开发电�
 `/v1/capabilities` 返回四家供应商配置状态和服务端模型标识，不返回密钥。`/health` 只说明服务进程存活，不代表模型可用。
 
 ## 错误和日志
+
+Seedream 任务日志包含 `VlmImageGen` 前缀与候选 ID，记录调用阶段、HTTP 状态、上游错误码／请求 ID、图层数量和耗时。查询 FAILED 任务时，`result.failure` 可包含 `stage`、`type`、`code`、`http_status`、`request_id`，不返回上游 message、照片、提示词、密钥或签名地址；Android 同标签日志会展示这份安全摘要。仅增加诊断，不自动重发失败的收费任务。
 
 400/422 表示参数问题，401 表示网关令牌无效，403 表示识别到的内容拒绝，429 表示上游限流，502/503/504 表示上游输出/配置/连接/超时等问题。内容拒绝不会作为普通服务失败换模型；供应商鉴权失败表示服务端配置不可用。不同模型新增的拒绝码仍需要真实联调补充映射。
 

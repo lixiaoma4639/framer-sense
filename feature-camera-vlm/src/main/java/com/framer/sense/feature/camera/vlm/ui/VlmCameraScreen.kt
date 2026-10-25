@@ -314,14 +314,20 @@ private fun CameraPane(state: VlmUiState, controller: VlmCameraController, permi
                 if (live) {
                     if (permission && state.cameraMode == CameraMode.NORMAL) CameraSurface(controller, state, onEvent, Modifier.fillMaxSize())
                     else if (!permission) Button(onClick = requestPermission, modifier = Modifier.align(Alignment.Center)) { Text(stringResource(R.string.vlm_camera_permission)) }
-                    if (state.referencePlan?.viewBinding != null && state.background.status == BackgroundStatus.SEARCHING) {
+                    if (state.activeBackgroundTarget?.viewBinding != null && state.background.status == BackgroundStatus.SEARCHING) {
                         BackgroundReference(state, Modifier.fillMaxSize())
                     }
                     LiveReferenceAvatar(state, Modifier.fillMaxSize())
+                    state.generated.applied?.takeIf { it.viewBinding == null || state.background.status != BackgroundStatus.SEARCHING }?.let {
+                        GeneratedReferenceImage(it, Modifier.fillMaxSize(), overlay = true)
+                    }
                     BackgroundAlignmentOverlay(state, onEvent, Modifier.fillMaxSize())
                 } else if (scene != null) {
                     val preview = selected?.let { state.previews[it.id] }
-                    if (preview != null) {
+                    val generatedPreview = state.generated.selected?.takeIf { state.usesGeneratedReference && it.ready && it.scene.id == scene.id }
+                    if (generatedPreview != null) {
+                        GeneratedReferenceImage(generatedPreview, Modifier.fillMaxSize())
+                    } else if (preview != null) {
                         CameraPhotoViewport(scene.orientation.previewDegrees, Modifier.fillMaxSize()) {
                             Image(preview.composite.asImageBitmap(), stringResource(R.string.vlm_selected_composition), Modifier.fillMaxSize().testTag("vlm_selected_preview")
                                 .pointerInput(selected.id, state.compositionBatchId, state.stage) {
@@ -349,7 +355,7 @@ private fun CameraPane(state: VlmUiState, controller: VlmCameraController, permi
                 }
                 if (state.stage in listOf(VlmStage.SCAN_PROCESSING, VlmStage.VIEW_SELECTING,
                         VlmStage.FREEZING, VlmStage.GENERATING, VlmStage.MODIFYING)) {
-                    VlmLoadingOverlay(state.stage, state.directorProgress, { onEvent(VlmIntent.Cancel) }, Modifier.align(Alignment.Center))
+                    VlmLoadingOverlay(state.stage, state.directorProgress, { onEvent(VlmIntent.Cancel) }, Modifier.align(Alignment.Center), state.usesGeneratedReference)
                 }
             }
         }
@@ -372,7 +378,8 @@ internal fun VlmLoadingOverlay(
     stage: VlmStage,
     progress: DirectorProgress?,
     onCancel: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    generated: Boolean = false
 ) {
     CameraRotatingViewport(modifier.fillMaxSize().testTag("vlm_loading_viewport")) {
         Column(
@@ -387,7 +394,7 @@ internal fun VlmLoadingOverlay(
                     VlmStage.FREEZING -> stringResource(R.string.vlm_camera_freezing)
                     VlmStage.SCAN_PROCESSING -> stringResource(R.string.vlm_scan_finishing)
                     VlmStage.VIEW_SELECTING -> stringResource(R.string.vlm_scan_selecting)
-                    else -> directorProgressLabel(progress)
+                    else -> if (generated && stage == VlmStage.GENERATING) stringResource(R.string.vlm_generated_generating) else directorProgressLabel(progress)
                 }),
                 color = Color.White,
                 style = MaterialTheme.typography.bodyLarge.let {
@@ -432,7 +439,7 @@ internal fun directorProgressLabel(progress: DirectorProgress?): String = when (
  */
 @Composable
 private fun CameraSurface(controller: VlmCameraController, state: VlmUiState, onEvent: (VlmIntent) -> Unit, modifier: Modifier) {
-    val activeTarget = if (state.stage == VlmStage.SCANNING) state.scanSession?.id else state.referencePlan?.takeIf { state.stage == VlmStage.LIVE && it.viewBinding != null }?.let { "guide:${it.viewBinding?.frameId}:${it.id}:${it.revision}" }
+    val activeTarget = if (state.stage == VlmStage.SCANNING) state.scanSession?.id else state.activeBackgroundTarget?.takeIf { state.stage == VlmStage.LIVE && it.viewBinding != null }?.let { "guide:${it.viewBinding?.frameId}:${it.id}:${it.revision}" }
     // 变焦解除参考时停用采样即可，无须重绑已存在的分析用例。
     val targetMemory = remember { arrayOfNulls<String>(1) }
     if (activeTarget != null) targetMemory[0] = activeTarget
@@ -588,7 +595,7 @@ internal fun LiveReferenceAvatar(state: VlmUiState, modifier: Modifier) {
 @Composable
 private fun BackgroundReference(state: VlmUiState, modifier: Modifier) {
     val scene = state.scene ?: return
-    val plan = state.referencePlan ?: return
+    val plan = state.activeBackgroundTarget ?: return
     val bitmap by produceState<Bitmap?>(null, scene.id, plan.crop) {
         value = withContext(Dispatchers.IO) {
             val options = BitmapFactory.Options().apply { inSampleSize = 2 }
@@ -871,7 +878,7 @@ private fun facingLabel(yaw: Float): String = stringResource(when {
 @Composable
 internal fun ModelSettingsDialog(state: VlmUiState, onEvent: (VlmIntent) -> Unit, importModel: () -> Unit, importDirectory: () -> Unit, marketContent: (@Composable (() -> Unit) -> Unit)? = null) {
     var marketVisible by rememberSaveable { mutableStateOf(false) }
-    var draft by remember(state.settings) { mutableStateOf(CloudModelConfig.applyQwenConfiguration(state.settings)) }
+    var draft by remember(state.settings) { mutableStateOf(CloudModelConfig.applyQwenConfiguration(state.settings).normalizeReferenceSource()) }
     val offlineState = rememberSaveableStateHolder()
     if (marketVisible) {
         val closeMarket = { marketVisible = false }
@@ -885,7 +892,7 @@ internal fun ModelSettingsDialog(state: VlmUiState, onEvent: (VlmIntent) -> Unit
                 Row(Modifier.fillMaxWidth().height(IntrinsicSize.Min), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                     ModelMode.entries.forEach { mode ->
                         val selected = draft.mode == mode
-                        OutlinedButton(onClick = { draft = draft.copy(mode = mode) },
+                        OutlinedButton(onClick = { draft = draft.copy(mode = mode).normalizeReferenceSource() },
                             modifier = Modifier.weight(1f).fillMaxHeight().testTag("vlm_model_mode_${mode.name}")
                                 .semantics { this.selected = selected },
                             shape = MaterialTheme.shapes.small,
@@ -905,16 +912,11 @@ internal fun ModelSettingsDialog(state: VlmUiState, onEvent: (VlmIntent) -> Unit
                 HorizontalDivider()
                 if (draft.mode != ModelMode.OFFLINE) {
                     Column(Modifier.testTag("vlm_cloud_configuration"), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Row {
-                            Region.entries.forEach { region ->
-                                val label = stringResource(if (region == Region.CN) R.string.vlm_model_region_cn else R.string.vlm_model_region_global)
-                                TextButton(onClick = { draft = draft.copy(region = region, preferred = if (region == Region.CN) ProviderId.QWEN else ProviderId.GPT) }) {
-                                    Text(if (draft.region == region) stringResource(R.string.vlm_model_selected_option, label) else label)
-                                }
-                            }
-                        }
-                        val providers = if (draft.region == Region.CN) listOf(ProviderId.QWEN, ProviderId.SEED) else listOf(ProviderId.GPT, ProviderId.GEMINI)
-                        Row { providers.forEach { p -> TextButton(onClick = { draft = draft.copy(preferred = p) }) {
+                        if (draft.mode == ModelMode.AUTO) Text(stringResource(R.string.vlm_reference_auto_hint),
+                            style = MaterialTheme.typography.bodySmall)
+                        val providers = listOf(ProviderId.QWEN, ProviderId.SEED, ProviderId.GPT, ProviderId.GEMINI)
+                        Row(Modifier.fillMaxWidth().height(IntrinsicSize.Min).testTag("vlm_cloud_brands"),
+                            horizontalArrangement = Arrangement.spacedBy(4.dp)) { providers.forEach { p ->
                             val label = stringResource(when (p) {
                                 ProviderId.QWEN -> R.string.vlm_model_provider_qwen
                                 ProviderId.SEED -> R.string.vlm_model_provider_seed
@@ -922,16 +924,20 @@ internal fun ModelSettingsDialog(state: VlmUiState, onEvent: (VlmIntent) -> Unit
                                 ProviderId.GEMINI -> R.string.vlm_model_provider_gemini
                                 ProviderId.LOCAL -> R.string.vlm_model_mode_offline
                             })
-                            Text(if (draft.preferred == p) stringResource(R.string.vlm_model_selected_option, label) else label)
-                        } } }
-                        val showQwen = draft.region == Region.CN && (draft.preferred == ProviderId.QWEN || draft.mode == ModelMode.AUTO)
+                            FilterChip(selected = draft.preferred == p, enabled = !state.modelBusy,
+                                onClick = { draft = draft.copy(preferred = p).normalizeCloudSelection() },
+                                modifier = Modifier.weight(1f).fillMaxHeight().testTag("vlm_cloud_brand_${p.name}"),
+                                label = { Text(label, Modifier.fillMaxWidth(), textAlign = TextAlign.Center,
+                                    style = MaterialTheme.typography.labelSmall) })
+                        } }
+                        val showQwen = draft.preferred == ProviderId.QWEN
                         if (showQwen) QwenModelPanel(draft, { draft = it }, state.modelBusy, onEvent)
-                        val showSeed = draft.region == Region.CN && (draft.preferred == ProviderId.SEED || draft.mode == ModelMode.AUTO)
+                        val showSeed = draft.preferred == ProviderId.SEED
                         if (showSeed) {
                             if (showQwen) HorizontalDivider()
                             SeedModelPanel(draft, { draft = it }, state.modelBusy, onEvent)
                         }
-                        val needsGateway = draft.region == Region.GLOBAL ||
+                        val needsGateway = draft.preferred in listOf(ProviderId.GPT, ProviderId.GEMINI) ||
                             (showQwen && draft.qwenAccess == QwenAccess.GATEWAY) || (showSeed && draft.seedAccess == SeedAccess.GATEWAY)
                         if (needsGateway) {
                             if (showQwen || showSeed) HorizontalDivider()

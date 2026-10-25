@@ -154,8 +154,8 @@ class DirectorAgentTest {
         assertEquals(3, result.plans.size)
     }
 
-    /** 验证暂时不可用时只在区域内切换，并保留实际供应商；无参数。 */
-    @Test fun routesWithinRegionWithoutRepeatingFailedProvider() = runTest {
+    /** 所选品牌不可用时只退本地，不能使用另一个品牌。 */
+    @Test fun routesToLocalWithoutRepeatingFailedBrand() = runTest {
         val called = mutableListOf<ProviderId>()
         val logs = mutableListOf<String>()
         val logger = object : DirectorLogger by NoOpDirectorLogger {
@@ -164,7 +164,7 @@ class DirectorAgentTest {
         }
         val result = DirectorAgent(logger = logger).run(input(), ModelSettings(mode = ModelMode.AUTO), { id ->
             object : VisionModelProvider {
-                /** 模拟千问故障及 Seed 成功。@param call 当前请求。 */
+                /** 模拟千问故障及离线成功。@param call 当前请求。 */
                 override suspend fun step(call: ModelCall): StepReply {
                     called += id
                     if (id == ProviderId.QWEN) throw ModelFailure("UNAVAILABLE", "不可用", true)
@@ -172,11 +172,11 @@ class DirectorAgentTest {
                 }
             }
         }, PreviewInspector { _, _ -> PreviewInspection() })
-        assertEquals(listOf(ProviderId.QWEN, ProviderId.SEED), called)
-        assertEquals(ProviderId.SEED, result.traces.last().provider)
+        assertEquals(listOf(ProviderId.QWEN, ProviderId.LOCAL), called)
+        assertEquals(ProviderId.LOCAL, result.traces.last().provider)
         assertTrue(logs.any { it.contains("stage=构图调用 result=失败 source=云端 provider=QWEN") })
-        assertTrue(logs.any { it.contains("stage=构图切换 result=切换 from=QWEN source=云端 provider=SEED") })
-        assertTrue(logs.any { it.contains("stage=构图任务 result=成功 source=云端 provider=SEED") && it.contains("model=test-model") })
+        assertTrue(logs.any { it.contains("stage=构图切换 result=切换 from=QWEN source=离线 provider=LOCAL") })
+        assertTrue(logs.any { it.contains("stage=构图任务 result=成功 source=离线 provider=LOCAL") && it.contains("model=test-model") })
     }
 
     @Test fun cloudFailuresFollowedByOfflineSuccessLogActualOfflineProvider() = runTest {
@@ -198,14 +198,13 @@ class DirectorAgentTest {
         assertFalse(logs.any { it.contains("stage=构图任务 result=成功 source=云端") })
     }
 
-    /** 自动切换、两轮修正、结构校验和逐方案投影检验都应按真实执行顺序报告当前步骤。 */
-    @Test fun reportsProgressForFallbackRepairValidationAndProjectionInspection() = runTest {
+    /** 同品牌两轮修正、结构校验和投影检验按真实执行顺序报告。 */
+    @Test fun reportsProgressForSelectedBrandRepairValidationAndProjectionInspection() = runTest {
         val progress = mutableListOf<DirectorProgress>()
         var seedCalls = 0
-        val result = DirectorAgent().run(input(), ModelSettings(mode = ModelMode.AUTO), { id -> object : VisionModelProvider {
-            /** 千问不可用后由 Seed 首轮返回非法输出、第二轮返回最终方案。 */
+        val result = DirectorAgent().run(input(), ModelSettings(mode = ModelMode.AUTO, preferred = ProviderId.SEED), { id -> object : VisionModelProvider {
+            /** Seed 首轮返回非法输出、第二轮返回最终方案。 */
             override suspend fun step(call: ModelCall): StepReply = when (id) {
-                ProviderId.QWEN -> throw ModelFailure("TIMEOUT", "超时", true)
                 ProviderId.SEED -> if (++seedCalls == 1) StepReply("fake", "not-json") else reply(DirectorDecision(ActionKind.FINAL, plans(), imageId = "frame"))
                 else -> error("不应选择其他供应商")
             }
@@ -216,7 +215,6 @@ class DirectorAgentTest {
             listOf(
                 DirectorProgress.PreparingRequest,
                 DirectorProgress.AnalyzingScene(1, false),
-                DirectorProgress.SwitchingProvider(1),
                 DirectorProgress.ValidatingResponse(1),
                 DirectorProgress.PreparingRequest,
                 DirectorProgress.AnalyzingScene(2, true),
@@ -290,7 +288,7 @@ class DirectorAgentTest {
         var qwenCalls = 0
         try {
             DirectorAgent().run(input(), ModelSettings(mode = ModelMode.AUTO), { id -> object : VisionModelProvider {
-                /** 首轮查询能力，第二轮千问故障后 Seed 再次查询能力。@param call 当前请求。 */
+                /** 首轮查询能力，第二轮千问故障后本地再次查询能力。@param call 当前请求。 */
                 override suspend fun step(call: ModelCall): StepReply {
                     calls += id
                     if (id == ProviderId.QWEN && ++qwenCalls == 2) throw ModelFailure("TIMEOUT", "超时", true)
@@ -299,7 +297,7 @@ class DirectorAgentTest {
             } }, PreviewInspector { _, _ -> error("不应渲染") })
             fail("两轮已用尽")
         } catch (failure: ModelFailure) { assertEquals("INVALID_OUTPUT", failure.code) }
-        assertEquals(listOf(ProviderId.QWEN, ProviderId.QWEN, ProviderId.SEED), calls)
+        assertEquals(listOf(ProviderId.QWEN, ProviderId.QWEN, ProviderId.LOCAL), calls)
     }
 
     /** 指定云端失败后不能自动改用其他模型；无参数。 */

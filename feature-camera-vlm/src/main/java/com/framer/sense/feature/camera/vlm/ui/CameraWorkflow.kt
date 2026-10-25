@@ -11,12 +11,13 @@ internal enum class CameraWorkflowStep { SCAN, GENERATE, SELECT, ALIGN, CAPTURE 
 internal enum class CameraStepStatus { PENDING, RUNNING, COMPLETE }
 
 internal val VlmUiState.workflowKey: CameraWorkflowKey
-    get() = CameraWorkflowKey(scene?.id, referencePlan?.id, referencePlan?.revision, compositionBatchId)
+    get() = CameraWorkflowKey(scene?.id, activeBackgroundTarget?.id, activeBackgroundTarget?.revision,
+        generated.applied?.batchId ?: compositionBatchId)
 
 /** 对齐回退后作废已拍摄记录，再次对齐不能复活上一次的拍摄完成状态。 */
 internal fun VlmUiState.withBackgroundGuidance(guidance: BackgroundGuidance): VlmUiState =
     copy(background = guidance, capturedWorkflow = capturedWorkflow.takeUnless {
-        referencePlan?.viewBinding != null && guidance.status == BackgroundStatus.SEARCHING
+        activeBackgroundTarget?.viewBinding != null && guidance.status == BackgroundStatus.SEARCHING
     })
 
 /** 由业务状态派生进度，不用计时器推进，也不把默认选中卡片视为应用成功。 */
@@ -30,9 +31,10 @@ internal fun VlmUiState.workflowProgress(): List<CameraStepStatus> {
         (stage == VlmStage.SCAN_PROCESSING && backgroundReady) ||
         (stage == VlmStage.MODIFYING && !applying)
     val generated = backgroundReady && !generating &&
-        stage in listOf(VlmStage.READY, VlmStage.MODIFYING, VlmStage.LIVE) && !result?.plans.isNullOrEmpty()
-    val applied = generated && stage == VlmStage.LIVE && referencePlan != null && !compositionDetailsVisible
-    val aligned = applied && (referencePlan?.viewBinding == null ||
+        stage in listOf(VlmStage.READY, VlmStage.MODIFYING, VlmStage.LIVE) &&
+        (if (usesGeneratedReference) this.generated.hasReady else !result?.plans.isNullOrEmpty())
+    val applied = generated && stage == VlmStage.LIVE && activeBackgroundTarget != null && !compositionDetailsVisible
+    val aligned = applied && (activeBackgroundTarget?.viewBinding == null ||
         background.status != BackgroundStatus.SEARCHING)
     val progress = listOf(
         stepStatus(backgroundReady, collecting),

@@ -8,6 +8,15 @@
     "director_v2_path": "/v2/director/step",
     "views_path": "/v2/views/select"
   },
+  "image_generation": {
+    "base_url": "https://ark.cn-beijing.volces.com/api/v3",
+    "generation_path": "/images/generations",
+    "gateway_path": "/v1/portraits",
+    "models": {
+      "flash": { "id": "doubao-seedream-5-0-flash-260915" },
+      "pro": { "id": "doubao-seedream-5-0-pro-260628" }
+    }
+  },
   "providers": {
     "qwen": {
       "base_url": "https://ws-i4o988pfogx6zqcg.cn-beijing.maas.aliyuncs.com/compatible-mode/v1",

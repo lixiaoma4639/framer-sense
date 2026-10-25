@@ -31,7 +31,7 @@ internal fun BackgroundAlignmentOverlay(
     modifier: Modifier = Modifier
 ) {
     if (!state.showReferenceGuidanceOverlay) return
-    val plan = state.referencePlan ?: return
+    val plan = state.activeBackgroundTarget ?: return
     val searching = plan.viewBinding != null && state.background.status == BackgroundStatus.SEARCHING
     val heading = state.background.headingError
     val pitch = state.background.pitchError

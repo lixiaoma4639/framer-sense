@@ -221,7 +221,7 @@ class CameraAdaptiveDialogTest {
             compose.onNodeWithTag("vlm_model_mode_AUTO").assertIsSelected()
         }
         compose.onNodeWithText("保存").assertIsDisplayed().performTouchInput { click() }
-        assertEquals(listOf(VlmIntent.SaveSettings(initial.copy(mode = ModelMode.AUTO))), events)
+        assertEquals(listOf(VlmIntent.SaveSettings(initial.copy(mode = ModelMode.AUTO).normalizeReferenceSource())), events)
     }
 
     @Test fun dialogIconsAreNotRotatedTwice() {

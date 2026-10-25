@@ -88,7 +88,7 @@ class ScanViewAgentTest {
         }
     }
 
-    @Test fun officialCapabilityStillWorksWhenEarlierGatewayProviderIsUnavailable() = runBlocking {
+    @Test fun unavailableSelectedBrandDoesNotUseAnotherBrandsKey() = runBlocking {
         withScan { scan ->
             val settings = ModelSettings(mode = ModelMode.AUTO, preferred = ProviderId.SEED, qwenApiKey = "sk-fake-key")
             val budget = PhotoSessionBudget()
@@ -106,9 +106,10 @@ class ScanViewAgentTest {
                     }
                 }
             }
-            assertEquals(listOf(ProviderId.QWEN), selected)
-            assertEquals("f", result.selection!!.primary.frameId)
-            assertEquals(1, budget.calls)
+            assertTrue(selected.isEmpty())
+            assertNull(result.selection)
+            assertEquals(ScanSelectionFallback.CAPABILITY_UNAVAILABLE, result.fallback)
+            assertEquals(0, budget.calls)
         }
     }
 
@@ -155,14 +156,14 @@ class ScanViewAgentTest {
             assertTrue(logs.any { it.contains("stage=选景任务 result=转人工选景") })
         }
     }
-    @Test fun retryableFailureSwitchesWithinSameTwoAttemptBudget() = runBlocking {
+    @Test fun retryableFailureDoesNotSwitchToAnotherBrand() = runBlocking {
         withScan { scan ->
             val requested = mutableListOf<ProviderId>(); val budget = PhotoSessionBudget()
             val result = ScanViewAgent { "mock" }.select(scan, ModelSettings(mode = ModelMode.AUTO, region = Region.CN), "", budget) { provider ->
                 gateway { requested += provider; if (provider == ProviderId.QWEN) throw ModelFailure("TIMEOUT", "", true) else ViewSelectionReply("mock", "", valid()) }
             }
-            assertNotNull(result.selection); assertEquals(listOf(ProviderId.QWEN, ProviderId.SEED), requested)
-            assertEquals(2, budget.calls)
+            assertNull(result.selection); assertEquals(listOf(ProviderId.QWEN), requested)
+            assertEquals(1, budget.calls)
         }
     }
     @Test fun refusalAndParameterErrorsNeverSwitchProviders() = runBlocking {

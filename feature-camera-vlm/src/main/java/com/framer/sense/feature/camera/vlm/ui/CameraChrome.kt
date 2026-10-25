@@ -59,7 +59,7 @@ import com.framer.sense.feature.camera.vlm.ar.ArTrackingState
 import coil3.compose.AsyncImage
 import java.io.File
 
-private val CameraHighlightColor = Color(0xFFFFD66A)
+internal val CameraHighlightColor = Color(0xFFFFD66A)
 private val CameraAiActionForeground = Color(0xFF202126)
 private val CameraCompositionCaptionBackground = Color.Black.copy(alpha = .55f)
 private val CameraCompositionCaptionForeground = Color.White
@@ -194,14 +194,29 @@ private fun Modifier.semanticsShutter(): Modifier {
 internal fun Controls(state: VlmUiState, onEvent: (VlmIntent) -> Unit, importImage: () -> Unit, modifier: Modifier) {
     // 放在显示条件之外，收起列表时保留位置，也不重新触发选中项定位动画。
     val compositionScroll = rememberCompositionListState(state)
+    val generatedScroll = rememberLazyListState()
+    val generatedMode = state.usesGeneratedReference
+    val hasChoices = if (generatedMode) state.generated.candidates.isNotEmpty() else state.hasCompositionChoices
     val busy = state.operationBusy || state.instructionEditorVisible
-    val manualBackgroundSelection = !state.hasCompositionChoices && state.viewCandidates.isEmpty() && state.scanSnapshot != null
+    val manualBackgroundSelection = !hasChoices && state.viewCandidates.isEmpty() && state.scanSnapshot != null
     Column(modifier, horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(4.dp)) {
         state.error?.let { Text(it, color = Color(0xFFFFAAAA), maxLines = 2, style = MaterialTheme.typography.bodySmall, modifier = Modifier.testTag("vlm_error")) }
         state.notice?.let { Text(it, color = Color.White, maxLines = 1, style = MaterialTheme.typography.labelSmall) }
+        if (generatedMode && state.generated.running && state.generated.hasReady)
+            Text(stringResource(R.string.vlm_generated_pending), color = Color.White,
+                style = MaterialTheme.typography.labelSmall, modifier = Modifier.testTag("vlm_generated_pending"))
         if (state.stage == VlmStage.SCANNING)
             Text(stringResource(R.string.vlm_scan_progress, state.scanProgress.frames, state.scanProgress.elapsedSeconds), color = Color.White, style = MaterialTheme.typography.labelSmall)
-        if (state.stage in listOf(VlmStage.READY, VlmStage.LIVE, VlmStage.FROZEN, VlmStage.SCAN_REVIEW) &&
+        if (generatedMode && state.compositionDetailsVisible && state.stage in listOf(
+                VlmStage.READY, VlmStage.LIVE, VlmStage.FROZEN, VlmStage.SCAN_REVIEW) &&
+            (hasChoices || state.rankedBackgroundFrames.isNotEmpty())) {
+            if (state.generated.selected?.ready == true) {
+                val panelModifier = if (state.compositionDetailsExpanded) Modifier.weight(1f, fill = false).fillMaxWidth()
+                    else Modifier.fillMaxWidth()
+                CompositionDetailsPanel(state, onEvent, panelModifier)
+            }
+            GeneratedReferenceCards(state, onEvent, generatedScroll)
+        } else if (!generatedMode && state.stage in listOf(VlmStage.READY, VlmStage.LIVE, VlmStage.FROZEN, VlmStage.SCAN_REVIEW) &&
             state.compositionDetailsVisible && state.compositionChoices.isNotEmpty()) {
             if (state.result != null) {
                 val panelModifier = if (state.compositionDetailsExpanded) Modifier.weight(1f, fill = false).fillMaxWidth()
@@ -232,7 +247,7 @@ internal fun Controls(state: VlmUiState, onEvent: (VlmIntent) -> Unit, importIma
                         CameraAction(R.string.vlm_scan_start, "vlm_scan_start", state.canRestartScan) { onEvent(VlmIntent.StartScan) }
                         CameraAction(R.string.vlm_scan_single, "vlm_start", state.canStartSingleComposition) { onEvent(VlmIntent.StartComposition) }
                     }
-                    if (state.hasCompositionChoices) CompositionSelectionToggle(state, onEvent)
+                    if (hasChoices) CompositionSelectionToggle(state, onEvent)
                 }
                 VlmStage.SCANNING -> {
                     CameraAction(R.string.vlm_scan_prefer, "vlm_scan_prefer", !state.scanProgress.paused && state.scanProgress.preferred < ScanLimits.MAX_PREFERRED) { onEvent(VlmIntent.PreferScanView) }
@@ -244,13 +259,14 @@ internal fun Controls(state: VlmUiState, onEvent: (VlmIntent) -> Unit, importIma
                 VlmStage.SCAN_PROCESSING, VlmStage.VIEW_SELECTING -> Unit
                 else -> {
                     CameraGenerationAction(state, onEvent)
-                    if (state.compositionChoices.isNotEmpty() && !busy) {
+                    if ((hasChoices || state.compositionChoices.isNotEmpty()) && !busy) {
                         CompositionSelectionToggle(state, onEvent, manual = manualBackgroundSelection)
                     }
                 }
             }
         }
     }
+    if (generatedMode) GeneratedReferenceDialogs(state, onEvent)
 }
 
 @Composable
@@ -265,21 +281,26 @@ private fun CameraGenerationAction(state: VlmUiState, onEvent: (VlmIntent) -> Un
         is CompositionChoice.Plan -> choice.group.scene.id == state.scene?.id
         is CompositionChoice.PendingBackground -> choice.frame.scene.id == state.scene?.id
     } }
-    val pendingSelected = state.result == null && selectedChoice is CompositionChoice.PendingBackground &&
-        selectedChoice.frame.id == state.selectedFrameId
+    val pendingSelected = if (state.usesGeneratedReference) selectedChoice is CompositionChoice.PendingBackground &&
+        !state.generated.candidates.any { it.scene.id == state.scene?.id && it.ready }
+        else state.result == null && selectedChoice is CompositionChoice.PendingBackground && selectedChoice.frame.id == state.selectedFrameId
+    val canGenerate = state.canGenerate && (!state.usesGeneratedReference || !state.generated.running)
+    val hasGenerated = if (state.usesGeneratedReference) state.generated.candidates.any { it.scene.id == state.scene?.id && it.ready }
+        else state.result != null
     var confirming by remember(state.scene?.id, state.compositionBatchId, state.selectedId) { mutableStateOf(false) }
-    LaunchedEffect(state.canGenerate) {
-        if (!state.canGenerate) confirming = false
+    LaunchedEffect(canGenerate) {
+        if (!canGenerate) confirming = false
     }
-    CameraAction(if (state.result == null && state.stage != VlmStage.GENERATING) R.string.vlm_flow_generate else R.string.vlm_flow_regenerate,
-        "vlm_generate", state.canGenerate,
+    CameraAction(if (!hasGenerated && state.stage != VlmStage.GENERATING) R.string.vlm_flow_generate else R.string.vlm_flow_regenerate,
+        "vlm_generate", canGenerate,
         contentColor = if (pendingSelected) CameraHighlightColor else Color.White) { confirming = true }
-    if (confirming && state.canGenerate) {
+    if (confirming && canGenerate) {
         val rank = selectedChoice?.rank ?: 1
         CameraAdaptiveAlertDialog(onDismissRequest = { confirming = false },
             modifier = Modifier.testTag("vlm_background_generate_dialog"),
             title = { Text(stringResource(R.string.vlm_background_generate_title)) },
-            text = { Text(stringResource(R.string.vlm_background_generate_message, rank)) },
+            text = { Text(stringResource(if (state.usesGeneratedReference) R.string.vlm_generated_generate_message
+                else R.string.vlm_background_generate_message, rank)) },
             dismissButton = {
                 TextButton(onClick = { confirming = false }, modifier = Modifier.testTag("vlm_background_generate_cancel")) {
                     Text(stringResource(R.string.vlm_cancel))
@@ -299,7 +320,7 @@ private fun CameraGenerationAction(state: VlmUiState, onEvent: (VlmIntent) -> Un
 /** 任意数量的动作整体居中，空间不足时仍可横向滚动。 */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun CameraActionRow(content: @Composable RowScope.() -> Unit) {
+internal fun CameraActionRow(content: @Composable RowScope.() -> Unit) {
     CompositionLocalProvider(LocalMinimumInteractiveComponentSize provides 0.dp) {
         Row(Modifier.widthIn(max = CameraWorkflowMaxWidth).fillMaxWidth().heightIn(min = 48.dp)
             .horizontalScroll(rememberScrollState()).testTag("vlm_camera_actions"),
@@ -327,7 +348,7 @@ private fun CompositionSelectionToggle(state: VlmUiState, onEvent: (VlmIntent) -
 }
 
 @Composable
-private fun CameraAction(label: Int, tag: String, enabled: Boolean, contentColor: Color = Color.White, click: () -> Unit) {
+internal fun CameraAction(label: Int, tag: String, enabled: Boolean, contentColor: Color = Color.White, click: () -> Unit) {
     TextButton(onClick = click, enabled = enabled,
         modifier = Modifier.defaultMinSize(minWidth = 1.dp, minHeight = 1.dp).testTag(tag),
         contentPadding = PaddingValues(horizontal = 5.dp, vertical = 2.dp), shape = RoundedCornerShape(2.dp),
@@ -409,7 +430,7 @@ private fun CompositionPlanCard(choice: CompositionChoice.Plan, state: VlmUiStat
 }
 
 @Composable
-private fun PendingBackgroundCard(choice: CompositionChoice.PendingBackground, enabled: Boolean, selected: Boolean,
+internal fun PendingBackgroundCard(choice: CompositionChoice.PendingBackground, enabled: Boolean, selected: Boolean,
     imageHeight: Dp, onClick: () -> Unit) {
     val frame = choice.frame
     val photoDegrees = frame.scene.orientation.previewDegrees
@@ -434,7 +455,7 @@ private fun PendingBackgroundCard(choice: CompositionChoice.PendingBackground, e
 }
 
 @Composable
-private fun BoxScope.CompositionCardCaption(text: String, tag: String, maxLines: Int = 1) {
+internal fun BoxScope.CompositionCardCaption(text: String, tag: String, maxLines: Int = 1) {
     Text(text, color = CameraCompositionCaptionForeground, style = MaterialTheme.typography.labelSmall,
         maxLines = maxLines, softWrap = false, textAlign = TextAlign.Start,
         modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth().background(CameraCompositionCaptionBackground)
@@ -444,6 +465,7 @@ private fun BoxScope.CompositionCardCaption(text: String, tag: String, maxLines:
 @Composable
 internal fun PhotoSettingsDialog(state: VlmUiState, onEvent: (VlmIntent) -> Unit, importImage: () -> Unit) {
     CameraDialog(R.string.vlm_photo_settings_title, "vlm_photo_settings_dialog", { onEvent(VlmIntent.PhotoSettingsVisible(false)) }) {
+        if (!state.usesGeneratedReference) {
         AvatarSelector(state, onEvent, state.operationBusy)
         AvatarEthnicitySelector(state.selectedEthnicity, !state.operationBusy, "vlm_preferred_ethnicity") { onEvent(VlmIntent.PreferredEthnicity(it)) }
         SettingsSwitch(R.string.vlm_photo_show_face, state.faceVisible, !state.operationBusy, "vlm_face_setting") { onEvent(VlmIntent.FaceVisible(it)) }
@@ -461,6 +483,7 @@ internal fun PhotoSettingsDialog(state: VlmUiState, onEvent: (VlmIntent) -> Unit
         }
         TextButton(onClick = { onEvent(VlmIntent.PhotoSettingsVisible(false)); onEvent(VlmIntent.OpenPhotoSample) },
             enabled = !state.operationBusy, modifier = Modifier.testTag("vlm_sample_open")) { Text(stringResource(R.string.vlm_photo_sample_open)) }
+        } else Text(stringResource(R.string.vlm_generated_photo_settings_hint), style = MaterialTheme.typography.bodySmall)
         if (BuildConfig.DEBUG) TextButton(onClick = { onEvent(VlmIntent.PhotoSettingsVisible(false)); importImage() },
             enabled = !state.operationBusy, modifier = Modifier.testTag("vlm_import_image")) { Text(stringResource(R.string.vlm_debug_image)) }
     }
@@ -470,26 +493,30 @@ internal fun PhotoSettingsDialog(state: VlmUiState, onEvent: (VlmIntent) -> Unit
 @Composable
 internal fun CompositionDetailsPanel(state: VlmUiState, onEvent: (VlmIntent) -> Unit, modifier: Modifier = Modifier) {
     val plan = state.result?.plans?.find { it.id == state.selectedId }
+    val hasSelection = plan != null || state.usesGeneratedReference && state.generated.selected?.ready == true
     var actionsHeight by remember { mutableIntStateOf(0) }
     val footerSpace = maxOf(30.dp, with(LocalDensity.current) { actionsHeight.toDp() }) + 8.dp
     Box(modifier.testTag("vlm_composition_details_overlay")) {
         key(state.scene?.id, state.compositionBatchId, state.selectedId) {
             val scroll = rememberScrollState()
-            if (state.compositionDetailsExpanded || state.result == null) {
+            if (state.compositionDetailsExpanded || !state.usesGeneratedReference && state.result == null) {
                 Surface(Modifier.fillMaxSize().testTag("vlm_composition_details_panel"),
-                    shape = MaterialTheme.shapes.medium) {
+                    shape = MaterialTheme.shapes.medium,
+                    color = if (state.usesGeneratedReference) Color(0xFF202126) else MaterialTheme.colorScheme.surface,
+                    contentColor = if (state.usesGeneratedReference) Color.White else MaterialTheme.colorScheme.onSurface) {
                     CameraRotatingViewport(Modifier.fillMaxSize().testTag("vlm_composition_details_content"),
                         preservePhotoDirection = true) {
                         Column(Modifier.fillMaxSize().verticalScroll(scroll).padding(12.dp)
                             .testTag("vlm_composition_details_scroll"), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                            CompositionDetailsContent(state, onEvent)
-                            if (plan != null) Spacer(Modifier.height(footerSpace))
+                            if (state.usesGeneratedReference) GeneratedReferenceDetails(state, onEvent)
+                            else CompositionDetailsContent(state, onEvent)
+                            if (hasSelection) Spacer(Modifier.height(footerSpace))
                         }
                     }
                 }
             }
         }
-        if (plan != null) {
+        if (hasSelection) {
             CompositionActionButtons(state, onEvent, Modifier.align(Alignment.BottomCenter).padding(bottom = 4.dp)
                 .zIndex(1f).onSizeChanged { actionsHeight = it.height })
         }
@@ -500,8 +527,9 @@ internal fun CompositionDetailsPanel(state: VlmUiState, onEvent: (VlmIntent) -> 
 @OptIn(ExperimentalMaterial3Api::class)
 private fun CompositionActionButtons(state: VlmUiState, onEvent: (VlmIntent) -> Unit, modifier: Modifier) {
     val description = stringResource(if (state.compositionDetailsExpanded) R.string.vlm_composition_info_hide else R.string.vlm_composition_info_show)
-    val colors = ButtonDefaults.buttonColors(containerColor = CameraCompositionCaptionBackground,
-        contentColor = CameraCompositionCaptionForeground)
+    val colors = ButtonDefaults.buttonColors(
+        containerColor = if (state.usesGeneratedReference) CameraHighlightColor.copy(alpha = .78f) else CameraCompositionCaptionBackground,
+        contentColor = if (state.usesGeneratedReference) CameraAiActionForeground else CameraCompositionCaptionForeground)
     val labelStyle = MaterialTheme.typography.labelSmall.let {
         it.copy(fontSize = (it.fontSize.value + 2f).sp, lineHeight = (it.lineHeight.value + 2f).sp)
     }
@@ -517,7 +545,8 @@ private fun CompositionActionButtons(state: VlmUiState, onEvent: (VlmIntent) -> 
                 Icon(if (state.compositionDetailsExpanded) Icons.Outlined.VisibilityOff else Icons.Outlined.Visibility,
                     contentDescription = null, modifier = Modifier.size(16.dp).testTag("vlm_composition_info_icon"))
             }
-            Button(onClick = { onEvent(VlmIntent.Apply) }, enabled = !state.operationBusy,
+            Button(onClick = { onEvent(VlmIntent.Apply) }, enabled = !state.operationBusy &&
+                (!state.usesGeneratedReference || state.generated.selected?.canApply == true),
                 shape = RectangleShape, colors = colors, contentPadding = PaddingValues(horizontal = 6.dp),
                 modifier = Modifier.height(30.dp).testTag("vlm_apply")) {
                 Text(stringResource(R.string.vlm_apply_plan), style = labelStyle, maxLines = 1)
