@@ -266,7 +266,6 @@ internal fun Controls(state: VlmUiState, onEvent: (VlmIntent) -> Unit, importIma
             }
         }
     }
-    if (generatedMode) GeneratedReferenceDialogs(state, onEvent)
 }
 
 @Composable
@@ -465,9 +464,10 @@ internal fun BoxScope.CompositionCardCaption(text: String, tag: String, maxLines
 @Composable
 internal fun PhotoSettingsDialog(state: VlmUiState, onEvent: (VlmIntent) -> Unit, importImage: () -> Unit) {
     CameraDialog(R.string.vlm_photo_settings_title, "vlm_photo_settings_dialog", { onEvent(VlmIntent.PhotoSettingsVisible(false)) }) {
-        if (!state.usesGeneratedReference) {
         AvatarSelector(state, onEvent, state.operationBusy)
-        AvatarEthnicitySelector(state.selectedEthnicity, !state.operationBusy, "vlm_preferred_ethnicity") { onEvent(VlmIntent.PreferredEthnicity(it)) }
+        AvatarEthnicitySelector(state.selectedEthnicity, !state.operationBusy, "vlm_preferred_ethnicity",
+            showDraftHint = !state.usesGeneratedReference) { onEvent(VlmIntent.PreferredEthnicity(it)) }
+        if (!state.usesGeneratedReference) {
         SettingsSwitch(R.string.vlm_photo_show_face, state.faceVisible, !state.operationBusy, "vlm_face_setting") { onEvent(VlmIntent.FaceVisible(it)) }
         SettingsSwitch(R.string.vlm_ar_mode_label, state.cameraMode == CameraMode.AR, state.framingUnlocked, "vlm_ar_setting") { onEvent(VlmIntent.CameraModeSelected(if (it) CameraMode.AR else CameraMode.NORMAL)) }
         Text(stringResource(if (state.cameraMode == CameraMode.AR) R.string.vlm_ar_zoom_locked else R.string.vlm_normal_camera_hint), style = MaterialTheme.typography.bodySmall)
@@ -483,7 +483,7 @@ internal fun PhotoSettingsDialog(state: VlmUiState, onEvent: (VlmIntent) -> Unit
         }
         TextButton(onClick = { onEvent(VlmIntent.PhotoSettingsVisible(false)); onEvent(VlmIntent.OpenPhotoSample) },
             enabled = !state.operationBusy, modifier = Modifier.testTag("vlm_sample_open")) { Text(stringResource(R.string.vlm_photo_sample_open)) }
-        } else Text(stringResource(R.string.vlm_generated_photo_settings_hint), style = MaterialTheme.typography.bodySmall)
+        }
         if (BuildConfig.DEBUG) TextButton(onClick = { onEvent(VlmIntent.PhotoSettingsVisible(false)); importImage() },
             enabled = !state.operationBusy, modifier = Modifier.testTag("vlm_import_image")) { Text(stringResource(R.string.vlm_debug_image)) }
     }
@@ -502,13 +502,13 @@ internal fun CompositionDetailsPanel(state: VlmUiState, onEvent: (VlmIntent) -> 
             if (state.compositionDetailsExpanded || !state.usesGeneratedReference && state.result == null) {
                 Surface(Modifier.fillMaxSize().testTag("vlm_composition_details_panel"),
                     shape = MaterialTheme.shapes.medium,
-                    color = if (state.usesGeneratedReference) Color(0xFF202126) else MaterialTheme.colorScheme.surface,
-                    contentColor = if (state.usesGeneratedReference) Color.White else MaterialTheme.colorScheme.onSurface) {
+                    color = CameraCompositionCaptionBackground,
+                    contentColor = Color.White) {
                     CameraRotatingViewport(Modifier.fillMaxSize().testTag("vlm_composition_details_content"),
                         preservePhotoDirection = true) {
                         Column(Modifier.fillMaxSize().verticalScroll(scroll).padding(12.dp)
                             .testTag("vlm_composition_details_scroll"), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                            if (state.usesGeneratedReference) GeneratedReferenceDetails(state, onEvent)
+                            if (state.usesGeneratedReference) GeneratedReferenceDetails(state)
                             else CompositionDetailsContent(state, onEvent)
                             if (hasSelection) Spacer(Modifier.height(footerSpace))
                         }
@@ -528,8 +528,8 @@ internal fun CompositionDetailsPanel(state: VlmUiState, onEvent: (VlmIntent) -> 
 private fun CompositionActionButtons(state: VlmUiState, onEvent: (VlmIntent) -> Unit, modifier: Modifier) {
     val description = stringResource(if (state.compositionDetailsExpanded) R.string.vlm_composition_info_hide else R.string.vlm_composition_info_show)
     val colors = ButtonDefaults.buttonColors(
-        containerColor = if (state.usesGeneratedReference) CameraHighlightColor.copy(alpha = .78f) else CameraCompositionCaptionBackground,
-        contentColor = if (state.usesGeneratedReference) CameraAiActionForeground else CameraCompositionCaptionForeground)
+        containerColor = CameraCompositionCaptionBackground,
+        contentColor = CameraCompositionCaptionForeground)
     val labelStyle = MaterialTheme.typography.labelSmall.let {
         it.copy(fontSize = (it.fontSize.value + 2f).sp, lineHeight = (it.lineHeight.value + 2f).sp)
     }

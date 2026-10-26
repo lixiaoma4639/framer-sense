@@ -54,14 +54,14 @@ data class VlmUiState(
     val instructionHistory: List<String> = emptyList(),
     val compositionDetailsVisible: Boolean = false,
     val compositionDetailsExpanded: Boolean = false,
-    val instruction: String = "自然一些，保留环境主体",
+    val instruction: String = "",
     val result: CompositionResult? = null,
     val compositionBatchId: String = INITIAL_COMPOSITION_BATCH,
     val compositionCache: Map<String, BackgroundComposition> = emptyMap(),
     val diagnostics: CompositionResult? = null,
     val selectedId: String? = null,
     val selectedAvatar: AvatarId = AvatarId.ADULT_FEMALE,
-    val selectedEthnicity: AvatarEthnicity = AvatarEthnicity.WHITE,
+    val selectedEthnicity: AvatarEthnicity = AvatarEthnicity.ASIAN,
     val previews: Map<String, PlanPreview> = emptyMap(),
     val availableActions: Map<String, List<PhotoActionDefinition>> = emptyMap(),
     val availableExpressions: Map<String, List<ExpressionId>> = emptyMap(),
@@ -144,7 +144,6 @@ sealed interface VlmIntent {
     data class SelectGenerated(val id: String) : VlmIntent
     data class RetryGenerated(val id: String) : VlmIntent
     data object ReplaceGenerated : VlmIntent
-    data class GeneratedZoomVisible(val visible: Boolean) : VlmIntent
     data class PhotoOrientationChanged(val orientation: PhotoOrientation) : VlmIntent
     data class ArUpdated(val state: com.framer.sense.feature.camera.vlm.ar.ArUiState, val epoch: Int? = null) : VlmIntent
     data object OpenPhotoSample : VlmIntent
@@ -187,6 +186,7 @@ sealed interface VlmIntent {
     data class DeleteInstructionHistory(val text: String) : VlmIntent
     data object SubmitInstruction : VlmIntent
     data class SeedreamModelSelected(val model: SeedreamModel) : VlmIntent
+    data class QwenImageModelSelected(val model: QwenImageModel) : VlmIntent
     data class AvatarSelected(val avatarId: AvatarId) : VlmIntent
     data object Generate : VlmIntent
     data object Revise : VlmIntent

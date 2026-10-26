@@ -49,6 +49,8 @@ import androidx.compose.ui.unit.dp
 import com.framer.sense.feature.camera.vlm.R
 import com.framer.sense.feature.camera.vlm.model.ModelMode
 import com.framer.sense.feature.camera.vlm.model.SeedreamModel
+import com.framer.sense.feature.camera.vlm.model.QwenImageModel
+import com.framer.sense.feature.camera.vlm.model.ProviderId
 
 /** 原生键盘单独接收输入；相机区域的外部点击只收起编辑区，不穿透到拍照等控件。 */
 @Composable
@@ -176,6 +178,11 @@ private fun GeneratedModelChoice(state: VlmUiState, onEvent: (VlmIntent) -> Unit
                 .clickable(enabled = enabled, role = Role.Button) { beforeOpen(); expanded = true }) {
             Text(stringResource(when {
                 !supported -> R.string.vlm_generated_model_unsupported
+                state.settings.preferred == ProviderId.QWEN -> when (state.settings.qwenImageModel) {
+                    QwenImageModel.V21_TURBO -> R.string.vlm_generated_model_turbo
+                    QwenImageModel.V30 -> R.string.vlm_generated_model_standard
+                    else -> R.string.vlm_generated_model_pro
+                }
                 state.settings.seedreamModel == SeedreamModel.FLASH -> R.string.vlm_generated_model_fast
                 else -> R.string.vlm_generated_model_expert
             }), style = MaterialTheme.typography.labelMedium, color = color)
@@ -183,7 +190,14 @@ private fun GeneratedModelChoice(state: VlmUiState, onEvent: (VlmIntent) -> Unit
                 tint = color, modifier = Modifier.size(14.dp))
         }
         DropdownMenu(expanded = expanded && enabled, onDismissRequest = { expanded = false }) {
-            SeedreamModel.entries.forEach { model ->
+            if (state.settings.preferred == ProviderId.QWEN) QwenImageModel.entries.forEach { model ->
+                val selected = state.settings.qwenImageModel == model
+                DropdownMenuItem(text = { Text(qwenImageModelLabel(model)) },
+                    onClick = { expanded = false; onEvent(VlmIntent.QwenImageModelSelected(model)) },
+                    modifier = Modifier.testTag("vlm_qwen_image_model_${model.name}")
+                        .semantics { this.selected = selected })
+            }
+            else SeedreamModel.entries.forEach { model ->
                 val selected = state.settings.seedreamModel == model
                 DropdownMenuItem(text = { Text(seedreamModelLabel(model)) },
                     onClick = { expanded = false; onEvent(VlmIntent.SeedreamModelSelected(model)) },

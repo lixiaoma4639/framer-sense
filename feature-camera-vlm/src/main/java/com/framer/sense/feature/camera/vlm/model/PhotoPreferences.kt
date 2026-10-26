@@ -20,7 +20,7 @@ enum class CameraMode { NORMAL, AR }
 data class PhotoPreferences(
     val aspectRatio: CaptureAspectRatio = CaptureAspectRatio.THREE_FOUR,
     val avatar: AvatarId = AvatarId.ADULT_FEMALE,
-    val ethnicity: AvatarEthnicity = AvatarEthnicity.WHITE,
+    val ethnicity: AvatarEthnicity = AvatarEthnicity.ASIAN,
     val showFace: Boolean = false,
     val instruction: String = "",
     val instructionFromRecommendation: Boolean = false

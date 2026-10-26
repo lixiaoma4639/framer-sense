@@ -19,8 +19,8 @@ class SettingsStore(context: Context) {
     private val alias = "framer-vlm-gateway"
 
     fun readAvatarEthnicity(): AvatarEthnicity = runCatching {
-        AvatarEthnicity.valueOf(prefs.getString("avatar-ethnicity", null) ?: AvatarEthnicity.WHITE.name)
-    }.getOrDefault(AvatarEthnicity.WHITE)
+        AvatarEthnicity.valueOf(prefs.getString("avatar-ethnicity", null) ?: AvatarEthnicity.ASIAN.name)
+    }.getOrDefault(AvatarEthnicity.ASIAN)
 
     fun saveAvatarEthnicity(value: AvatarEthnicity) {
         prefs.edit().putString("avatar-ethnicity", value.name).apply()

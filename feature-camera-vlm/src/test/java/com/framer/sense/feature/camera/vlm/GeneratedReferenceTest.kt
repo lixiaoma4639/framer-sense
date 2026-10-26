@@ -12,6 +12,7 @@ import com.framer.sense.feature.camera.vlm.agent.GeneratedReferencePrompt
 import com.framer.sense.feature.camera.vlm.model.*
 import com.framer.sense.feature.camera.vlm.ui.*
 import kotlinx.serialization.json.*
+import kotlinx.serialization.encodeToString
 import org.junit.Assert.*
 import org.junit.Test
 
@@ -92,24 +93,33 @@ class GeneratedReferenceTest {
 
     @Test fun promptSupportsCreatingAPersonInAnEmptySceneWithoutDiscardingExistingIdentity() {
         val prompt = GeneratedReferencePrompt.build("一位穿汉服的女子", 0)
-        assertTrue(prompt.contains("如果没有人像，则由你创造满足用户要求的人像"))
-        assertTrue(prompt.contains("保留照片中同一个人物的身份特征"))
-        assertTrue(prompt.contains("不把背景路人作为主角"))
+        assertTrue(prompt.contains("没有主角人像，由你结合现场与用户要求创造人物"))
+        assertTrue(prompt.contains("保持其身份特征"))
+        assertTrue(prompt.contains("不把背景路人当作主角"))
         assertTrue(prompt.contains("一位穿汉服的女子"))
         assertTrue(prompt.contains("reference_person"))
-        assertTrue(prompt.indexOf("最终输出一张完整、真实的人像摄影参考照片") < prompt.indexOf("补充要求："))
+        assertTrue(prompt.contains("动漫感人物或原创人形角色"))
+        assertFalse(prompt.contains("侧重自然克制"))
     }
 
-    @Test fun promptPreservesLongUserRequirementsAndMakesVariationSubordinateToThem() {
+    @Test fun promptPreservesLongUserRequirementsAndKeepsExplicitRequirementsFirst() {
         // 输入框允许 2000 字；关键要求不能在旧的 1200 字位置被静默截掉。
         val instruction = "希望自然一些。".repeat(180) + "最后要求：半身、安静地看向左侧。"
         repeat(4) { variation ->
             val prompt = GeneratedReferencePrompt.build("  $instruction  ", variation)
             assertTrue(prompt.endsWith("用户要求：$instruction"))
-            assertTrue(prompt.contains("不以变化参考覆盖用户要求"))
-            assertTrue(prompt.contains("支撑条件无法确认或原图未拍到地面时"))
-            assertTrue(prompt.contains("不强行生成全身或补出地面"))
+            assertTrue(prompt.contains("优先满足用户明确提出"))
+            assertTrue(prompt.contains("支撑条件无法确认或原图没有拍到地面时"))
+            assertTrue(prompt.contains("不以固定的人物画面占比替代现实尺度判断"))
         }
+    }
+
+    @Test fun unspecifiedRequirementAllowsIndependentArtisticCreation() {
+        val prompt = GeneratedReferencePrompt.build("  ", 0)
+        assertTrue(prompt.endsWith("用户要求：未提供特殊要求，请由 AI 自主创作。"))
+        assertTrue(prompt.contains("用户没有特殊说明时，由你自主选择"))
+        assertTrue(prompt.contains("不预设固定的动作、表情、情绪或风格"))
+        assertFalse(prompt.contains("自然克制"))
     }
 
     @Test fun downloadedImageSamplingHandlesReportedSizeAndLargeImageBoundaries() {
@@ -201,7 +211,8 @@ class GeneratedReferenceTest {
             assertTrue(parsed.personLayers.isEmpty())
             assertEquals(1, parsed.foregroundLayers.size)
         }
-        listOf("女子" to "穿汉服的女子", "foreground" to "A woman standing beside a bench").forEach { (name, description) ->
+        listOf("女子" to "穿汉服的女子", "foreground" to "A woman standing beside a bench",
+            "动漫角色" to "原创人形角色", "少女" to "动漫角色").forEach { (name, description) ->
             val parsed = SeedreamImageProtocol.response(200, response(name, description), "requested")
             assertEquals(description, parsed.personLayers.single().description)
         }
@@ -265,6 +276,53 @@ class GeneratedReferenceTest {
         assertFalse(state.selected!!.canApply)
         assertFalse(state.selected!!.assets!!.hasPortrait)
         assertTrue(ready.copy(assets = assets).canApply)
+    }
+
+    @Test fun generatedDescriptionsComeFromResponseAndSurviveAssetCache() {
+        val response = SeedreamLayers("fixture", listOf(
+            SeedreamLayer("base", 0, "", null, "灯笼下的街道"),
+            SeedreamLayer("person", 1, "reference_person", null, "女子侧身回望"),
+            SeedreamLayer("object", 2, "bench", null, "木凳")), 3)
+        val descriptions = response.descriptions
+        assertEquals("女子侧身回望", descriptions.actualComposition)
+        assertEquals("灯笼下的街道", descriptions.environment)
+        assertTrue(descriptions.shootingGuidance.isEmpty())
+        val saved = assets.copy(descriptions = descriptions)
+        val encoded = Json.encodeToJsonElement(saved)
+        assertEquals(saved, Json.decodeFromJsonElement<GeneratedReferenceAssets>(encoded))
+        val oldCache = JsonObject(encoded.jsonObject - "descriptions")
+        assertEquals(GeneratedReferenceDescriptions(), Json.decodeFromJsonElement<GeneratedReferenceAssets>(oldCache).descriptions)
+    }
+
+    @Test fun generatedDetailFallbackIsBoundToItsOwnBackgroundAndNeverUsesUserInstruction() {
+        val ready = one.copy(status = GeneratedCandidateStatus.READY, assets = assets)
+        val background = ViewCandidate("scene", "红色建筑", "主体右侧有留白", emptyList(), emptyList(), emptyList())
+        val state = VlmUiState(generated = GeneratedReferenceState(candidates = listOf(ready), selectedId = ready.id),
+            viewCandidates = listOf(background))
+        val descriptions = state.generatedReferenceDescriptions()
+        assertEquals("红色建筑\n主体右侧有留白", descriptions.environment)
+        assertTrue(descriptions.actualComposition.isBlank())
+        assertTrue(descriptions.shootingGuidance.isBlank())
+        assertTrue(state.copy(viewCandidates = listOf(background.copy(frameId = "another-frame")))
+            .generatedReferenceDescriptions().environment.isBlank())
+        val own = ready.copy(assets = assets.copy(descriptions = GeneratedReferenceDescriptions(environment = "当前生成图的背景说明")))
+        assertEquals("当前生成图的背景说明", state.copy(generated = state.generated.copy(candidates = listOf(own)))
+            .generatedReferenceDescriptions().environment)
+    }
+
+    @Test fun sceneDescriptionSnapshotSurvivesViewListChangesWithoutInventingGuidance() {
+        val candidate = one.copy(model = QwenImageModel.V21_TURBO, sceneDescription = "当前现场的红墙与树木",
+            assets = assets, status = GeneratedCandidateStatus.READY)
+        val state = VlmUiState(generated = GeneratedReferenceState(candidates = listOf(candidate), selectedId = candidate.id),
+            viewCandidates = listOf(ViewCandidate("another", "其他现场", "不能串入", emptyList(), emptyList(), emptyList())))
+        val descriptions = state.generatedReferenceDescriptions()
+        assertEquals(candidate.sceneDescription, descriptions.environment)
+        assertTrue(descriptions.actualComposition.isBlank())
+        assertTrue(descriptions.shootingGuidance.isBlank())
+        val saved = assets.copy(descriptions = assets.descriptions.withEnvironmentFallback(candidate.sceneDescription))
+        assertEquals(candidate.sceneDescription, Json.decodeFromString<GeneratedReferenceAssets>(Json.encodeToString(saved)).descriptions.environment)
+        val own = GeneratedReferenceDescriptions("模型实际描述", "模型指导", "模型环境")
+        assertEquals(own, own.withEnvironmentFallback(candidate.sceneDescription))
     }
 
     @Test fun debugErrorDetailPreservesExplanationAndRedactsRequestData() {

@@ -121,6 +121,41 @@ class VlmCameraScreenTest {
         assertEquals(listOf(VlmIntent.SeedreamModelSelected(SeedreamModel.PRO)), events)
     }
 
+    @Test fun qwenImageMenuUsesOfficialNamesAndDoesNotChangeSeedSelectionOrInstruction() {
+        val state = mutableStateOf(VlmUiState(settings = ModelSettings(mode = ModelMode.CLOUD, preferred = ProviderId.QWEN,
+            seedreamModel = SeedreamModel.PRO), instructionEditorVisible = true, instructionDraft = "舞姿"))
+        composeRule.setContent { MaterialTheme {
+            CompositionInstructionBar(state.value) { event ->
+                if (event is VlmIntent.QwenImageModelSelected) state.value = state.value.copy(
+                    settings = state.value.settings.copy(qwenImageModel = event.model))
+            }
+        } }
+        composeRule.onNodeWithTag("vlm_generated_model_choice").assertTextContains("极速").performClick()
+        composeRule.onNodeWithTag("vlm_qwen_image_model_V21_TURBO").assertTextContains("Qwen-Image-2.1 Turbo (极速)").assertIsSelected()
+        composeRule.onNodeWithTag("vlm_qwen_image_model_V21_PRO").assertTextContains("Qwen-Image-2.1 Pro (专业)")
+        composeRule.onNodeWithTag("vlm_qwen_image_model_V30_PRO").assertTextContains("Qwen-Image-3.0 Pro (专业)")
+        composeRule.onNodeWithTag("vlm_seedream_model_FLASH").assertDoesNotExist()
+        composeRule.onNodeWithTag("vlm_qwen_image_model_V30").assertTextContains("Qwen-Image-3.0 (标准)").performClick()
+        composeRule.onNodeWithTag("vlm_generated_model_choice").assertTextContains("标准")
+        composeRule.onNodeWithTag("vlm_ai_instruction_input").assertTextContains("舞姿")
+        assertEquals(SeedreamModel.PRO, state.value.settings.seedreamModel)
+    }
+
+    @Test fun opaqueQwenPreviewExplainsWhyApplyIsDisabled() {
+        val scene = SceneSnapshot("opaque-scene", 960, 1280, 1f, "unused", "unused")
+        val candidate = GeneratedCandidate("opaque", "batch", scene, QwenImageModel.V21_TURBO, "", 0, null,
+            status = GeneratedCandidateStatus.READY,
+            assets = GeneratedReferenceAssets("unused-preview", "", 960, 1280, "qwen-image-2.1-turbo", 1,
+                portraitIssue = GeneratedPortraitIssue.NO_TRANSPARENCY))
+        val state = VlmUiState(stage = VlmStage.READY, scene = scene,
+            settings = ModelSettings(mode = ModelMode.CLOUD, preferred = ProviderId.QWEN),
+            generated = GeneratedReferenceState(candidates = listOf(candidate), selectedId = candidate.id),
+            compositionDetailsVisible = true, compositionDetailsExpanded = true)
+        composeRule.setContent { MaterialTheme { Controls(state, {}, {}, Modifier.fillMaxWidth()) } }
+        composeRule.onNodeWithTag("vlm_generated_unavailable_reason").assertTextContains("白色背景不等于透明背景")
+        composeRule.onNodeWithTag("vlm_apply").assertIsNotEnabled()
+    }
+
     @Test fun generatedReferenceReusesOriginalActionsAndGenerationConfirmation() {
         val scene = SceneSnapshot("fixture-scene", 600, 800, 1f, "unused", "unused")
         val candidate = GeneratedCandidate("fixture-candidate", "fixture-batch", scene, SeedreamModel.FLASH,
@@ -164,14 +199,43 @@ class VlmCameraScreenTest {
                     assets = candidate.assets!!.copy(portraitPath = "", sourceLayerCount = 3)))))
         }
         composeRule.onNodeWithTag("vlm_apply").assertIsNotEnabled()
-        composeRule.onNodeWithTag("vlm_generated_enlarge").assertIsEnabled()
-        composeRule.onNodeWithText("已合成全部 3 张图层（含底图）").assertExists()
+        composeRule.onNodeWithTag("vlm_generated_enlarge").assertDoesNotExist()
+        composeRule.onNodeWithText("已合成全部 3 张图层（含底图）").assertDoesNotExist()
+        composeRule.onNodeWithText("Seedream 5.0 Flash (快速)").assertDoesNotExist()
+        composeRule.onNodeWithTag("vlm_generated_replace").assertDoesNotExist()
+        composeRule.onNodeWithTag("vlm_generated_actual").assertDoesNotExist()
+        composeRule.onNodeWithTag("vlm_generated_guidance").assertDoesNotExist()
+        composeRule.onNodeWithTag("vlm_generated_environment").assertDoesNotExist()
+        val described = candidate.copy(assets = candidate.assets!!.copy(descriptions = GeneratedReferenceDescriptions(
+            actualComposition = "女子侧身回望", shootingGuidance = "略微放低机位", environment = "灯笼下的街道")))
+        composeRule.runOnIdle {
+            rendered.value = state.copy(compositionDetailsExpanded = true,
+                generated = state.generated.copy(candidates = listOf(described)))
+        }
+        composeRule.onNodeWithTag("vlm_generated_actual").assertTextContains("实际构图：女子侧身回望")
+        composeRule.onNodeWithTag("vlm_generated_guidance").assertTextContains("拍摄指导：略微放低机位")
+        composeRule.onNodeWithTag("vlm_generated_environment").assertTextContains("环境场景：灯笼下的街道")
+        composeRule.onNodeWithText("自然", substring = false).assertDoesNotExist()
+        listOf("构图详情", "应用构图").forEach { label ->
+            val buttonLayouts = mutableListOf<TextLayoutResult>()
+            composeRule.onNodeWithText(label).performSemanticsAction(SemanticsActions.GetTextLayoutResult) { it(buttonLayouts) }
+            assertEquals(Color.White, buttonLayouts.single().layoutInput.style.color)
+        }
+        composeRule.runOnIdle {
+            val current = rendered.value
+            rendered.value = current.copy(generated = current.generated.copy(candidates = current.generated.candidates.map {
+                it.copy(assets = it.assets!!.copy(descriptions = it.assets!!.descriptions.copy(shootingGuidance = "  ")))
+            }))
+        }
+        composeRule.onNodeWithTag("vlm_generated_guidance").assertDoesNotExist()
+        composeRule.onNodeWithTag("vlm_generated_actual").assertExists()
+        composeRule.onNodeWithTag("vlm_generated_environment").assertExists()
     }
 
     @Test fun instructionModelChoiceMarksOtherBrandsUnsupportedAndHidesOfflineChoice() {
         val state = mutableStateOf(VlmUiState(settings = ModelSettings(mode = ModelMode.AUTO), instructionEditorVisible = true))
         composeRule.setContent { MaterialTheme { CompositionInstructionBar(state.value, {}) } }
-        listOf(ProviderId.QWEN, ProviderId.GPT, ProviderId.GEMINI).forEach { brand ->
+        listOf(ProviderId.GPT, ProviderId.GEMINI).forEach { brand ->
             composeRule.runOnIdle { state.value = state.value.copy(settings = state.value.settings.copy(preferred = brand)) }
             composeRule.onNodeWithTag("vlm_generated_model_choice").assertTextContains("不支持").assertIsNotEnabled()
             composeRule.onNodeWithTag("vlm_seedream_model_FLASH").assertDoesNotExist()
@@ -290,6 +354,41 @@ class VlmCameraScreenTest {
         composeRule.onNodeWithTag("vlm_preferred_ethnicity_ASIAN").performClick()
         assertEquals(listOf(VlmIntent.PreferredEthnicity(AvatarEthnicity.ASIAN)), events)
         composeRule.onNodeWithText("AI 构图导演").assertDoesNotExist()
+    }
+
+    @Test fun cloudPhotoSettingsSharesPortraitOptionsAndKeepsTestImageWithoutGlbControls() {
+        val state = mutableStateOf(VlmUiState(settings = ModelSettings(mode = ModelMode.CLOUD, preferred = ProviderId.QWEN)))
+        val events = mutableListOf<VlmIntent>()
+        composeRule.setContent { MaterialTheme { PhotoSettingsDialog(state.value, events::add, {}) } }
+        composeRule.onNodeWithTag("vlm_avatar_choice_ADULT_MALE").performClick()
+        composeRule.onNodeWithTag("vlm_preferred_ethnicity_ASIAN").performClick()
+        assertEquals(listOf(VlmIntent.AvatarSelected(AvatarId.ADULT_MALE), VlmIntent.PreferredEthnicity(AvatarEthnicity.ASIAN)), events)
+        listOf("vlm_face_setting", "vlm_ar_setting", "vlm_sample_open").forEach {
+            composeRule.onNodeWithTag(it).assertDoesNotExist()
+        }
+        composeRule.onNodeWithText("三种卡通外观初稿，姿势与表情保持一致，外观效果待验收。").assertDoesNotExist()
+        if (BuildConfig.DEBUG) composeRule.onNodeWithTag("vlm_import_image").assertExists()
+        composeRule.runOnIdle { state.value = state.value.copy(settings = state.value.settings.copy(preferred = ProviderId.SEED)) }
+        composeRule.onNodeWithTag("vlm_avatar_choice_ADULT_MALE").assertExists()
+        composeRule.onNodeWithTag("vlm_preferred_ethnicity_ASIAN").assertExists()
+        composeRule.onNodeWithTag("vlm_ar_setting").assertDoesNotExist()
+    }
+
+    @Test fun qwenDetailsShowsOnlyItsAvailableDescriptionOrAnEmptyHint() {
+        val scene = SceneSnapshot("qwen-detail", 960, 1280, 1f, "unused", "unused")
+        val candidate = GeneratedCandidate("qwen-detail", "batch", scene, QwenImageModel.V21_TURBO, "不要冒充结果说明", 0, null,
+            status = GeneratedCandidateStatus.READY, assets = GeneratedReferenceAssets("full", "person", 960, 1280, "qwen", 1))
+        val state = mutableStateOf(VlmUiState(settings = ModelSettings(mode = ModelMode.CLOUD, preferred = ProviderId.QWEN),
+            generated = GeneratedReferenceState(candidates = listOf(candidate), selectedId = candidate.id)))
+        composeRule.setContent { MaterialTheme { GeneratedReferenceDetails(state.value) } }
+        composeRule.onNodeWithTag("vlm_generated_descriptions_empty").assertExists()
+        composeRule.onNodeWithTag("vlm_generated_actual").assertDoesNotExist()
+        composeRule.onNodeWithTag("vlm_generated_guidance").assertDoesNotExist()
+        composeRule.runOnIdle { state.value = state.value.copy(generated = state.value.generated.copy(
+            candidates = listOf(candidate.copy(sceneDescription = "该千问构图对应的现场描述")))) }
+        composeRule.onNodeWithTag("vlm_generated_descriptions_empty").assertDoesNotExist()
+        composeRule.onNodeWithTag("vlm_generated_environment").assertTextContains("该千问构图对应的现场描述")
+        composeRule.onNodeWithText("不要冒充结果说明").assertDoesNotExist()
     }
 
     @Test fun modelSettingsRetainsItsOwnDialog() {

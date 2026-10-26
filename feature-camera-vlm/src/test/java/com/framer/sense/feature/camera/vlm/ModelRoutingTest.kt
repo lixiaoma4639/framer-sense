@@ -46,7 +46,7 @@ class ModelRoutingTest {
     }
 
     @Test fun unsupportedBrandsNeverBorrowSeedKeyOrFallBackToOffline() {
-        listOf(ProviderId.QWEN, ProviderId.GPT, ProviderId.GEMINI).forEach { brand ->
+        listOf(ProviderId.GPT, ProviderId.GEMINI).forEach { brand ->
             val settings = ModelSettings(mode = ModelMode.AUTO, preferred = brand, seedApiKey = "seed-key")
             assertFalse(settings.supportsImageGeneration)
             assertEquals(ReferenceSource.GENERATED_IMAGE, CameraReferenceRouting.source(settings, true))

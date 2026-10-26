@@ -264,7 +264,6 @@ class VlmCameraViewModel @Inject constructor(
             is VlmIntent.SelectGenerated -> selectGenerated(intent.id)
             is VlmIntent.RetryGenerated -> composeGenerated(intent.id)
             VlmIntent.ReplaceGenerated -> composeGenerated(_state.value.generated.selectedId)
-            is VlmIntent.GeneratedZoomVisible -> _state.update { it.copy(generated = it.generated.copy(zoomVisible = intent.visible)) }
             is VlmIntent.PhotoOrientationChanged -> {
                 if (intent.orientation == _state.value.photoOrientation) return
                 // 方向不是相机重绑：保留扫描、已冻结照片、请求令牌及生成结果。
@@ -392,23 +391,8 @@ class VlmCameraViewModel @Inject constructor(
                     instructionDraftRevision = it.instructionDraftRevision + 1) }
             is VlmIntent.InstructionDraftChanged -> if (_state.value.instructionEditorVisible && _state.value.canEditInstruction && intent.text != _state.value.instructionDraft)
                 _state.update { it.copy(instructionDraft = intent.text.take(2000), instructionDraftFromRecommendation = false) }
-            is VlmIntent.SeedreamModelSelected -> if (_state.value.instructionEditorVisible && _state.value.canEditInstruction &&
-                _state.value.settings.mode != ModelMode.OFFLINE && _state.value.settings.supportsImageGeneration) {
-                val before = _state.value.settings
-                if (before.seedreamModel == intent.model) return
-                val revision = ++generationModelRevision
-                val settings = before.copy(seedreamModel = intent.model)
-                _state.update { it.copy(settings = settings) }
-                viewModelScope.launch {
-                    try { settingsWrites.withLock { withContext(Dispatchers.IO) { settingsStore.save(settings) } } }
-                    catch (cancel: CancellationException) { throw cancel }
-                    catch (_: Exception) {
-                        if (revision == generationModelRevision) _state.update { it.copy(
-                            settings = it.settings.copy(seedreamModel = before.seedreamModel),
-                            error = models.message(R.string.vlm_generated_model_save_failed)) }
-                    }
-                }
-            }
+            is VlmIntent.SeedreamModelSelected -> selectImageGenerationModel(intent.model)
+            is VlmIntent.QwenImageModelSelected -> selectImageGenerationModel(intent.model)
             is VlmIntent.InstructionRecommendationSelected -> if (_state.value.instructionEditorVisible && _state.value.canEditInstruction)
                 _state.update { it.copy(instructionDraft = intent.text.take(2000), instructionDraftFromRecommendation = true,
                     instructionDraftRevision = it.instructionDraftRevision + 1) }
@@ -955,10 +939,32 @@ class VlmCameraViewModel @Inject constructor(
         }
     }
 
-    /** 每次只提交一个候选，已有生图任务时不再提交，应用参考不会取消任务。 */
+    private fun selectImageGenerationModel(model: ImageGenerationModel) {
+        val current = _state.value
+        if (!current.instructionEditorVisible || !current.canEditInstruction || current.settings.mode == ModelMode.OFFLINE ||
+            current.settings.preferred != model.provider || current.settings.imageGenerationModel == model) return
+        val before = current.settings
+        val revision = ++generationModelRevision
+        val settings = when (model) {
+            is SeedreamModel -> before.copy(seedreamModel = model)
+            is QwenImageModel -> before.copy(qwenImageModel = model)
+        }
+        _state.update { it.copy(settings = settings) }
+        viewModelScope.launch {
+            try { settingsWrites.withLock { withContext(Dispatchers.IO) { settingsStore.save(settings) } } }
+            catch (cancel: CancellationException) { throw cancel }
+            catch (_: Exception) {
+                if (revision == generationModelRevision) _state.update { it.copy(
+                    settings = it.settings.copy(seedreamModel = before.seedreamModel, qwenImageModel = before.qwenImageModel),
+                    error = models.message(R.string.vlm_generated_model_save_failed)) }
+            }
+        }
+    }
+
+    /** 每次只提交一个候选，不追加收费请求；保留已应用的参考。 */
     private fun composeGenerated(replacesId: String? = null) {
         val current = _state.value
-        Log.i(GeneratedReferenceDiagnostics.TAG, "生成入口 stage=${current.stage} provider=${current.settings.preferred} mode=${current.settings.mode} model=${current.settings.seedreamModel.apiId} access=${current.settings.seedAccess} keyConfigured=${current.settings.seedApiKey.isNotBlank()} serviceConfigured=${generatedRepository != null}")
+        Log.i(GeneratedReferenceDiagnostics.TAG, "生成入口 stage=${current.stage} provider=${current.settings.preferred} mode=${current.settings.mode} model=${current.settings.imageGenerationModel.apiId} official=${current.settings.officialImageGeneration} keyConfigured=${current.settings.imageGenerationKey.isNotBlank()} serviceConfigured=${generatedRepository != null}")
         if (!current.usesGeneratedReference || current.modelBusy || current.saving || current.photoSample != null ||
             current.stage !in listOf(VlmStage.FROZEN, VlmStage.READY, VlmStage.LIVE)) return
         val scene = current.scene ?: return
@@ -971,8 +977,11 @@ class VlmCameraViewModel @Inject constructor(
         if (current.cameraMode != CameraMode.NORMAL) {
             _state.update { it.copy(error = models.message(R.string.vlm_generated_normal_required)) }; return
         }
-        if (current.settings.seedAccess == SeedAccess.OFFICIAL && current.settings.seedApiKey.isBlank()) {
-            _state.update { it.copy(error = models.message(R.string.vlm_seed_key_missing)) }; return
+        if (current.settings.preferred == ProviderId.QWEN && !current.settings.officialImageGeneration) {
+            _state.update { it.copy(error = models.message(R.string.vlm_qwen_image_gateway_unsupported)) }; return
+        }
+        if (current.settings.officialImageGeneration && current.settings.imageGenerationKey.isBlank()) {
+            _state.update { it.copy(error = models.message(R.string.vlm_generated_key_missing)) }; return
         }
         if (current.generated.running) return
         val replacing = replacesId?.let { id -> current.generated.candidates.find { it.id == id } ?: return }
@@ -987,8 +996,13 @@ class VlmCameraViewModel @Inject constructor(
         val batchId = newVlmId()
         val epoch = current.generated.epoch
         val candidates = listOf(
-            GeneratedCandidate(newVlmId(), batchId, source, current.settings.seedreamModel, current.instruction,
-                current.generated.candidates.size, binding, replacesId = replacing?.id)
+            GeneratedCandidate(newVlmId(), batchId, source, current.settings.imageGenerationModel, current.instruction,
+                current.generated.candidates.size, binding, replacesId = replacing?.id,
+                portraitPreferences = GeneratedPortraitPreferences(current.selectedAvatar, current.selectedEthnicity),
+                sceneDescription = replacing?.sceneDescription?.takeIf(String::isNotBlank)
+                    ?: current.viewCandidates.firstOrNull { it.frameId == binding?.frameId }?.let {
+                        listOf(it.subject.trim(), it.reason.trim()).filter(String::isNotBlank).distinct().joinToString("\n")
+                    }.orEmpty())
         )
         _state.update {
             val alreadyVisible = it.generated.hasReady
@@ -998,7 +1012,7 @@ class VlmCameraViewModel @Inject constructor(
                 error = null, notice = null)
         }
         candidates.forEach { candidate ->
-            Log.i(GeneratedReferenceDiagnostics.TAG, "候选提交 candidate=${candidate.id} batch=$batchId scene=${source.id} model=${candidate.model.apiId} provider=${current.settings.preferred} access=${current.settings.seedAccess}")
+            Log.i(GeneratedReferenceDiagnostics.TAG, "候选提交 candidate=${candidate.id} batch=$batchId scene=${source.id} model=${candidate.model.apiId} provider=${current.settings.preferred} official=${current.settings.officialImageGeneration}")
             val job = viewModelScope.launch(start = CoroutineStart.LAZY) {
                 try {
                     generatedPermits.withPermit {
@@ -1055,7 +1069,10 @@ class VlmCameraViewModel @Inject constructor(
 
     private fun generatedFailureMessage(code: String?): String = models.message(when (code) {
         "UNSUPPORTED" -> R.string.vlm_generated_brand_unsupported
-        "AUTH", "KEY" -> R.string.vlm_seed_key_missing
+        "AUTH", "KEY" -> R.string.vlm_generated_key_missing
+        "QWEN_CONFIG" -> R.string.vlm_qwen_image_config_invalid
+        "QWEN_ACCOUNT" -> R.string.vlm_qwen_image_account_invalid
+        "QWEN_GATEWAY_UNSUPPORTED" -> R.string.vlm_qwen_image_gateway_unsupported
         "OFFLINE" -> R.string.vlm_generated_cloud_required
         "INPUT" -> R.string.vlm_generated_input_invalid
         "IMAGE_REJECTED" -> R.string.vlm_generated_image_rejected

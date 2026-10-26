@@ -5,6 +5,7 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.util.Base64
 import com.framer.sense.feature.camera.vlm.agent.GeneratedReferencePrompt
+import com.framer.sense.feature.camera.vlm.agent.QwenImageReferencePrompt
 import com.framer.sense.feature.camera.vlm.model.*
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.CancellationException
@@ -46,13 +47,17 @@ data class SeedreamLayer(val url: String, val z: Int, val name: String, val boun
     val objectHint: Boolean get() = objectPattern.containsMatchIn(contentMetadata)
 
     private companion object {
-        val noPersonPattern = Regex("(?:没有|无|不含|不包含)(?:任何)?(?:人像|人物|女子|男子|女孩|男孩|女性|男性|女士|男士)|\\b(?:no|without(?: a| any)?|not a)\\s+(?:persons?|people|humans?|women|woman|men|man|girls?|boys?)\\b", RegexOption.IGNORE_CASE)
-        val personPattern = Regex("人像|人物|女子|男子|女孩|男孩|女性|男性|女士|男士|\\b(person|people|human|woman|women|man|men|girl|girls|boy|boys)\\b", RegexOption.IGNORE_CASE)
+        val noPersonPattern = Regex("(?:没有|无|不含|不包含)(?:任何)?(?:人像|人物|女子|男子|女孩|男孩|女性|男性|女士|男士|少女|少年|人形角色|动漫角色|卡通角色)|\\b(?:no|without(?: a| any)?|not a)\\s+(?:persons?|people|humans?|humanoids?|women|woman|men|man|girls?|boys?)\\b", RegexOption.IGNORE_CASE)
+        val personPattern = Regex("人像|人物|女子|男子|女孩|男孩|女性|男性|女士|男士|少女|少年|人形角色|动漫角色|卡通角色|\\b(person|people|human|humanoid|woman|women|man|men|girl|girls|boy|boys)\\b", RegexOption.IGNORE_CASE)
         val objectPattern = Regex("凳|椅|桌|家具|建筑|\\b(stool|bench|chair|table|furniture|building)\\b", RegexOption.IGNORE_CASE)
     }
 }
 data class SeedreamLayers(val model: String, val layers: List<SeedreamLayer>, val outputs: Int) {
     val foregroundLayers: List<SeedreamLayer> get() = layers.filter { it.z > 0 }.sortedBy { it.z }
+    val descriptions: GeneratedReferenceDescriptions get() = GeneratedReferenceDescriptions(
+        actualComposition = personLayers.map { it.description.trim() }.filter { it.isNotBlank() }.distinct().joinToString("\n"),
+        environment = layers.firstOrNull { it.z == 0 }?.description.orEmpty().trim()
+    )
     val personLayers: List<SeedreamLayer> get() {
         // 人物标签只是命名约定；即使标签匹配，也必须有独立的人物内容线索。
         val foregrounds = layers.filter { it.z > 0 && it.personHint }
@@ -137,9 +142,9 @@ class GeneratedReferenceRepository(context: Context) : GeneratedReferenceGenerat
 
     override suspend fun generate(candidate: GeneratedCandidate, settings: ModelSettings): GeneratedReferenceAssets = withContext(Dispatchers.IO) {
         val trace = GeneratedReferenceTrace(candidate)
-        trace.event("BEGIN", "provider=${settings.preferred} access=${settings.seedAccess} keyConfigured=${settings.seedApiKey.isNotBlank()} gatewayTokenConfigured=${settings.gatewayToken.isNotBlank()}")
+        trace.event("BEGIN", "provider=${settings.preferred} official=${settings.officialImageGeneration} keyConfigured=${settings.imageGenerationKey.isNotBlank()} gatewayTokenConfigured=${settings.gatewayToken.isNotBlank()}")
         try {
-            if (!settings.supportsImageGeneration) throw GeneratedReferenceFailure("UNSUPPORTED")
+            if (!settings.supportsImageGeneration || candidate.model.provider != settings.preferred) throw GeneratedReferenceFailure("UNSUPPORTED")
             val folder = File(root, candidate.id).apply { mkdirs() }
             val manifest = File(folder, "assets.json")
             if (manifest.isFile) {
@@ -159,28 +164,84 @@ class GeneratedReferenceRepository(context: Context) : GeneratedReferenceGenerat
             BitmapFactory.decodeByteArray(inputBytes, 0, inputBytes.size, inputInfo)
             trace.event("INPUT_DATA", "bytes=${inputBytes.size} fingerprint=${GeneratedReferenceDiagnostics.imageFingerprint(inputBytes)} actualWidth=${inputInfo.outWidth} actualHeight=${inputInfo.outHeight} mime=${GeneratedReferenceDiagnostics.identifier(inputInfo.outMimeType?.replace('/', '_'))}")
             val encoded = Base64.encodeToString(inputBytes, Base64.NO_WRAP)
-            val prompt = GeneratedReferencePrompt.build(candidate.instruction, candidate.variation)
-            trace.event("PARAMETERS", "layer_decomposition=true size=1.5K output_format=png response_format=url promptChars=${prompt.length}")
-            val response = if (settings.seedAccess == SeedAccess.OFFICIAL) {
-                if (settings.seedApiKey.isBlank()) throw GeneratedReferenceFailure("KEY")
-                val url = CloudModelConfig.imageBaseUrl.trimEnd('/') + CloudModelConfig.imageGenerationPath
-                val request = Request.Builder().url(url).header("Authorization", "Bearer ${settings.seedApiKey.trim()}")
-                    .post(SeedreamImageProtocol.payload(candidate.model.apiId, "data:image/jpeg;base64,$encoded", prompt)
-                        .toString().toRequestBody("application/json".toMediaType())).build()
-                execute(request, trace, "GENERATE", privateValues = listOf(settings.seedApiKey.trim(), prompt, candidate.instruction))
-                    .let { (status, bytes) -> SeedreamImageProtocol.response(status, bytes.toString(Charsets.UTF_8), candidate.model.apiId) }
-            } else gateway(candidate, settings, encoded, prompt, trace)
-            trace.event("LAYERS_PARSED", "actualModel=${GeneratedReferenceDiagnostics.identifier(response.model)} layers=${response.layers.size} personLayers=${response.personLayers.size} outputs=${response.outputs}")
-            // 保留串行位图合成，避免后续调用方式调整时多份大画布同时占用内存。
-            val result = renderMutex.withLock { render(response, candidate, settings, folder, trace) }
+            val result = if (candidate.model is QwenImageModel) {
+                generateQwen(candidate, settings, inputBytes, inputInfo, encoded, folder, trace)
+            } else {
+                val prompt = GeneratedReferencePrompt.build(candidate.instruction, candidate.variation, candidate.portraitPreferences)
+                trace.event("PARAMETERS", "layer_decomposition=true size=1.5K output_format=png response_format=url promptChars=${prompt.length}")
+                val response = if (settings.seedAccess == SeedAccess.OFFICIAL) {
+                    if (settings.seedApiKey.isBlank()) throw GeneratedReferenceFailure("KEY")
+                    val url = CloudModelConfig.imageBaseUrl.trimEnd('/') + CloudModelConfig.imageGenerationPath
+                    val request = Request.Builder().url(url).header("Authorization", "Bearer ${settings.seedApiKey.trim()}")
+                        .post(SeedreamImageProtocol.payload(candidate.model.apiId, "data:image/jpeg;base64,$encoded", prompt)
+                            .toString().toRequestBody("application/json".toMediaType())).build()
+                    execute(request, trace, "GENERATE", privateValues = listOf(settings.seedApiKey.trim(), prompt, candidate.instruction))
+                        .let { (status, bytes) -> SeedreamImageProtocol.response(status, bytes.toString(Charsets.UTF_8), candidate.model.apiId) }
+                } else gateway(candidate, settings, encoded, prompt, trace)
+                trace.event("LAYERS_PARSED", "actualModel=${GeneratedReferenceDiagnostics.identifier(response.model)} layers=${response.layers.size} personLayers=${response.personLayers.size} outputs=${response.outputs}")
+                // 保留串行位图合成，避免后续调用方式调整时多份大画布同时占用内存。
+                renderMutex.withLock { render(response, candidate, settings, folder, trace) }
+            }
+            val saved = result.copy(descriptions = result.descriptions.withEnvironmentFallback(candidate.sceneDescription))
             trace.event("PERSIST")
             val pending = File(folder, "assets.pending")
-            pending.writeText(VlmJson.encodeToString(result))
+            pending.writeText(VlmJson.encodeToString(saved))
             check(pending.renameTo(manifest))
             trace.event("READY", "width=${result.width} height=${result.height} layers=${result.sourceLayerCount} hasPortrait=${result.hasPortrait} compositeBytes=${File(result.compositePath).length()} portraitBytes=${if (result.hasPortrait) File(result.portraitPath).length() else 0}")
-            result
+            saved
         } catch (cancel: CancellationException) { trace.event("CANCELLED"); throw cancel }
         catch (failure: Exception) { trace.failed("FAILED", failure); throw failure }
+    }
+
+    private suspend fun generateQwen(candidate: GeneratedCandidate, settings: ModelSettings, input: ByteArray,
+                                     info: BitmapFactory.Options, encoded: String, folder: File,
+                                     trace: GeneratedReferenceTrace): GeneratedReferenceAssets {
+        if (settings.qwenAccess != QwenAccess.OFFICIAL) throw GeneratedReferenceFailure("QWEN_GATEWAY_UNSUPPORTED")
+        if (input.size > 10 * 1024 * 1024 || info.outWidth !in 1..8000 || info.outHeight !in 1..8000)
+            throw GeneratedReferenceFailure("INPUT")
+        val model = candidate.model as QwenImageModel
+        val prompt = QwenImageReferencePrompt.build(candidate.instruction, candidate.variation, candidate.portraitPreferences)
+        val payload = QwenImageProtocol.payload(model, "data:${info.outMimeType};base64,$encoded", prompt, info.outWidth, info.outHeight)
+        val request = Request.Builder().url(QwenImageProtocol.endpoint(settings))
+            .header("Authorization", "Bearer ${settings.qwenApiKey.trim()}")
+            .post(payload.toString().toRequestBody("application/json".toMediaType())).build()
+        trace.event("PARAMETERS", "provider=QWEN n=1 inputSize=${info.outWidth}x${info.outHeight} size=${payload["size"]!!.jsonPrimitive.content} transparentRequested=true promptExtend=false promptChars=${prompt.length}")
+        // 与 Seedream 共用不自动重发 POST 的客户端；资源 GET 仍只做有界重试。
+        val (status, bytes) = execute(request, trace, "GENERATE", privateValues = listOf(settings.qwenApiKey.trim(), prompt, candidate.instruction))
+        val url = QwenImageProtocol.response(status, bytes.toString(Charsets.UTF_8))
+        val downloaded = download(url, settings, trace, "QWEN_FOREGROUND")
+        val foreground = downloaded.bitmap
+        try {
+            return renderMutex.withLock {
+                val background = BitmapFactory.decodeByteArray(input, 0, input.size, BitmapFactory.Options().apply {
+                    inPreferredConfig = Bitmap.Config.ARGB_8888
+                    inSampleSize = referenceImageSampleSize(info.outWidth, info.outHeight)
+                }) ?: throw GeneratedReferenceFailure("INPUT")
+                try {
+                    val alpha = QwenReferenceCompositor.alphaStats(foreground)
+                    val transparent = alpha.usable
+                    val aspectMatches = QwenReferenceCompositor.matchingAspect(background, foreground)
+                    trace.event("QWEN_ALPHA", "transparentForeground=$transparent aspectMatches=$aspectMatches hasAlphaChannel=${alpha.hasAlphaChannel} totalPixels=${alpha.total} clearPixels=${alpha.clear} visiblePixels=${alpha.visible} inputWidth=${background.width} inputHeight=${background.height} outputWidth=${foreground.width} outputHeight=${foreground.height} semanticPersonVerified=false")
+                    val fullFile = File(folder, "composition.png")
+                    if (!transparent || !aspectMatches) {
+                        fullFile.outputStream().use { check(foreground.compress(Bitmap.CompressFormat.PNG, 100, it)) }
+                        GeneratedReferenceAssets(fullFile.path, "", foreground.width, foreground.height, model.apiId, 1,
+                            portraitIssue = if (!transparent) GeneratedPortraitIssue.NO_TRANSPARENCY else GeneratedPortraitIssue.ASPECT_MISMATCH)
+                    } else {
+                        val portrait = QwenReferenceCompositor.portrait(background, foreground)
+                        try {
+                            val complete = QwenReferenceCompositor.composite(background, portrait)
+                            try {
+                                fullFile.outputStream().use { check(complete.compress(Bitmap.CompressFormat.PNG, 100, it)) }
+                                val portraitFile = File(folder, "portrait.png")
+                                portraitFile.outputStream().use { check(portrait.compress(Bitmap.CompressFormat.PNG, 100, it)) }
+                                GeneratedReferenceAssets(fullFile.path, portraitFile.path, complete.width, complete.height, model.apiId, 1)
+                            } finally { complete.recycle() }
+                        } finally { portrait.recycle() }
+                    }
+                } finally { background.recycle() }
+            }
+        } finally { foreground.recycle() }
     }
 
     private suspend fun gateway(candidate: GeneratedCandidate, settings: ModelSettings, image: String, prompt: String, trace: GeneratedReferenceTrace): SeedreamLayers {
@@ -241,7 +302,7 @@ class GeneratedReferenceRepository(context: Context) : GeneratedReferenceGenerat
                     }.path
                 } else ""
                 return GeneratedReferenceAssets(compositeFile.path, portraitPath, base.width, base.height,
-                    response.model, response.outputs, sourceLayerCount = response.layers.size)
+                    response.model, response.outputs, sourceLayerCount = response.layers.size, descriptions = response.descriptions)
             }
         } finally { base.recycle() }
     }
@@ -251,12 +312,17 @@ class GeneratedReferenceRepository(context: Context) : GeneratedReferenceGenerat
     private suspend fun download(url: String, settings: ModelSettings, trace: GeneratedReferenceTrace, layer: String): DownloadedImage {
         val request = if (url.startsWith(CloudModelConfig.portraitGatewayPath + "/") &&
             Regex(Regex.escape(CloudModelConfig.portraitGatewayPath) + "/[a-zA-Z0-9-]+/assets/[0-9]+").matches(url) &&
-            settings.seedAccess == SeedAccess.GATEWAY) {
+            settings.preferred == ProviderId.SEED && settings.seedAccess == SeedAccess.GATEWAY) {
             val base = settings.gateway.trimEnd('/').toHttpUrlOrNull() ?: throw GeneratedReferenceFailure("ASSET_URL")
             val target = (base.toString().trimEnd('/') + url).toHttpUrlOrNull() ?: throw GeneratedReferenceFailure("ASSET_URL")
             Request.Builder().url(target).header("Authorization", "Bearer ${settings.gatewayToken}").build()
         } else {
-            if (!SeedreamImageProtocol.trustedAsset(url)) throw GeneratedReferenceFailure("ASSET_URL")
+            val trusted = when (settings.preferred) {
+                ProviderId.QWEN -> QwenImageProtocol.trustedAsset(url)
+                ProviderId.SEED -> SeedreamImageProtocol.trustedAsset(url)
+                else -> false
+            }
+            if (!trusted) throw GeneratedReferenceFailure("ASSET_URL")
             Request.Builder().url(url).build()
         }
         val (status, bytes) = retryGeneratedAssetDownload(request.method, onRetry = { failure ->

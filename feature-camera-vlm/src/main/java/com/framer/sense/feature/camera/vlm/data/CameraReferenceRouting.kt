@@ -25,10 +25,12 @@ object CameraReferenceRouting {
         ModelMode.OFFLINE -> ReferenceSource.LEGACY_GLB
         ModelMode.CLOUD -> ReferenceSource.GENERATED_IMAGE
         // 尚未接入的品牌保持云端入口并明确提示，不隐式换品牌或降级。
-        ModelMode.AUTO -> if (!settings.supportsImageGeneration || networkAvailable && when (settings.seedAccess) {
-            SeedAccess.OFFICIAL -> settings.seedApiKey.isNotBlank()
-            SeedAccess.GATEWAY -> settings.gateway.isNotBlank() && settings.gatewayToken.isNotBlank()
-        }) ReferenceSource.GENERATED_IMAGE else ReferenceSource.LEGACY_GLB
+        ModelMode.AUTO -> if (!settings.supportsImageGeneration ||
+            // 千问网关尚无生图能力，保留入口提示，不借用豆包服务或静默降级。
+            settings.preferred == ProviderId.QWEN && !settings.officialImageGeneration ||
+            networkAvailable && if (settings.officialImageGeneration) settings.imageGenerationKey.isNotBlank()
+                else settings.gateway.isNotBlank() && settings.gatewayToken.isNotBlank()
+        ) ReferenceSource.GENERATED_IMAGE else ReferenceSource.LEGACY_GLB
     }
 
     /** 首轮全部因服务问题失败才降级；保留成功参考，不因质量问题或用户取消而换路线。 */

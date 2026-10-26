@@ -3,9 +3,26 @@ package com.framer.sense.feature.camera.vlm.model
 import kotlinx.serialization.Serializable
 
 @Serializable enum class ReferenceSource { LEGACY_GLB, GENERATED_IMAGE }
-@Serializable enum class SeedreamModel {
+sealed interface ImageGenerationModel {
+    val apiId: String
+    val provider: ProviderId
+}
+
+@Serializable enum class QwenImageModel : ImageGenerationModel {
+    V21_TURBO, V21_PRO, V30, V30_PRO;
+    override val provider: ProviderId get() = ProviderId.QWEN
+    override val apiId: String get() = when (this) {
+        V21_TURBO -> CloudModelConfig.qwenImage21Turbo
+        V21_PRO -> CloudModelConfig.qwenImage21Pro
+        V30 -> CloudModelConfig.qwenImage30
+        V30_PRO -> CloudModelConfig.qwenImage30Pro
+    }
+}
+
+@Serializable enum class SeedreamModel : ImageGenerationModel {
     FLASH, PRO;
-    val apiId: String get() = when (this) {
+    override val provider: ProviderId get() = ProviderId.SEED
+    override val apiId: String get() = when (this) {
         FLASH -> CloudModelConfig.seedreamFlash
         PRO -> CloudModelConfig.seedreamPro
     }
@@ -22,6 +39,20 @@ data class BackgroundReferenceTarget(
 
 fun CompositionPlan.backgroundTarget() = BackgroundReferenceTarget(id, revision, crop, zoom, viewBinding)
 
+/** 只保存真实取得的说明；缺失字段留空，不将用户输入充当结果分析。 */
+@Serializable
+data class GeneratedReferenceDescriptions(
+    val actualComposition: String = "",
+    val shootingGuidance: String = "",
+    val environment: String = ""
+) {
+    fun withEnvironmentFallback(sceneDescription: String) = copy(
+        environment = environment.trim().ifBlank { sceneDescription.trim() }
+    )
+}
+
+@Serializable enum class GeneratedPortraitIssue { NO_TRANSPARENCY, ASPECT_MISMATCH }
+
 @Serializable
 data class GeneratedReferenceAssets(
     val compositePath: String,
@@ -30,7 +61,9 @@ data class GeneratedReferenceAssets(
     val height: Int,
     val actualModel: String,
     val outputImages: Int,
-    val sourceLayerCount: Int = 0
+    val sourceLayerCount: Int = 0,
+    val descriptions: GeneratedReferenceDescriptions = GeneratedReferenceDescriptions(),
+    val portraitIssue: GeneratedPortraitIssue? = null
 ) {
     /** 无人像时保留完整构图；空路径不代表可用的透明人像。 */
     val hasPortrait: Boolean get() = portraitPath.isNotBlank()
@@ -38,11 +71,18 @@ data class GeneratedReferenceAssets(
 
 enum class GeneratedCandidateStatus { QUEUED, RUNNING, READY, FAILED, CANCELLED }
 
+/** 提交时快照，后续修改设置不影响在途请求或历史构图。 */
+@Serializable
+data class GeneratedPortraitPreferences(
+    val avatar: AvatarId = AvatarId.ADULT_FEMALE,
+    val ethnicity: AvatarEthnicity = AvatarEthnicity.ASIAN
+)
+
 data class GeneratedCandidate(
     val id: String,
     val batchId: String,
     val scene: SceneSnapshot,
-    val model: SeedreamModel,
+    val model: ImageGenerationModel,
     val instruction: String,
     val variation: Int,
     val viewBinding: PhotoViewBinding?,
@@ -51,7 +91,9 @@ data class GeneratedCandidate(
     val assets: GeneratedReferenceAssets? = null,
     val errorCode: String? = null,
     val completedOrder: Int? = null,
-    val replacesId: String? = null
+    val replacesId: String? = null,
+    val portraitPreferences: GeneratedPortraitPreferences = GeneratedPortraitPreferences(),
+    val sceneDescription: String = ""
 ) {
     val ready: Boolean get() = status == GeneratedCandidateStatus.READY && assets != null
     val canApply: Boolean get() = ready && assets?.hasPortrait == true
@@ -63,8 +105,7 @@ data class GeneratedReferenceState(
     val epoch: String = "initial",
     val candidates: List<GeneratedCandidate> = emptyList(),
     val selectedId: String? = null,
-    val applied: GeneratedCandidate? = null,
-    val zoomVisible: Boolean = false
+    val applied: GeneratedCandidate? = null
 ) {
     val selected: GeneratedCandidate? get() = candidates.firstOrNull { it.id == selectedId }
     val running: Boolean get() = candidates.any { it.status in listOf(GeneratedCandidateStatus.QUEUED, GeneratedCandidateStatus.RUNNING) }

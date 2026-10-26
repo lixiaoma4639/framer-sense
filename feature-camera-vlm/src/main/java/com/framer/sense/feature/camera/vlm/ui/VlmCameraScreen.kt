@@ -15,9 +15,6 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.gestures.awaitEachGesture
-import androidx.compose.foundation.gestures.awaitFirstDown
-import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
@@ -329,27 +326,17 @@ private fun CameraPane(state: VlmUiState, controller: VlmCameraController, permi
                         GeneratedReferenceImage(generatedPreview, Modifier.fillMaxSize())
                     } else if (preview != null) {
                         CameraPhotoViewport(scene.orientation.previewDegrees, Modifier.fillMaxSize()) {
-                            Image(preview.composite.asImageBitmap(), stringResource(R.string.vlm_selected_composition), Modifier.fillMaxSize().testTag("vlm_selected_preview")
-                                .pointerInput(selected.id, state.compositionBatchId, state.stage) {
-                                    if (state.stage == VlmStage.READY) awaitEachGesture {
-                                        val first = awaitFirstDown(requireUnconsumed = false)
-                                        var multiple = false
-                                        do {
-                                            val event = awaitPointerEvent()
-                                            if (event.changes.count { it.pressed } > 1) multiple = true
-                                            val change = event.changes.firstOrNull { it.id == first.id }
-                                            if (!multiple && change?.pressed == true) {
-                                                val amount = change.positionChange()
-                                                change.consume()
-                                                if (amount != androidx.compose.ui.geometry.Offset.Zero) {
-                                                    val imageSize = fitCaptureViewport(size.width.toFloat(), size.height.toFloat(),
-                                                        preview.composite.width.toFloat() / preview.composite.height)
-                                                    onEvent(VlmIntent.Move(amount.x / imageSize.width, amount.y / imageSize.height))
-                                                }
-                                            }
-                                        } while (event.changes.any { it.pressed })
-                                    }
-                                }, contentScale = ContentScale.Fit)
+                            ZoomablePhotoPreview(
+                                imageKey = listOf(scene.id, selected.id, state.compositionBatchId, scene.orientation.previewDegrees),
+                                aspectRatio = preview.composite.width.toFloat() / preview.composite.height,
+                                modifier = Modifier.fillMaxSize().testTag("vlm_legacy_preview_zoom"),
+                                onUnzoomedDrag = if (state.stage == VlmStage.READY) { amount ->
+                                    onEvent(VlmIntent.Move(amount.x, amount.y))
+                                } else null
+                            ) {
+                                Image(preview.composite.asImageBitmap(), stringResource(R.string.vlm_selected_composition),
+                                    Modifier.fillMaxSize().testTag("vlm_selected_preview"), contentScale = ContentScale.Fit)
+                            }
                         }
                     } else FrozenSceneImage(scene, Modifier.fillMaxSize())
                 }
@@ -366,8 +353,11 @@ private fun CameraPane(state: VlmUiState, controller: VlmCameraController, permi
 @Composable
 internal fun FrozenSceneImage(scene: SceneSnapshot, modifier: Modifier = Modifier) {
     CameraPhotoViewport(scene.orientation.previewDegrees, modifier.fillMaxSize()) {
-        AsyncImage(File(scene.imagePath), stringResource(R.string.vlm_scan_frame),
-            Modifier.fillMaxSize().testTag("vlm_frozen_scene"), contentScale = ContentScale.Fit)
+        ZoomablePhotoPreview(listOf(scene.id, scene.imagePath, scene.orientation.previewDegrees), scene.width.toFloat() / scene.height,
+            Modifier.fillMaxSize().testTag("vlm_background_preview_zoom")) {
+            AsyncImage(File(scene.imagePath), stringResource(R.string.vlm_scan_frame),
+                Modifier.fillMaxSize().testTag("vlm_frozen_scene"), contentScale = ContentScale.Fit)
+        }
     }
 }
 
@@ -497,19 +487,16 @@ private fun CameraSurface(controller: VlmCameraController, state: VlmUiState, on
 internal fun CompositionDescriptions(result: CompositionResult, selectedId: String?, sceneObservation: String? = null) {
     val index = result.plans.indexOfFirst { it.id == selectedId }
     val plan = result.plans.getOrNull(index) ?: return
-    Text(stringResource(R.string.vlm_composition_recommendations), style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold, color = Color(0xFF111111))
+    Text(stringResource(R.string.vlm_composition_recommendations), style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold, color = Color.White)
     val fallback = plan.title.isBlank() || plan.localCombination != null || plan.uncertainties.contains(CompositionIntentMapper.SCENE_FALLBACK_MARKER)
     val title = if (fallback) stringResource(R.string.vlm_composition_plan_number, index + 1) else plan.title
     val actual = stringResource(
         R.string.vlm_composition_attributes,
         shotLabel(plan.shot), placementZoneLabel(plan.avatar.foot.x), planFacingLabel(plan)
     )
-    Column(
-        Modifier.fillMaxWidth().border(1.dp, MaterialTheme.colorScheme.outlineVariant, MaterialTheme.shapes.small).padding(8.dp),
-        verticalArrangement = Arrangement.spacedBy(2.dp)
-    ) {
+    CompositionDescriptionCard {
         Text(if (fallback) title else stringResource(R.string.vlm_composition_plan_title, index + 1, title),
-            style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold, color = Color(0xFF111111))
+            style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold, color = Color.White)
         val observation = plan.sceneDescription?.takeIf { it.isNotBlank() }
             ?: sceneObservation?.takeIf { it.isNotBlank() } ?: plan.reason.takeIf { it.isNotBlank() }
         if (plan.reason.isNotBlank() && plan.reason != observation)
@@ -529,7 +516,7 @@ internal fun CompositionDescriptions(result: CompositionResult, selectedId: Stri
         CompositionDescriptionText(listOf(stringResource(R.string.vlm_description_guidance) to compositionGuidanceText(plan)),
             modifier = Modifier.testTag("vlm_resolved_guidance"))
         Text(stringResource(R.string.vlm_guidance_size, guidance.heightPercent, guidance.horizontalPercent),
-            style = MaterialTheme.typography.labelSmall, color = Color(0xFF444444))
+            style = MaterialTheme.typography.labelSmall, color = Color.White)
         observation?.let {
             CompositionDescriptionText(listOf(stringResource(R.string.vlm_description_environment) to
                 SceneDescriptionFormatting.format(it)), modifier = Modifier.testTag("vlm_scene_description"))
@@ -537,18 +524,24 @@ internal fun CompositionDescriptions(result: CompositionResult, selectedId: Stri
     }
 }
 
-/** 标题用深黑粗体，内容用较浅黑色；各项统一以分号分隔。 */
+/** 标题使用白色粗体，内容使用白色常规字重；各项以分号分隔。 */
 @Composable
-private fun CompositionDescriptionText(fields: List<Pair<String, String>>,
+internal fun CompositionDescriptionText(fields: List<Pair<String, String>>,
     modifier: Modifier = Modifier, style: TextStyle = MaterialTheme.typography.bodySmall) {
     val separator = stringResource(R.string.vlm_description_separator)
     Text(buildAnnotatedString {
         fields.forEachIndexed { index, (label, content) ->
             if (index > 0) append(separator)
-            withStyle(SpanStyle(color = Color(0xFF111111), fontWeight = FontWeight.Bold)) { append(label) }
-            withStyle(SpanStyle(color = Color(0xFF444444), fontWeight = FontWeight.Normal)) { append(content) }
+            withStyle(SpanStyle(color = Color.White, fontWeight = FontWeight.Bold)) { append(label) }
+            withStyle(SpanStyle(color = Color.White, fontWeight = FontWeight.Normal)) { append(content) }
         }
     }, modifier = modifier, style = style)
+}
+
+@Composable
+internal fun CompositionDescriptionCard(content: @Composable ColumnScope.() -> Unit) {
+    Column(Modifier.fillMaxWidth().border(1.dp, Color.White.copy(alpha = .25f), MaterialTheme.shapes.small).padding(8.dp),
+        verticalArrangement = Arrangement.spacedBy(2.dp), content = content)
 }
 
 /** 文字由最终布局和渲染动作派生，拖动、缩放或去重后自动跟随。 */
@@ -705,6 +698,7 @@ internal fun PhotoFacePreview(state: VlmUiState, busy: Boolean, onEvent: (VlmInt
 
 @Composable
 internal fun AvatarEthnicitySelector(selected: AvatarEthnicity, enabled: Boolean, tagPrefix: String,
+                                    showDraftHint: Boolean = true,
                                     onSelect: (AvatarEthnicity) -> Unit) {
     Text(stringResource(R.string.vlm_avatar_ethnicity_title), style = MaterialTheme.typography.labelLarge)
     LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -718,14 +712,14 @@ internal fun AvatarEthnicitySelector(selected: AvatarEthnicity, enabled: Boolean
                 })) })
         }
     }
-    Text(stringResource(R.string.vlm_avatar_ethnicity_draft), style = MaterialTheme.typography.bodySmall)
+    if (showDraftHint) Text(stringResource(R.string.vlm_avatar_ethnicity_draft), style = MaterialTheme.typography.bodySmall)
 }
 
 @Composable
 private fun resolvedArmLabel(guide: CompositionGuidance): String =
     if (guide.legacyHandNearFace) poseLabel(PoseId.HAT) else armLabel(guide.directive.arms)
 
-/** 在生成前由用户固定本次构图参考的角色，模型不会根据图片替换该选择。 */
+/** 离线角色与云端创作偏好共用同一选择，各自链路处理身份保留等约束。 */
 @Composable
 internal fun AvatarSelector(state: VlmUiState, onEvent: (VlmIntent) -> Unit, busy: Boolean) {
     Text(stringResource(R.string.vlm_avatar_select_title), style = MaterialTheme.typography.labelLarge)
@@ -735,7 +729,8 @@ internal fun AvatarSelector(state: VlmUiState, onEvent: (VlmIntent) -> Unit, bus
                 selected = state.selectedAvatar == avatar,
                 onClick = { onEvent(VlmIntent.AvatarSelected(avatar)) },
                 enabled = !busy,
-                label = { Text(avatarLabel(avatar)) }
+                label = { Text(avatarLabel(avatar)) },
+                modifier = Modifier.testTag("vlm_avatar_choice_${avatar.name}")
             )
         }
     }

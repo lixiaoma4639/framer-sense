@@ -176,10 +176,22 @@ val VlmJson = Json { encodeDefaults = true; explicitNulls = true }
     @kotlinx.serialization.Transient val seedApiKey: String = "",
     val referenceSource: ReferenceSource = ReferenceSource.LEGACY_GLB,
     val seedreamModel: SeedreamModel = SeedreamModel.FLASH,
+    val qwenImageModel: QwenImageModel = QwenImageModel.V21_TURBO,
     /** 兼容已保存的旧字段；实际生图接入始终复用 seedAccess。 */
     val imageAccess: SeedAccess = SeedAccess.OFFICIAL
 ) {
-    val supportsImageGeneration: Boolean get() = preferred == ProviderId.SEED
+    val supportsImageGeneration: Boolean get() = preferred in listOf(ProviderId.SEED, ProviderId.QWEN)
+    val imageGenerationModel: ImageGenerationModel get() = if (preferred == ProviderId.QWEN) qwenImageModel else seedreamModel
+    val officialImageGeneration: Boolean get() = when (preferred) {
+        ProviderId.QWEN -> qwenAccess == QwenAccess.OFFICIAL
+        ProviderId.SEED -> seedAccess == SeedAccess.OFFICIAL
+        else -> false
+    }
+    val imageGenerationKey: String get() = when (preferred) {
+        ProviderId.QWEN -> qwenApiKey
+        ProviderId.SEED -> seedApiKey
+        else -> ""
+    }
 
     /** 区域兼容旧协议；生图与视觉分析共用同一品牌的接入方式和密钥。 */
     fun normalizeCloudSelection(): ModelSettings = copy(

@@ -18,6 +18,11 @@ object CloudModelConfig {
     const val qwenBaseUrl = BuildConfig.MODEL_PROVIDERS_QWEN_BASE_URL
     const val qwenModel = BuildConfig.MODEL_PROVIDERS_QWEN_MODEL
     const val qwenVisionPath = BuildConfig.MODEL_PROVIDERS_QWEN_VISION_PATH
+    const val qwenImageGenerationPath = BuildConfig.MODEL_PROVIDERS_QWEN_IMAGE_GENERATION_PATH
+    const val qwenImage21Turbo = BuildConfig.MODEL_PROVIDERS_QWEN_IMAGE_MODELS_V21_TURBO
+    const val qwenImage21Pro = BuildConfig.MODEL_PROVIDERS_QWEN_IMAGE_MODELS_V21_PRO
+    const val qwenImage30 = BuildConfig.MODEL_PROVIDERS_QWEN_IMAGE_MODELS_V30
+    const val qwenImage30Pro = BuildConfig.MODEL_PROVIDERS_QWEN_IMAGE_MODELS_V30_PRO
     val qwenAllowedHosts = BuildConfig.MODEL_PROVIDERS_QWEN_ALLOWED_HOSTS.split(',').map { it.trim() }.toSet()
     const val qwenWorkspaceHostSuffix = BuildConfig.MODEL_PROVIDERS_QWEN_WORKSPACE_HOST_SUFFIX
     const val seedBaseUrl = BuildConfig.MODEL_PROVIDERS_SEED_BASE_URL

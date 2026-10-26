@@ -4,7 +4,6 @@ import android.content.res.Configuration
 import androidx.compose.foundation.border
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.LazyListState
@@ -13,12 +12,8 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clipToBounds
-import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.RectangleShape
-import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.platform.LocalConfiguration
@@ -27,6 +22,7 @@ import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import coil3.compose.AsyncImage
+import com.framer.sense.feature.camera.vlm.agent.SceneDescriptionFormatting
 import com.framer.sense.feature.camera.vlm.R
 import com.framer.sense.feature.camera.vlm.model.*
 import java.io.File
@@ -34,6 +30,14 @@ import java.io.File
 @Composable
 internal fun seedreamModelLabel(model: SeedreamModel): String = stringResource(
     if (model == SeedreamModel.FLASH) R.string.vlm_seedream_flash else R.string.vlm_seedream_pro)
+
+@Composable
+internal fun qwenImageModelLabel(model: QwenImageModel): String = stringResource(when (model) {
+    QwenImageModel.V21_TURBO -> R.string.vlm_qwen_image_21_turbo
+    QwenImageModel.V21_PRO -> R.string.vlm_qwen_image_21_pro
+    QwenImageModel.V30 -> R.string.vlm_qwen_image_30
+    QwenImageModel.V30_PRO -> R.string.vlm_qwen_image_30_pro
+})
 
 @Composable
 internal fun GeneratedReferenceCards(state: VlmUiState, onEvent: (VlmIntent) -> Unit, scroll: LazyListState) {
@@ -92,32 +96,47 @@ internal fun GeneratedReferenceCards(state: VlmUiState, onEvent: (VlmIntent) -> 
     }
 }
 
-@Composable
-internal fun GeneratedReferenceDetails(state: VlmUiState, onEvent: (VlmIntent) -> Unit) {
-    val selected = state.generated.selected ?: return
-    Text(seedreamModelLabel(selected.model), color = Color.White, style = MaterialTheme.typography.labelSmall)
-    selected.assets?.let { assets ->
-        if (assets.sourceLayerCount > 0) Text(stringResource(R.string.vlm_generated_all_layers, assets.sourceLayerCount),
-            color = Color.White, style = MaterialTheme.typography.bodySmall)
-        if (!assets.hasPortrait) Text(stringResource(R.string.vlm_generated_portrait_unavailable),
-            color = Color.White, style = MaterialTheme.typography.bodySmall)
-    }
-    if (selected.instruction.isNotBlank()) Text(selected.instruction, color = Color.White, style = MaterialTheme.typography.bodySmall)
-    CameraActionRow {
-        CameraAction(R.string.vlm_generated_enlarge, "vlm_generated_enlarge", !state.operationBusy) {
-            onEvent(VlmIntent.GeneratedZoomVisible(true))
-        }
-        CameraAction(R.string.vlm_generated_replace, "vlm_generated_replace", !state.operationBusy) {
-            onEvent(VlmIntent.ReplaceGenerated)
-        }
-    }
+internal fun VlmUiState.generatedReferenceDescriptions(): GeneratedReferenceDescriptions {
+    val selected = generated.selected ?: return GeneratedReferenceDescriptions()
+    val descriptions = selected.assets?.descriptions ?: GeneratedReferenceDescriptions()
+    val frameId = selected.viewBinding?.frameId
+    val observation = frameId?.let { id -> viewCandidates.firstOrNull { it.frameId == id } }
+        ?.let { listOf(it.subject.trim(), it.reason.trim()).filter(String::isNotBlank).distinct().joinToString("\n") }.orEmpty()
+    return descriptions.copy(actualComposition = descriptions.actualComposition.trim(),
+        shootingGuidance = descriptions.shootingGuidance.trim(),
+        environment = descriptions.environment.trim().ifBlank { selected.sceneDescription.trim().ifBlank { observation } })
 }
 
 @Composable
-internal fun GeneratedReferenceDialogs(state: VlmUiState, onEvent: (VlmIntent) -> Unit) {
-    val selected = state.generated.selected
-    if (state.generated.zoomVisible && selected?.assets != null) GeneratedReferenceZoom(selected) {
-        onEvent(VlmIntent.GeneratedZoomVisible(false))
+internal fun GeneratedReferenceDetails(state: VlmUiState) {
+    val candidate = state.generated.selected ?: return
+    if (candidate.ready && candidate.assets?.hasPortrait == false) {
+        CompositionDescriptionCard {
+            Text(stringResource(when (candidate.assets.portraitIssue) {
+                GeneratedPortraitIssue.NO_TRANSPARENCY -> R.string.vlm_generated_no_transparency
+                GeneratedPortraitIssue.ASPECT_MISMATCH -> R.string.vlm_generated_aspect_mismatch
+                null -> R.string.vlm_generated_portrait_unavailable
+            }), style = MaterialTheme.typography.bodySmall, modifier = Modifier.testTag("vlm_generated_unavailable_reason"))
+        }
+    }
+    val descriptions = state.generatedReferenceDescriptions()
+    if (listOf(descriptions.actualComposition, descriptions.shootingGuidance, descriptions.environment).any(String::isNotBlank)) {
+        CompositionDescriptionCard {
+            if (descriptions.actualComposition.isNotBlank()) CompositionDescriptionText(
+                listOf(stringResource(R.string.vlm_description_actual) to descriptions.actualComposition),
+                modifier = Modifier.testTag("vlm_generated_actual"), style = MaterialTheme.typography.labelSmall)
+            if (descriptions.shootingGuidance.isNotBlank()) CompositionDescriptionText(
+                listOf(stringResource(R.string.vlm_description_guidance) to descriptions.shootingGuidance),
+                modifier = Modifier.testTag("vlm_generated_guidance"))
+            if (descriptions.environment.isNotBlank()) CompositionDescriptionText(
+                listOf(stringResource(R.string.vlm_description_environment) to SceneDescriptionFormatting.format(descriptions.environment)),
+                modifier = Modifier.testTag("vlm_generated_environment"))
+        }
+    } else if (candidate.canApply) {
+        CompositionDescriptionCard {
+            Text(stringResource(R.string.vlm_generated_descriptions_empty), style = MaterialTheme.typography.bodySmall,
+                modifier = Modifier.testTag("vlm_generated_descriptions_empty"))
+        }
     }
 }
 
@@ -126,31 +145,15 @@ internal fun GeneratedReferenceImage(candidate: GeneratedCandidate, modifier: Mo
     val assets = candidate.assets ?: return
     if (overlay && !assets.hasPortrait) return
     CameraPhotoViewport(candidate.scene.orientation.previewDegrees, modifier) {
-        AsyncImage(File(if (overlay) assets.portraitPath else assets.compositePath),
-            stringResource(if (overlay) R.string.vlm_reference_avatar else R.string.vlm_selected_composition),
-            Modifier.fillMaxSize().testTag(if (overlay) "vlm_generated_overlay" else "vlm_generated_preview"),
-            contentScale = ContentScale.Fit, alpha = if (overlay) .90f else 1f)
-    }
-}
-
-@Composable
-private fun GeneratedReferenceZoom(candidate: GeneratedCandidate, close: () -> Unit) {
-    var scale by remember(candidate.id) { mutableFloatStateOf(1f) }
-    var offset by remember(candidate.id) { mutableStateOf(Offset.Zero) }
-    CameraAdaptiveAlertDialog(onDismissRequest = close,
-        title = { Text(stringResource(R.string.vlm_generated_enlarge)) },
-        text = {
-            Box(Modifier.fillMaxWidth().height(420.dp).clipToBounds().background(Color.Black)
-                .pointerInput(candidate.id) {
-                    detectTransformGestures { _, pan, zoom, _ ->
-                        scale = (scale * zoom).coerceIn(1f, 5f)
-                        offset = if (scale == 1f) Offset.Zero else offset + pan
-                    }
-                }) {
-                AsyncImage(File(requireNotNull(candidate.assets).compositePath), stringResource(R.string.vlm_selected_composition),
-                    Modifier.fillMaxSize().graphicsLayer(scaleX = scale, scaleY = scale, translationX = offset.x, translationY = offset.y),
-                    contentScale = ContentScale.Fit)
+        if (overlay) {
+            AsyncImage(File(assets.portraitPath), stringResource(R.string.vlm_reference_avatar),
+                Modifier.fillMaxSize().testTag("vlm_generated_overlay"), contentScale = ContentScale.Fit, alpha = .90f)
+        } else {
+            ZoomablePhotoPreview(listOf(candidate.id, candidate.revision, candidate.scene.orientation.previewDegrees),
+                assets.width.toFloat() / assets.height, Modifier.fillMaxSize().testTag("vlm_generated_preview_zoom")) {
+                AsyncImage(File(assets.compositePath), stringResource(R.string.vlm_selected_composition),
+                    Modifier.fillMaxSize().testTag("vlm_generated_preview"), contentScale = ContentScale.Fit)
             }
-        },
-        confirmButton = { TextButton(onClick = close) { Text(stringResource(R.string.vlm_model_settings_close)) } })
+        }
+    }
 }

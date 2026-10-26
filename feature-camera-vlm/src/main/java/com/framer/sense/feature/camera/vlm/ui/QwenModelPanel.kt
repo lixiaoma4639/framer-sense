@@ -34,6 +34,7 @@ internal fun QwenModelPanel(draft: ModelSettings, update: (ModelSettings) -> Uni
                 label = { Text(stringResource(R.string.vlm_qwen_model)) }, singleLine = true,
                 modifier = Modifier.fillMaxWidth().testTag("vlm_qwen_model"))
             Text(stringResource(R.string.vlm_qwen_configuration_hint, CloudModelConfig.qwenModel, CloudModelConfig.qwenBaseUrl), style = MaterialTheme.typography.labelSmall)
+            Text(stringResource(R.string.vlm_qwen_image_shared_hint), style = MaterialTheme.typography.labelSmall)
             TextButton(onClick = { onEvent(VlmIntent.CheckQwen) }, enabled = !busy,
                 modifier = Modifier.testTag("vlm_qwen_check")) { Text(stringResource(R.string.vlm_qwen_check_saved)) }
             Text(stringResource(R.string.vlm_qwen_check_hint), style = MaterialTheme.typography.labelSmall)

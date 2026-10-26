@@ -22,6 +22,13 @@
       "base_url": "https://ws-i4o988pfogx6zqcg.cn-beijing.maas.aliyuncs.com/compatible-mode/v1",
       "model": "qwen3-vl-plus",
       "vision_path": "/chat/completions",
+      "image_generation_path": "/images/generations",
+      "image_models": {
+        "v21_turbo": "qwen-image-2.1-turbo",
+        "v21_pro": "qwen-image-2.1-pro",
+        "v30": "qwen-image-3.0",
+        "v30_pro": "qwen-image-3.0-pro"
+      },
       "allowed_hosts": "dashscope.aliyuncs.com,dashscope-intl.aliyuncs.com,dashscope-us.aliyuncs.com,cn-hongkong.dashscope.aliyuncs.com",
       "workspace_host_suffix": ".maas.aliyuncs.com"
     },

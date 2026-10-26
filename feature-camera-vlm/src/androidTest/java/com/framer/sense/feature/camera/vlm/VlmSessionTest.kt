@@ -26,13 +26,19 @@ class VlmSessionTest {
 
     @Test fun automaticCloudReferenceSurvivesNetworkLossUntilRestart() = exerciseGeneratedReference(ModelMode.AUTO)
 
-    private fun exerciseGeneratedReference(mode: ModelMode) = runBlocking {
+    @Test fun qwenReferenceUsesSameSingleCandidateApplyAndAlignmentFlow() = exerciseGeneratedReference(ModelMode.CLOUD, ProviderId.QWEN)
+
+    private fun exerciseGeneratedReference(mode: ModelMode, brand: ProviderId = ProviderId.SEED) = runBlocking {
         withContext(Dispatchers.Main) {
             var online = true
             val entered = kotlinx.coroutines.channels.Channel<GeneratedCandidate>(2)
             val gates = mutableMapOf<String, CompletableDeferred<Unit>>()
             val asset = File.createTempFile("generated-reference", ".png", InstrumentationRegistry.getInstrumentation().targetContext.cacheDir)
-            val vm = viewModel(networkAvailable = { online }, generated = GeneratedReferenceGenerator { candidate, _ ->
+            val vm = viewModel(networkAvailable = { online }, generated = GeneratedReferenceGenerator { candidate, settings ->
+                assertEquals(brand, settings.preferred)
+                assertEquals(brand, candidate.model.provider)
+                assertEquals(if (brand == ProviderId.QWEN) "qwen-key" else "fixture-key", settings.imageGenerationKey)
+                assertEquals(GeneratedPortraitPreferences(AvatarId.CHILD_BOY, AvatarEthnicity.ASIAN), candidate.portraitPreferences)
                 val gate = CompletableDeferred<Unit>()
                 gates[candidate.id] = gate
                 entered.send(candidate)
@@ -42,8 +48,10 @@ class VlmSessionTest {
             val effects = mutableListOf<VlmEffect>()
             val listener = launch(start = CoroutineStart.UNDISPATCHED) { vm.effects.collect { effects += it } }
             try {
-                vm.onIntent(VlmIntent.SaveSettings(ModelSettings(mode = mode, preferred = ProviderId.SEED, seedApiKey = "fixture-key")))
+                vm.onIntent(VlmIntent.SaveSettings(ModelSettings(mode = mode, preferred = brand, seedApiKey = "fixture-key", qwenApiKey = "qwen-key")))
                 withTimeout(5_000) { vm.state.first { it.usesGeneratedReference } }
+                vm.onIntent(VlmIntent.AvatarSelected(AvatarId.CHILD_BOY))
+                vm.onIntent(VlmIntent.PreferredEthnicity(AvatarEthnicity.ASIAN))
                 vm.onIntent(VlmIntent.CameraReady(CameraCapabilities(1f, 3f)))
                 vm.onIntent(VlmIntent.StartComposition)
                 yield()

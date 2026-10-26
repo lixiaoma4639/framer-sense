@@ -3,10 +3,25 @@
     <string name="vlm_reference_auto_offline">本次使用离线 3D 人偶</string>
     <string name="vlm_seedream_flash">Seedream 5.0 Flash (快速)</string>
     <string name="vlm_seedream_pro">Seedream 5.0 Pro (专家)</string>
+    <string name="vlm_qwen_image_21_turbo">Qwen-Image-2.1 Turbo (极速)</string>
+    <string name="vlm_qwen_image_21_pro">Qwen-Image-2.1 Pro (专业)</string>
+    <string name="vlm_qwen_image_30">Qwen-Image-3.0 (标准)</string>
+    <string name="vlm_qwen_image_30_pro">Qwen-Image-3.0 Pro (专业)</string>
+    <string name="vlm_generated_model_turbo">极速</string>
+    <string name="vlm_generated_model_pro">专业</string>
+    <string name="vlm_generated_model_standard">标准</string>
     <string name="vlm_generated_model_fast">快速</string>
     <string name="vlm_generated_model_expert">专家</string>
     <string name="vlm_generated_model_unsupported">不支持</string>
-    <string name="vlm_generated_brand_unsupported">所选品牌暂不支持生成式构图，请在模型设置中选择豆包 Seed</string>
+    <string name="vlm_generated_brand_unsupported">所选品牌暂不支持生成式构图，请在模型设置中选择豆包 Seed 或阿里千问</string>
+    <string name="vlm_generated_key_missing">请检查并保存当前品牌的 API Key</string>
+    <string name="vlm_generated_descriptions_empty">该构图暂无文字说明，请直接参考图片。</string>
+    <string name="vlm_generated_no_transparency">模型返回图片没有可用的透明人物区域，暂时只能预览，无法应用到相机。白色背景不等于透明背景。</string>
+    <string name="vlm_generated_aspect_mismatch">模型返回图片的画幅与原图不匹配，暂时只能预览，无法应用到相机。</string>
+    <string name="vlm_qwen_image_gateway_unsupported">千问生图暂不支持网关接入，请在千问配置中选择官方直连</string>
+    <string name="vlm_qwen_image_config_invalid">千问生图请求未被接受，请检查模型开通状态、地域及接口配置</string>
+    <string name="vlm_qwen_image_account_invalid">千问生图权限或额度不足，请检查百炼账户及模型权限</string>
+    <string name="vlm_qwen_image_shared_hint">千问视觉分析与 Qwen-Image 官方生图共用此处的 Key。透明人物直出为实验方案，需验证构图效果；3.0 的透明输出尚无官方明确说明。</string>
     <string name="vlm_generated_model_save_failed">生成模型选择保存失败，请重试</string>
     <string name="vlm_seed_shared_configuration_hint">视觉分析与 Seedream 生图共用此处的接入配置和 Key。</string>
     <string name="vlm_generated_settings_hint">每次生成一张参考图。生成需要联网并使用所选模型的额度。</string>
@@ -19,7 +34,6 @@
     <string name="vlm_generated_card_caption">构图 %1$d</string>
     <string name="vlm_generated_retry">重试本张</string>
     <string name="vlm_generated_replace">换一张</string>
-    <string name="vlm_generated_enlarge">放大参考图</string>
     <string name="vlm_generated_choices">构图选择</string>
     <string name="vlm_generated_generate_one">生成一张</string>
     <string name="vlm_generated_generate_message">为备选 %1$d 生成一张构图？已生成的构图会保留。</string>
@@ -31,7 +45,7 @@
     <string name="vlm_generated_input_invalid">当前现场照片无法用于生成，请重新拍摄清晰照片</string>
     <string name="vlm_generated_image_rejected">模型服务未能处理这张参考照片，其他已完成构图仍可使用</string>
     <string name="vlm_generated_all_layers">已合成全部 %1$d 张图层（含底图）</string>
-    <string name="vlm_generated_portrait_unavailable">全部图层已合成，可查看或放大完整构图；暂未取得可用的人像图层，无法应用人像。</string>
+    <string name="vlm_generated_portrait_unavailable">可查看或放大参考图；暂未取得画幅匹配的可用透明人像，无法应用人像。</string>
     <string name="vlm_photo_action_unavailable">当前角色或资源不支持此动作或表情，请选择其他方案</string>
     <string name="vlm_photo_change_failed">动作或表情更新失败，原方案已保留，请重试</string>
     <string name="vlm_photo_face_unavailable">当前角色无法显示脸部示范</string>
@@ -145,8 +159,8 @@
     <string name="vlm_avatar_select_title">选择指导人像</string>
     <string name="vlm_avatar_adult_female">女性</string>
     <string name="vlm_avatar_adult_male">男性</string>
-    <string name="vlm_avatar_child_girl">女孩</string>
-    <string name="vlm_avatar_child_boy">男孩</string>
+    <string name="vlm_avatar_child_girl">儿童女</string>
+    <string name="vlm_avatar_child_boy">儿童男</string>
     <string name="vlm_pose_relaxed">自然站立</string>
     <string name="vlm_pose_side">侧身重心</string>
     <string name="vlm_pose_look_back">回眸</string>
@@ -318,7 +332,7 @@
     <string name="vlm_photo_legacy_gateway">当前网关使用旧构图能力，请更新网关以选择卡通摄影参考</string>
     <string name="vlm_photo_model_invalid">离线模型未返回有效摄影组合；背景已保留，请重试</string>
 
-    <string name="vlm_photo_default_requirement">自然一些，保留环境主体</string>
+    <string name="vlm_photo_default_requirement">由 AI 根据现场自主创作具有艺术表现力的人像构图</string>
     <string name="vlm_camera_permission">允许使用相机</string>
     <string name="vlm_camera_start_failed">相机暂时无法启动，请重试</string>
     <string name="vlm_selected_composition">选中的构图参考</string>
