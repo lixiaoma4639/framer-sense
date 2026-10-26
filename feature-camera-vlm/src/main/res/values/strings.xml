@@ -28,7 +28,7 @@
     <string name="vlm_generated_photo_settings_hint">AI 人像使用照片中的人物与服装，在 AI 构图对话输入框右下角选择生成模型。动作和表情可通过对话要求调整。</string>
     <string name="vlm_generated_cloud_required">请在模型设置中启用云端模式后使用 AI 人像</string>
     <string name="vlm_generated_normal_required">AI 人像参考请使用普通相机模式</string>
-    <string name="vlm_generated_generating">正在生成摄影参考，首张完成即可使用</string>
+    <string name="vlm_generated_generating">正在生成人像摄影构图，首张完成即可使用</string>
     <string name="vlm_generated_pending">其他参考正在生成，已完成的可以先用</string>
     <string name="vlm_generated_candidate_failed">本张未完成</string>
     <string name="vlm_generated_card_caption">构图 %1$d</string>

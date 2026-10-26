@@ -102,13 +102,13 @@ class GeneratedReferenceTest {
         assertFalse(prompt.contains("侧重自然克制"))
     }
 
-    @Test fun promptPreservesLongUserRequirementsAndKeepsExplicitRequirementsFirst() {
+    @Test fun promptPreservesLongUserRequirementsWithinPortraitAndSceneConstraints() {
         // 输入框允许 2000 字；关键要求不能在旧的 1200 字位置被静默截掉。
         val instruction = "希望自然一些。".repeat(180) + "最后要求：半身、安静地看向左侧。"
         repeat(4) { variation ->
             val prompt = GeneratedReferencePrompt.build("  $instruction  ", variation)
             assertTrue(prompt.endsWith("用户要求：$instruction"))
-            assertTrue(prompt.contains("优先满足用户明确提出"))
+            assertTrue(prompt.contains("在上述人物硬性要求、现场环境、现实比例和图层输出约束下"))
             assertTrue(prompt.contains("支撑条件无法确认或原图没有拍到地面时"))
             assertTrue(prompt.contains("不以固定的人物画面占比替代现实尺度判断"))
         }
@@ -117,8 +117,8 @@ class GeneratedReferenceTest {
     @Test fun unspecifiedRequirementAllowsIndependentArtisticCreation() {
         val prompt = GeneratedReferencePrompt.build("  ", 0)
         assertTrue(prompt.endsWith("用户要求：未提供特殊要求，请由 AI 自主创作。"))
-        assertTrue(prompt.contains("用户没有特殊说明时，由你自主选择"))
-        assertTrue(prompt.contains("不预设固定的动作、表情、情绪或风格"))
+        assertTrue(prompt.contains("用户没有特殊说明时，按本轮风格安排"))
+        assertTrue(prompt.contains("不预设固定的动作、表情或情绪"))
         assertFalse(prompt.contains("自然克制"))
     }
 

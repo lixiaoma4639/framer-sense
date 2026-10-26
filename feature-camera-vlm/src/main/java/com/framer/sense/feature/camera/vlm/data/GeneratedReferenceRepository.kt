@@ -143,6 +143,7 @@ class GeneratedReferenceRepository(context: Context) : GeneratedReferenceGenerat
     override suspend fun generate(candidate: GeneratedCandidate, settings: ModelSettings): GeneratedReferenceAssets = withContext(Dispatchers.IO) {
         val trace = GeneratedReferenceTrace(candidate)
         trace.event("BEGIN", "provider=${settings.preferred} official=${settings.officialImageGeneration} keyConfigured=${settings.imageGenerationKey.isNotBlank()} gatewayTokenConfigured=${settings.gatewayToken.isNotBlank()}")
+        trace.event("PORTRAIT_SETTINGS", "avatar=${candidate.portraitPreferences.avatar} ethnicity=${candidate.portraitPreferences.ethnicity} styleIndex=${candidate.styleIndex}")
         try {
             if (!settings.supportsImageGeneration || candidate.model.provider != settings.preferred) throw GeneratedReferenceFailure("UNSUPPORTED")
             val folder = File(root, candidate.id).apply { mkdirs() }
@@ -167,7 +168,7 @@ class GeneratedReferenceRepository(context: Context) : GeneratedReferenceGenerat
             val result = if (candidate.model is QwenImageModel) {
                 generateQwen(candidate, settings, inputBytes, inputInfo, encoded, folder, trace)
             } else {
-                val prompt = GeneratedReferencePrompt.build(candidate.instruction, candidate.variation, candidate.portraitPreferences)
+                val prompt = GeneratedReferencePrompt.build(candidate.instruction, candidate.variation, candidate.portraitPreferences, candidate.styleIndex)
                 trace.event("PARAMETERS", "layer_decomposition=true size=1.5K output_format=png response_format=url promptChars=${prompt.length}")
                 val response = if (settings.seedAccess == SeedAccess.OFFICIAL) {
                     if (settings.seedApiKey.isBlank()) throw GeneratedReferenceFailure("KEY")
@@ -200,12 +201,12 @@ class GeneratedReferenceRepository(context: Context) : GeneratedReferenceGenerat
         if (input.size > 10 * 1024 * 1024 || info.outWidth !in 1..8000 || info.outHeight !in 1..8000)
             throw GeneratedReferenceFailure("INPUT")
         val model = candidate.model as QwenImageModel
-        val prompt = QwenImageReferencePrompt.build(candidate.instruction, candidate.variation, candidate.portraitPreferences)
+        val prompt = QwenImageReferencePrompt.build(candidate.instruction, candidate.variation, candidate.portraitPreferences, candidate.styleIndex)
         val payload = QwenImageProtocol.payload(model, "data:${info.outMimeType};base64,$encoded", prompt, info.outWidth, info.outHeight)
         val request = Request.Builder().url(QwenImageProtocol.endpoint(settings))
             .header("Authorization", "Bearer ${settings.qwenApiKey.trim()}")
             .post(payload.toString().toRequestBody("application/json".toMediaType())).build()
-        trace.event("PARAMETERS", "provider=QWEN n=1 inputSize=${info.outWidth}x${info.outHeight} size=${payload["size"]!!.jsonPrimitive.content} transparentRequested=true promptExtend=false promptChars=${prompt.length}")
+        trace.event("PARAMETERS", "provider=QWEN n=1 inputSize=${info.outWidth}x${info.outHeight} size=${payload["size"]!!.jsonPrimitive.content} transparentRequested=true promptExtend=false promptVersion=${QwenImageReferencePrompt.VERSION} promptChars=${prompt.length}")
         // 与 Seedream 共用不自动重发 POST 的客户端；资源 GET 仍只做有界重试。
         val (status, bytes) = execute(request, trace, "GENERATE", privateValues = listOf(settings.qwenApiKey.trim(), prompt, candidate.instruction))
         val url = QwenImageProtocol.response(status, bytes.toString(Charsets.UTF_8))

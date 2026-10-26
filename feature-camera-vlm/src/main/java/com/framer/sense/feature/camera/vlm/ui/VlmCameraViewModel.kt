@@ -1002,7 +1002,8 @@ class VlmCameraViewModel @Inject constructor(
                 sceneDescription = replacing?.sceneDescription?.takeIf(String::isNotBlank)
                     ?: current.viewCandidates.firstOrNull { it.frameId == binding?.frameId }?.let {
                         listOf(it.subject.trim(), it.reason.trim()).filter(String::isNotBlank).distinct().joinToString("\n")
-                    }.orEmpty())
+                    }.orEmpty(),
+                styleIndex = replacing?.styleIndex ?: settingsStore.nextGeneratedStyleIndex())
         )
         _state.update {
             val alreadyVisible = it.generated.hasReady

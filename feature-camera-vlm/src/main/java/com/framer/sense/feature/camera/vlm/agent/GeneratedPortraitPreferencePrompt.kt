@@ -16,6 +16,6 @@ internal object GeneratedPortraitPreferencePrompt {
             AvatarEthnicity.ASIAN -> "亚洲人"
             AvatarEthnicity.BLACK -> "黑人"
         }
-        return "拍照设置：指导人像为$avatar，人像种族为$ethnicity。没有明确主角时，将这些设置作为创造人物的默认要求。原照片已有明确主角时保留其身份、年龄、外观和种族，不因默认设置替换主角；用户文字明确指定的人物要求优先于这些默认设置。"
+        return "人物硬性要求（最高优先级）：指导人像为$avatar，人像种族为$ethnicity。主角的性别、年龄类别和种族以此设置为准，参考图、服饰风格及用户文案中的冲突描述均不得覆盖。原图人物不符合设置时，按设置重新创作人物；符合时可保留其身份特征。种族不绑定服饰、国籍或艺术风格，汉服也不意味着女性。"
     }
 }

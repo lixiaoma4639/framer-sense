@@ -48,7 +48,8 @@ class QwenImageTest {
         }
         assertFalse(prompt.contains("Seedream"))
         assertFalse(prompt.contains("reference_person"))
-        assertTrue(prompt.contains("Alpha"))
+        assertTrue(prompt.startsWith("这是一张带有透明度的RGBA图像。"))
+        assertTrue(prompt.endsWith("该图像具有alpha通道，背景是透明的。"))
         assertTrue(prompt.contains("舞姿"))
         assertTrue(GeneratedReferencePrompt.build("舞姿", 3).contains("Seedream 原生图层"))
     }
@@ -89,8 +90,9 @@ class QwenImageTest {
         val seed = GeneratedReferencePrompt.build("身穿汉服", 0, preferences)
         listOf(qwen, seed).forEach { prompt ->
             assertTrue(prompt.contains("指导人像为儿童男，人像种族为亚洲人"))
-            assertTrue(prompt.contains("原照片已有明确主角时保留其身份"))
-            assertTrue(prompt.contains("用户文字明确指定的人物要求优先"))
+            assertTrue(prompt.contains("人物硬性要求（最高优先级）"))
+            assertTrue(prompt.contains("参考图、服饰风格及用户文案中的冲突描述均不得覆盖"))
+            assertTrue(prompt.contains("原图人物不符合设置时，按设置重新创作人物"))
             assertTrue(prompt.contains("身穿汉服"))
         }
         assertFalse(qwen.contains("Seedream"))

@@ -93,7 +93,8 @@ data class GeneratedCandidate(
     val completedOrder: Int? = null,
     val replacesId: String? = null,
     val portraitPreferences: GeneratedPortraitPreferences = GeneratedPortraitPreferences(),
-    val sceneDescription: String = ""
+    val sceneDescription: String = "",
+    val styleIndex: Int = variation
 ) {
     val ready: Boolean get() = status == GeneratedCandidateStatus.READY && assets != null
     val canApply: Boolean get() = ready && assets?.hasPortrait == true

@@ -18,6 +18,24 @@ class SeedSettingsStoreTest {
         override fun getSharedPreferences(name: String, mode: Int) = super.getSharedPreferences("$prefix-$name", mode)
     }
 
+    @Test fun generatedStyleCursorSurvivesStoreRecreationWithoutChangingUserPreferences() {
+        val context = context()
+        val prefs = context.getSharedPreferences("vlm-settings", Context.MODE_PRIVATE)
+        try {
+            val store = SettingsStore(context)
+            val photos = PhotoPreferences(avatar = AvatarId.ADULT_MALE, ethnicity = AvatarEthnicity.BLACK, instruction = "穿汉服")
+            store.savePhotoPreferences(photos)
+            assertEquals(0, store.nextGeneratedStyleIndex())
+            assertEquals(1, store.nextGeneratedStyleIndex())
+            val restored = SettingsStore(context)
+            assertEquals(2, restored.nextGeneratedStyleIndex())
+            assertEquals(photos, restored.readPhotoPreferences())
+            prefs.edit().putInt("generated-style-index", Int.MAX_VALUE).commit()
+            assertEquals(Int.MAX_VALUE, restored.nextGeneratedStyleIndex())
+            assertEquals(0, restored.nextGeneratedStyleIndex())
+        } finally { prefs.edit().clear().commit() }
+    }
+
     @Test fun threeSecretsAreIndependentAndSeedUpdatesPreserveQwenAndOfflinePreferences() {
         val context = context(); val prefs = context.getSharedPreferences("vlm-settings", Context.MODE_PRIVATE)
         try {

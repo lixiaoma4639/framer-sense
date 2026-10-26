@@ -35,6 +35,14 @@ class SettingsStore(context: Context) {
             .putString("avatar-ethnicity", value.ethnicity.name).apply()
     }
 
+    /** 只在新候选通过入口检查后取一次，重开扫描或重启 APP 继续轮换。 */
+    @Synchronized
+    fun nextGeneratedStyleIndex(): Int {
+        val index = prefs.getInt("generated-style-index", 0).coerceAtLeast(0)
+        prefs.edit().putInt("generated-style-index", if (index == Int.MAX_VALUE) 0 else index + 1).apply()
+        return index
+    }
+
     fun readInstructionHistory(): List<String> = runCatching {
         InstructionHistory.normalize(VlmJson.decodeFromString<List<String>>(prefs.getString("instruction-history", null) ?: "[]"))
     }.getOrDefault(emptyList())
