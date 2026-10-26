@@ -993,6 +993,10 @@ class VlmCameraViewModel @Inject constructor(
         val frame = current.scanSnapshot?.frames?.find { it.scene.id == source.id }
         val binding = replacing?.viewBinding ?: frame?.let { PhotoViewBinding(it.scanId, it.id, it.config.version, it.config.arSessionId) }
             ?: source.captureBinding
+        val styleIndex = replacing?.styleIndex ?: GeneratedPortraitStylePolicy.nextIndex(current.generated.usedStyleIndices)
+        if (styleIndex == null) {
+            _state.update { it.copy(error = models.message(R.string.vlm_generated_styles_exhausted)) }; return
+        }
         val batchId = newVlmId()
         val epoch = current.generated.epoch
         val candidates = listOf(
@@ -1003,7 +1007,7 @@ class VlmCameraViewModel @Inject constructor(
                     ?: current.viewCandidates.firstOrNull { it.frameId == binding?.frameId }?.let {
                         listOf(it.subject.trim(), it.reason.trim()).filter(String::isNotBlank).distinct().joinToString("\n")
                     }.orEmpty(),
-                styleIndex = replacing?.styleIndex ?: settingsStore.nextGeneratedStyleIndex())
+                styleIndex = styleIndex)
         )
         _state.update {
             val alreadyVisible = it.generated.hasReady
@@ -1013,7 +1017,7 @@ class VlmCameraViewModel @Inject constructor(
                 error = null, notice = null)
         }
         candidates.forEach { candidate ->
-            Log.i(GeneratedReferenceDiagnostics.TAG, "候选提交 candidate=${candidate.id} batch=$batchId scene=${source.id} model=${candidate.model.apiId} provider=${current.settings.preferred} official=${current.settings.officialImageGeneration}")
+            Log.i(GeneratedReferenceDiagnostics.TAG, "候选提交 candidate=${candidate.id} batch=$batchId scene=${source.id} model=${candidate.model.apiId} provider=${current.settings.preferred} official=${current.settings.officialImageGeneration} styleIndex=${candidate.styleIndex} styleSelection=${if (replacing == null) "SESSION_RANDOM" else "REUSE"}")
             val job = viewModelScope.launch(start = CoroutineStart.LAZY) {
                 try {
                     generatedPermits.withPermit {

@@ -1,6 +1,8 @@
 package com.framer.sense.feature.camera.vlm.agent
 
-/** 现场判断不明确时的轮换候选；不覆盖用户或环境，不依赖模型记忆。 */
+import kotlin.random.Random
+
+/** 现场判断不明确时的随机候选；由 APP 本流程历史去重，不依赖模型记忆。 */
 internal object GeneratedPortraitStylePolicy {
     data class Style(val wardrobe: String, val art: String)
 
@@ -26,12 +28,19 @@ internal object GeneratedPortraitStylePolicy {
     )
     val wardrobeCount: Int get() = wardrobes.size
     val artCount: Int get() = arts.size
-    // 两池数量互质，两个维度逐次推进可遍历全部组合，测试防止扩容后遗漏组合。
-    val cycleLength: Int get() = wardrobeCount * artCount
+    val combinationCount: Int get() = wardrobeCount * artCount
 
-    fun select(index: Int): Style = Style(
-        wardrobes[Math.floorMod(index, wardrobes.size)], arts[Math.floorMod(index, arts.size)]
-    )
+    /** 每个 ID 对应一个笛卡尔积组合，不要求两池数量互质。 */
+    fun select(index: Int): Style {
+        val normalized = Math.floorMod(index, combinationCount)
+        return Style(wardrobes[normalized / artCount], arts[normalized % artCount])
+    }
+
+    /** 无放回抽样；耗尽时返回空，由入口停止提交，不能悄悄重复旧组合。 */
+    fun nextIndex(usedIndices: Set<Int>, random: Random = Random.Default): Int? {
+        val available = (0 until combinationCount).filterNot { it in usedIndices }
+        return if (available.isEmpty()) null else available[random.nextInt(available.size)]
+    }
 
     fun prompt(index: Int): String {
         val style = select(index)

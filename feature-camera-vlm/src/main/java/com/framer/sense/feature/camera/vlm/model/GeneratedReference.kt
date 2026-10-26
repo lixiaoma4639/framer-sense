@@ -111,6 +111,8 @@ data class GeneratedReferenceState(
     val selected: GeneratedCandidate? get() = candidates.firstOrNull { it.id == selectedId }
     val running: Boolean get() = candidates.any { it.status in listOf(GeneratedCandidateStatus.QUEUED, GeneratedCandidateStatus.RUNNING) }
     val hasReady: Boolean get() = candidates.any { it.ready }
+    /** 本流程提交过的组合都保留，包含失败、取消及被替换的候选。 */
+    val usedStyleIndices: Set<Int> get() = candidates.map { it.styleIndex }.toSet()
     val ordered: List<GeneratedCandidate> get() = candidates.sortedWith(
         compareBy<GeneratedCandidate> { it.completedOrder ?: Int.MAX_VALUE }.thenBy { candidates.indexOf(it) })
 

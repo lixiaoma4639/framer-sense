@@ -58,6 +58,7 @@ class VlmSessionTest {
                 val token = (effects.single() as VlmEffect.Freeze).token
                 vm.onIntent(VlmIntent.FrameReady(token, Bitmap.createBitmap(60, 80, Bitmap.Config.ARGB_8888), 1f))
                 val firstRequest = withTimeout(5_000) { entered.receive() }
+                assertEquals(setOf(firstRequest.styleIndex), vm.state.value.generated.usedStyleIndices)
                 vm.onIntent(VlmIntent.Generate)
                 vm.onIntent(VlmIntent.RetryGenerated(firstRequest.id))
                 yield()
@@ -75,6 +76,8 @@ class VlmSessionTest {
                 assertEquals(BackgroundStatus.ALIGNED_MANUAL, applied.background.status)
                 vm.onIntent(VlmIntent.Generate)
                 val nextRequest = withTimeout(5_000) { entered.receive() }
+                assertNotEquals(firstRequest.styleIndex, nextRequest.styleIndex)
+                assertEquals(setOf(firstRequest.styleIndex, nextRequest.styleIndex), vm.state.value.generated.usedStyleIndices)
                 vm.onIntent(VlmIntent.Generate)
                 vm.onIntent(VlmIntent.RetryGenerated(firstRequest.id))
                 yield()
@@ -100,6 +103,7 @@ class VlmSessionTest {
                 }
                 vm.onIntent(VlmIntent.RestartFlow)
                 assertTrue(vm.state.value.generated.candidates.isEmpty())
+                assertTrue(vm.state.value.generated.usedStyleIndices.isEmpty())
                 assertNull(vm.state.value.activeBackgroundTarget)
                 assertEquals(mode == ModelMode.CLOUD, vm.state.value.usesGeneratedReference)
             } finally {

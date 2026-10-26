@@ -15,6 +15,7 @@
     <string name="vlm_generated_model_unsupported">不支持</string>
     <string name="vlm_generated_brand_unsupported">所选品牌暂不支持生成式构图，请在模型设置中选择豆包 Seed 或阿里千问</string>
     <string name="vlm_generated_key_missing">请检查并保存当前品牌的 API Key</string>
+    <string name="vlm_generated_styles_exhausted">本次流程的风格组合已用完，请重新开始流程后生成。</string>
     <string name="vlm_generated_descriptions_empty">该构图暂无文字说明，请直接参考图片。</string>
     <string name="vlm_generated_no_transparency">模型返回图片没有可用的透明人物区域，暂时只能预览，无法应用到相机。白色背景不等于透明背景。</string>
     <string name="vlm_generated_aspect_mismatch">模型返回图片的画幅与原图不匹配，暂时只能预览，无法应用到相机。</string>
