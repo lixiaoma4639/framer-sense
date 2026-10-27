@@ -74,7 +74,7 @@ class NavigationTest {
                             Text("春日限定樱花拍摄攻略")
                         }
                     },
-                    cameraContent = { _, onExit ->
+                    cameraContent = { _, onExit, _ ->
                         TestCameraPage("AI 构图引导", onExit)
                     },
                     myModelContent = { onSettingsClick, onMessagesClick, onScanClick ->
@@ -204,7 +204,7 @@ class NavigationTest {
                     uiState = uiState,
                     onTabSelected = { tab -> uiState = uiState.copy(selectedTab = tab) },
                     homeContent = { Text("拍摄后首页") },
-                    cameraContent = { onCaptureActionChanged, onExit ->
+                    cameraContent = { onCaptureActionChanged, onExit, _ ->
                         LaunchedEffect(Unit) {
                             onCaptureActionChanged(
                                 VlmCaptureAction(
@@ -244,7 +244,7 @@ class NavigationTest {
                     uiState = uiState,
                     onTabSelected = { tab -> uiState = uiState.copy(selectedTab = tab) },
                     homeContent = { Text("延迟拍摄首页") },
-                    cameraContent = { onCaptureActionChanged, onExit ->
+                    cameraContent = { onCaptureActionChanged, onExit, _ ->
                         if (publishCaptureAction.value) {
                             LaunchedEffect(Unit) {
                                 onCaptureActionChanged(
@@ -286,7 +286,7 @@ class NavigationTest {
                     uiState = uiState,
                     onTabSelected = { tab -> uiState = uiState.copy(selectedTab = tab) },
                     homeContent = { Text("横屏首页") },
-                    cameraContent = { _, onExit -> TestCameraPage("横屏相机", onExit) },
+                    cameraContent = { _, onExit, _ -> TestCameraPage("横屏相机", onExit) },
                     myModelContent = { _, _, _ -> Text("横屏我的") },
                     isLandscape = true
                 )
@@ -312,7 +312,7 @@ class NavigationTest {
                     uiState = MainNavigationUiState(selectedTab = BottomNavTab.CAMERA),
                     onTabSelected = {},
                     homeContent = { Text("首页") },
-                    cameraContent = { _, onExit -> TestCameraPage("竖屏相机", onExit) },
+                    cameraContent = { _, onExit, _ -> TestCameraPage("竖屏相机", onExit) },
                     myModelContent = { _, _, _ -> Text("我的") },
                     isLandscape = false
                 )
@@ -425,7 +425,7 @@ class NavigationTest {
             FramerAppTheme {
                 MainNavigationContent(uiState = state.value, onTabSelected = { state.value = state.value.copy(selectedTab = it) },
                     homeContent = { Text("首页内容") },
-                    cameraContent = { _, onExit -> TestCameraPage("相机内容", onExit) },
+                    cameraContent = { _, onExit, _ -> TestCameraPage("相机内容", onExit) },
                     myModelContent = { _, _, _ -> Text("我的内容") })
             }
         }

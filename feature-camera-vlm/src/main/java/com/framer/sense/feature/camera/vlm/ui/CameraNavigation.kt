@@ -7,8 +7,8 @@ import androidx.compose.runtime.Composable
 internal enum class CameraBackAction { NONE, BLOCKED, CLOSE_HISTORY, CLOSE_INSTRUCTION, COLLAPSE, CANCEL, RESUME, EXIT }
 
 internal fun cameraBackAction(state: VlmUiState, hasExit: Boolean): CameraBackAction = when {
-    state.historyDrawerVisible -> CameraBackAction.CLOSE_HISTORY
     state.settingsVisible || state.photoSettingsVisible || state.photoSample != null -> CameraBackAction.NONE
+    state.historyDrawerVisible -> CameraBackAction.CLOSE_HISTORY
     state.saving || state.historyLoading || state.historySaving -> CameraBackAction.BLOCKED
     state.instructionEditorVisible -> CameraBackAction.CLOSE_INSTRUCTION
     state.stage in listOf(VlmStage.GENERATING, VlmStage.MODIFYING, VlmStage.FREEZING,

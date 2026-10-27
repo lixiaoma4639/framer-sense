@@ -36,8 +36,8 @@ class CameraGalleryUiTest {
                 Box(Modifier.width(width.value).fillMaxHeight().background(Color.Black).testTag("camera_bounds")) {
                     Box(Modifier.fillMaxSize().padding(bottom = 24.dp)) {
                         CameraBottomBar(state.value, events::add, { photos++ }, true, Modifier.align(Alignment.BottomCenter))
-                        CameraWorkflowFooter(state.value, 24.dp, Modifier.align(Alignment.BottomCenter))
                     }
+                    CameraWorkflowFooter(state.value, Modifier.align(Alignment.BottomCenter))
                 }
             }
         } }

@@ -375,7 +375,7 @@ class VlmCameraViewModel @Inject constructor(
                     ar = if (it.cameraMode == CameraMode.AR) com.framer.sense.feature.camera.vlm.ar.ArUiState(source = com.framer.sense.feature.camera.vlm.ar.ArSource.CHECKING) else it.ar,
                     reference = null, referencePlan = null, background = BackgroundGuidance()) }
             }
-            is VlmIntent.CameraModeSelected -> if (_state.value.framingUnlocked) switchCameraMode(intent.mode)
+            is VlmIntent.CameraModeSelected -> if (_state.value.canChangeCameraMode) switchCameraMode(intent.mode)
             is VlmIntent.HistoryDrawerVisible -> _state.update { it.copy(historyDrawerVisible = intent.visible,
                 instructionEditorVisible = if (intent.visible) false else it.instructionEditorVisible) }
             is VlmIntent.RestoreHistory -> restoreHistory(intent.id)

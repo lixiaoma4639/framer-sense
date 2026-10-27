@@ -7,6 +7,10 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.platform.LocalView
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.graphics.Insets
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toPixelMap
 import androidx.compose.ui.semantics.SemanticsProperties
@@ -40,7 +44,7 @@ class CameraWorkflowUiTest {
             CompositionLocalProvider(LocalCameraIconAngle provides angle.floatValue) {
                 Box(Modifier.width(width.value).fillMaxHeight().testTag("camera_bounds")) {
                     CameraBottomBar(state.value, {}, {}, true, Modifier.align(Alignment.BottomCenter))
-                    CameraWorkflowFooter(state.value, 24.dp, Modifier.align(Alignment.BottomCenter))
+                    CameraWorkflowFooter(state.value, Modifier.align(Alignment.BottomCenter))
                 }
             }
         } }
@@ -86,58 +90,61 @@ class CameraWorkflowUiTest {
         assertEquals(listOf(VlmIntent.RestartFlow, VlmIntent.CompositionDetailsVisible(true)), events)
     }
 
-    @Test fun timelineStaysBelowShutterAndTurnsIconsWithoutMovingControls() {
+    @Test fun timelineKeepsFixedSizeWithoutLiftingControlsAcrossDrawerChangesAndRotation() {
         val angle = mutableFloatStateOf(0f)
-        val showTimeline = mutableStateOf(false)
-        val bottomSpace = mutableStateOf(24.dp)
+        val state = mutableStateOf(VlmUiState(cameraReady = true))
+        var host: android.view.View? = null
         var photos = 0
         compose.setContent { MaterialTheme {
+            host = LocalView.current
             CompositionLocalProvider(LocalCameraIconAngle provides angle.floatValue) {
                 Box(Modifier.size(320.dp, 640.dp).background(Color.Black).testTag("camera_bounds")) {
-                    Box(Modifier.fillMaxSize().padding(bottom = bottomSpace.value)) {
-                        CameraBottomBar(VlmUiState(cameraReady = true), {}, { photos++ }, true,
-                            Modifier.align(Alignment.BottomCenter))
-                        if (showTimeline.value) CameraWorkflowFooter(VlmUiState(), bottomSpace.value,
-                            Modifier.align(Alignment.BottomCenter))
+                    Box(Modifier.fillMaxSize().padding(bottom = CameraWorkflowFooterHeight)) {
+                        CameraBottomBar(state.value, {}, { photos++ }, true, Modifier.align(Alignment.BottomCenter))
                     }
+                    CameraWorkflowFooter(state.value, Modifier.align(Alignment.BottomCenter))
                 }
             }
         } }
-        val shutter = compose.onNodeWithTag("vlm_shutter").getUnclippedBoundsInRoot()
-        compose.runOnIdle { showTimeline.value = true }
-        // 与未添加时间线的原快门位置直接比较，不能只检查旋转前后位置一致。
-        assertEquals(shutter, compose.onNodeWithTag("vlm_shutter").getUnclippedBoundsInRoot())
-        val timeline = compose.onNodeWithTag("vlm_workflow_timeline").getUnclippedBoundsInRoot()
-        val screen = compose.onNodeWithTag("camera_bounds").getUnclippedBoundsInRoot()
-        assertTrue(timeline.top >= shutter.bottom)
-        assertTrue(timeline.bottom <= screen.bottom)
-        assertEquals(screen.bottom.value - 1f, timeline.bottom.value, 1f)
-        val nodeBounds = CameraWorkflowStep.entries.associateWith {
-            compose.onNodeWithTag("vlm_workflow_${it.name}").getUnclippedBoundsInRoot()
-        }
-        listOf(90f, 180f, 270f, 0f).forEach { direction ->
-            compose.runOnIdle { angle.floatValue = direction }
-            CameraWorkflowStep.entries.forEach { step ->
-                compose.onNodeWithTag("vlm_workflow_icon_${step.name}", useUnmergedTree = true)
-                    .assert(SemanticsMatcher("流程图标四方向转正") {
-                        abs(shortestIconRotation(it.config[CameraIconDegrees], direction)) < .1f
-                    })
-                assertEquals(nodeBounds[step], compose.onNodeWithTag("vlm_workflow_${step.name}").getUnclippedBoundsInRoot())
+        val originalInsets = ViewCompat.getRootWindowInsets(requireNotNull(host))
+        listOf(0, 24, 48).forEach { systemBarHeight ->
+            compose.runOnIdle {
+                val changed = WindowInsetsCompat.Builder(originalInsets ?: WindowInsetsCompat.CONSUMED)
+                    .setInsets(WindowInsetsCompat.Type.navigationBars() or WindowInsetsCompat.Type.mandatorySystemGestures(),
+                        Insets.of(0, 0, 0, systemBarHeight))
+                    .setVisible(WindowInsetsCompat.Type.navigationBars(), systemBarHeight > 0).build()
+                ViewCompat.dispatchApplyWindowInsets(requireNotNull(host), changed)
             }
-            assertEquals(shutter, compose.onNodeWithTag("vlm_shutter").getUnclippedBoundsInRoot())
-            assertEquals(timeline, compose.onNodeWithTag("vlm_workflow_timeline").getUnclippedBoundsInRoot())
+            val screen = compose.onNodeWithTag("camera_bounds").getUnclippedBoundsInRoot()
+            val shutter = compose.onNodeWithTag("vlm_shutter").getUnclippedBoundsInRoot()
+            val footer = compose.onNodeWithTag("vlm_workflow_footer").getUnclippedBoundsInRoot()
+            val timeline = compose.onNodeWithTag("vlm_workflow_timeline").getUnclippedBoundsInRoot()
+            assertEquals(screen.bottom.value, footer.bottom.value, 1f)
+            assertEquals(screen.bottom.value - 30f, shutter.bottom.value, 1f)
+            assertTrue(timeline.top >= shutter.bottom)
+            assertEquals(20f, timeline.bottom.value - timeline.top.value, 1f)
+            listOf(0f, 90f, 180f, 270f).forEach { direction ->
+                compose.runOnIdle { angle.floatValue = direction }
+                listOf(true, false).forEach { open ->
+                    compose.runOnIdle { state.value = state.value.copy(historyDrawerVisible = open) }
+                    assertEquals(shutter, compose.onNodeWithTag("vlm_shutter").getUnclippedBoundsInRoot())
+                    assertEquals(timeline, compose.onNodeWithTag("vlm_workflow_timeline").getUnclippedBoundsInRoot())
+                    CameraWorkflowStep.entries.forEach { step ->
+                        val icon = compose.onNodeWithTag("vlm_workflow_icon_${step.name}", useUnmergedTree = true)
+                        val bounds = icon.getUnclippedBoundsInRoot()
+                        assertEquals(16f, bounds.bottom.value - bounds.top.value, 1f)
+                        icon.assert(SemanticsMatcher("流程图标四方向转正") {
+                            abs(shortestIconRotation(it.config[CameraIconDegrees], direction)) < .1f
+                        })
+                    }
+                }
+            }
             compose.onNodeWithTag("vlm_shutter").performClick()
         }
-        assertEquals(4, photos)
-        // 底部留白变化时仍在原快门与屏幕底部之间，不能反过来顶高快门。
-        listOf(0.dp, 16.dp, 48.dp).forEach { space ->
-            compose.runOnIdle { bottomSpace.value = space }
-            val currentShutter = compose.onNodeWithTag("vlm_shutter").getUnclippedBoundsInRoot()
-            val currentTimeline = compose.onNodeWithTag("vlm_workflow_timeline").getUnclippedBoundsInRoot()
-            assertEquals(screen.bottom.value - space.value - 6f, currentShutter.bottom.value, 1f)
-            assertTrue(currentTimeline.top >= currentShutter.bottom)
-            assertTrue(currentTimeline.bottom <= screen.bottom)
+        compose.runOnIdle {
+            originalInsets?.let { ViewCompat.dispatchApplyWindowInsets(requireNotNull(host), it) }
         }
+        assertEquals(3, photos)
     }
 
     @Test fun scanSpinnerBecomesGreenAndGenerationSpinnerIsWhite() {

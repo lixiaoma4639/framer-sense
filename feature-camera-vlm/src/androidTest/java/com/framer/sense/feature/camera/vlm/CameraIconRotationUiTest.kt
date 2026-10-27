@@ -42,6 +42,7 @@ class CameraIconRotationUiTest {
             CompositionLocalProvider(LocalCameraIconAngle provides angle.floatValue) {
                 Column(Modifier.fillMaxSize()) {
                     CameraTopBar(state, events::add, onExit = { exits++ })
+                    CameraSettingsButtons(state, events::add)
                     CameraBottomBar(state, events::add, { photos++ }, true)
                 }
             }

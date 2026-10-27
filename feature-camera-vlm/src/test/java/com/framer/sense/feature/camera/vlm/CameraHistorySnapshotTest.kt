@@ -10,6 +10,16 @@ import org.junit.Test
 import kotlin.random.Random
 
 class CameraHistorySnapshotTest {
+    @Test fun drawerSettingsKeepIndependentCaptureAndNavigationPolicies() {
+        val state = VlmUiState(cameraReady = true, historyDrawerVisible = true, photoSettingsVisible = true)
+        assertTrue(state.canChangeCameraMode)
+        assertFalse(state.canCapture)
+        assertFalse(state.canZoom)
+        assertEquals(CameraBackAction.NONE, cameraBackAction(state, true))
+        assertEquals(CameraBackAction.CLOSE_HISTORY, cameraBackAction(state.copy(photoSettingsVisible = false), true))
+        assertFalse(state.copy(stage = VlmStage.SCANNING).canChangeCameraMode)
+    }
+
     @Test fun snapshotExplicitlyPreservesPhotoGeometryAndBinding() {
         val binding = PhotoViewBinding("scan", "frame", 7)
         val scene = HistoryScene("scene", 1280, 960, 2f, "camera-history/s/scene.jpg", "camera-history/s/input.jpg",

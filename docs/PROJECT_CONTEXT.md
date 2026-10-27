@@ -1,5 +1,7 @@
 # Framer_Sense 项目开发上下文
 
+2026-10-27 历史抽屉占窗口宽度 3/4，标题沿用安全区后的 48dp 行高；两个设置入口位于标题行右侧，直接打开弹窗并保留抽屉，返回优先关设置。相机 AI 入口相对整行居中。相机顶部由 `rememberCameraSafeInsets` 在进入当前布局时锁定安全距离，状态栏／刘海及设备资源补足首帧数据，抽屉显隐不重算，仅布局方向／显示密度变化重算（不以 screenHeightDp 为键）；底部固定预留 24dp 时间线空间（节点 20dp、图标 16dp），不再读取动态手势／导航栏高度移动 UI。`VlmCameraScreen` 上报抽屉状态，App `NavigationSystemBars` 在抽屉打开时同时显示顶部状态栏和底部系统栏，关闭时恢复隐藏，焦点／前台恢复沿用此策略；抽屉背景铺满窗口高度，拍摄页导航栏透明、无独立黑底／对比度遮罩／分隔线，系统横条叠在抽屉背景上；内部内容避让系统栏，不影响底层相机坐标和预览尺寸。
+
 2026-10-26 相机本地历史：`feature-camera-vlm` 新增 `CameraCompositionHistory`，通过 `core-data/CameraHistoryRepository` 访问 `core-database/CameraHistoryDatabase`（独立 `camera-history.db`，不改 MyModel）。保存云端成功流程、提示词／版本／参数、方向／来源／扫描快照和稳定风格键，图片留私有文件并排除云备份。左侧 Material3 历史抽屉可置顶、删除、恢复到构图选择；右上白色 X 保留原退出行为。恢复后原流程续生使用当前模型和最新模板，临时锁原画幅，重新应用必须再次对齐；不自动恢复未完成的收费请求。详见 `docs/CAMERA_HISTORY.md`。
 
 2026-10-25 生图完整预览与人像应用解耦：`SeedreamLayerCompositor` 将底图与全部前景按层级、官方边界框合成；优先绝对坐标并处理底图降采样，归一化坐标作后备。人物筛选不再阻断完整图预览。资源清单的 `portraitPath` 可为空，`sourceLayerCount` 保存实际层数，`hasPortrait`／`canApply` 控制人像应用，无人像时仍可选择与放大完整图。仍为单次请求，不增加模型或重试；详见 `docs/CAMERA_GENERATED_REFERENCE_PLAN.md` 4.2。

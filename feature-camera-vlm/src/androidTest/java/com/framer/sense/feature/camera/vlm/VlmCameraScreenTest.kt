@@ -277,19 +277,18 @@ class VlmCameraScreenTest {
         fun assertPositions() {
             val bar = composeRule.onNodeWithTag("vlm_camera_top_bar").getUnclippedBoundsInRoot()
             val back = composeRule.onNodeWithTag("vlm_camera_exit").getUnclippedBoundsInRoot()
-            val settings = composeRule.onNodeWithTag("vlm_photo_settings").getUnclippedBoundsInRoot()
+            val history = composeRule.onNodeWithTag("vlm_history_open").getUnclippedBoundsInRoot()
             val backIcon = composeRule.onNodeWithTag("vlm_camera_exit_icon", useUnmergedTree = true).getUnclippedBoundsInRoot()
-            val settingsIcon = composeRule.onNodeWithTag("vlm_photo_settings_icon", useUnmergedTree = true).getUnclippedBoundsInRoot()
             val ai = composeRule.onNodeWithTag("vlm_ai_instruction_toggle").getUnclippedBoundsInRoot()
-            assertEquals(0f, (back.left - bar.left).value, .1f)
-            assertEquals(0f, (bar.right - settings.right).value, .1f)
-            assertEquals(12f, (backIcon.left - bar.left).value, .1f)
-            assertEquals(12f, (bar.right - settingsIcon.right).value, .1f)
-            assertEquals((bar.left.value + bar.right.value) / 2, (ai.left.value + ai.right.value) / 2, .1f)
+            assertEquals(0f, (history.left - bar.left).value, .1f)
+            assertEquals(0f, (bar.right - back.right).value, .1f)
+            assertEquals(12f, (bar.right - backIcon.right).value, .1f)
             val aspect = composeRule.onNodeWithTag("vlm_aspect_ratio").getUnclippedBoundsInRoot()
-            val model = composeRule.onNodeWithTag("vlm_model_settings").getUnclippedBoundsInRoot()
+            assertEquals((bar.left.value + bar.right.value) / 2, (ai.left.value + ai.right.value) / 2, .1f)
             assertTrue(aspect.right <= ai.left)
-            assertTrue(ai.right <= model.left)
+            assertTrue(ai.right <= back.left)
+            composeRule.onNodeWithTag("vlm_model_settings").assertDoesNotExist()
+            composeRule.onNodeWithTag("vlm_photo_settings").assertDoesNotExist()
         }
         assertPositions()
         composeRule.runOnIdle { state.value = state.value.copy(cameraMode = CameraMode.AR) }
@@ -331,6 +330,7 @@ class VlmCameraScreenTest {
         var photos = 0
         composeRule.setContent { MaterialTheme { Column {
             CameraTopBar(state.value, { events += it })
+            CameraSettingsButtons(state.value, { events += it })
             CameraBottomBar(state.value, { events += it }, { photos++ }, true)
         } } }
         composeRule.onNodeWithTag("vlm_actual_zoom").assertDoesNotExist()

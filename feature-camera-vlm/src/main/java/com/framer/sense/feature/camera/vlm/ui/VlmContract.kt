@@ -120,6 +120,9 @@ data class VlmUiState(
             VlmStage.GENERATING, VlmStage.MODIFYING, VlmStage.SCANNING, VlmStage.SCAN_PROCESSING, VlmStage.VIEW_SELECTING)
     val framingUnlocked: Boolean
         get() = stage == VlmStage.LIVE && !operationBusy && !historyDrawerVisible && !instructionEditorVisible
+    /** 拍照设置可覆盖历史抽屉；只放行设置中的模式切换，不放行取景操作。 */
+    val canChangeCameraMode: Boolean
+        get() = stage == VlmStage.LIVE && !operationBusy && !instructionEditorVisible && (!historyDrawerVisible || photoSettingsVisible)
     val canEditInstruction: Boolean
         get() = !operationBusy && !historyDrawerVisible && !settingsVisible && !photoSettingsVisible
     val canCapture: Boolean

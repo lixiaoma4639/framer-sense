@@ -9,6 +9,9 @@ import android.view.ViewTreeObserver
 import android.view.WindowManager
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.platform.LocalView
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
@@ -20,9 +23,15 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 /** 系统栏只由 App 导航管理；返回、前台恢复和弹窗关闭均按当前目的地重新设置。 */
 @Composable
 @Suppress("DEPRECATION")
-internal fun NavigationSystemBars(immersive: Boolean) {
+internal fun NavigationSystemBars(immersive: Boolean, showCameraSystemBars: Boolean = false) {
     val view = LocalView.current
     val lifecycle = LocalLifecycleOwner.current.lifecycle
+    val cameraBarsVisible by rememberUpdatedState(showCameraSystemBars)
+    // 抽屉切换仅调整系统栏可见性，不重设窗口刘海策略或相机布局。
+    LaunchedEffect(view, immersive, showCameraSystemBars) {
+        val window = view.context.hostActivity()?.window ?: return@LaunchedEffect
+        applySystemBarVisibility(WindowCompat.getInsetsController(window, view), immersive, showCameraSystemBars)
+    }
     DisposableEffect(view, lifecycle, immersive) {
         val window = view.context.hostActivity()?.window
         if (window == null) return@DisposableEffect onDispose { }
@@ -31,6 +40,7 @@ internal fun NavigationSystemBars(immersive: Boolean) {
         val oldNavigationLight = bars.isAppearanceLightNavigationBars
         val oldBehavior = bars.systemBarsBehavior
         val oldNavigationColor = window.navigationBarColor
+        val oldNavigationDivider = if (Build.VERSION.SDK_INT >= 28) window.navigationBarDividerColor else null
         val oldStatusColor = window.statusBarColor
         val oldContrast = if (Build.VERSION.SDK_INT >= 29) window.isNavigationBarContrastEnforced else null
         val oldCutoutMode = if (Build.VERSION.SDK_INT >= 28) window.attributes.layoutInDisplayCutoutMode else null
@@ -38,7 +48,9 @@ internal fun NavigationSystemBars(immersive: Boolean) {
             bars.isAppearanceLightStatusBars = !immersive
             bars.isAppearanceLightNavigationBars = !immersive
             window.statusBarColor = Color.TRANSPARENT
-            window.navigationBarColor = if (immersive) Color.BLACK else Color.WHITE
+            // 抽屉背景延伸到系统横条下方，导航区只叠加系统控件，不绘制黑底或分隔线。
+            window.navigationBarColor = if (immersive) Color.TRANSPARENT else Color.WHITE
+            if (Build.VERSION.SDK_INT >= 28 && immersive) window.navigationBarDividerColor = Color.TRANSPARENT
             if (Build.VERSION.SDK_INT >= 29) window.isNavigationBarContrastEnforced = false
             if (Build.VERSION.SDK_INT >= 28 && oldCutoutMode != null) {
                 val wanted = if (immersive) WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES else oldCutoutMode
@@ -46,11 +58,7 @@ internal fun NavigationSystemBars(immersive: Boolean) {
                     window.attributes = window.attributes.apply { layoutInDisplayCutoutMode = wanted }
                 }
             }
-            bars.systemBarsBehavior = if (immersive)
-                WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
-            else WindowInsetsControllerCompat.BEHAVIOR_DEFAULT
-            if (immersive) bars.hide(WindowInsetsCompat.Type.systemBars())
-            else bars.show(WindowInsetsCompat.Type.systemBars())
+            applySystemBarVisibility(bars, immersive, cameraBarsVisible)
         }
         val observer = LifecycleEventObserver { _, event -> if (event == Lifecycle.Event.ON_RESUME) apply() }
         val focus = ViewTreeObserver.OnWindowFocusChangeListener { focused -> if (focused) apply() }
@@ -65,6 +73,7 @@ internal fun NavigationSystemBars(immersive: Boolean) {
             bars.isAppearanceLightStatusBars = oldStatusLight
             bars.isAppearanceLightNavigationBars = oldNavigationLight
             window.navigationBarColor = oldNavigationColor
+            if (Build.VERSION.SDK_INT >= 28 && oldNavigationDivider != null) window.navigationBarDividerColor = oldNavigationDivider
             window.statusBarColor = oldStatusColor
             if (Build.VERSION.SDK_INT >= 29 && oldContrast != null) window.isNavigationBarContrastEnforced = oldContrast
             if (Build.VERSION.SDK_INT >= 28 && oldCutoutMode != null) {
@@ -72,6 +81,14 @@ internal fun NavigationSystemBars(immersive: Boolean) {
             }
         }
     }
+}
+
+private fun applySystemBarVisibility(bars: WindowInsetsControllerCompat, immersive: Boolean, showCameraSystemBars: Boolean) {
+    bars.systemBarsBehavior = if (immersive && !showCameraSystemBars)
+        WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+    else WindowInsetsControllerCompat.BEHAVIOR_DEFAULT
+    if (immersive && !showCameraSystemBars) bars.hide(WindowInsetsCompat.Type.systemBars())
+    else bars.show(WindowInsetsCompat.Type.systemBars())
 }
 
 private tailrec fun Context.hostActivity(): Activity? = when (this) {

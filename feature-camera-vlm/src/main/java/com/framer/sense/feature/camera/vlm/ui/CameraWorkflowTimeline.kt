@@ -25,18 +25,19 @@ import com.framer.sense.feature.camera.vlm.R
 
 internal val CameraWorkflowMaxWidth = 360.dp
 
-/** 独立利用快门原有 6dp 底边距和底部留白，不参与操作栏的测量。 */
+internal val CameraWorkflowFooterHeight = 24.dp
+
+/** 时间线占用固定底部行，不再根据系统栏留白缩放或向外偏移。 */
 @Composable
-internal fun CameraWorkflowFooter(state: VlmUiState, bottomSpace: Dp, modifier: Modifier = Modifier) {
-    val available = bottomSpace.coerceAtLeast(0.dp)
-    val height = (available + 5.dp).coerceAtMost(20.dp)
-    Box(modifier.fillMaxWidth().offset(y = available).height(available + 6.dp)
-        .padding(horizontal = 12.dp).padding(bottom = 1.dp), contentAlignment = Alignment.BottomCenter) {
-        CameraWorkflowTimeline(state, height = height)
+internal fun CameraWorkflowFooter(state: VlmUiState, modifier: Modifier = Modifier) {
+    Box(modifier.fillMaxWidth().height(CameraWorkflowFooterHeight)
+        .padding(horizontal = 12.dp, vertical = 2.dp).testTag("vlm_workflow_footer"),
+        contentAlignment = Alignment.Center) {
+        CameraWorkflowTimeline(state)
     }
 }
 
-/** 只有节点图案随握持方向转正；窄小底部留白按实际高度紧凑显示。 */
+/** 只有节点图案随握持方向转正，默认节点 20dp、图案 16dp。 */
 @Composable
 internal fun CameraWorkflowTimeline(state: VlmUiState, modifier: Modifier = Modifier, height: Dp = 20.dp) {
     val progress = state.workflowProgress()

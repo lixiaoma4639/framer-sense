@@ -62,6 +62,7 @@ import com.framer.sense.feature.camera.vlm.ar.ArTrackingState
 import coil3.compose.AsyncImage
 import java.io.File
 
+internal val CameraHeaderHeight = 48.dp
 internal val CameraHighlightColor = Color(0xFFFFD66A)
 private val CameraAiActionForeground = Color(0xFF202126)
 private val CameraCompositionCaptionBackground = Color.Black.copy(alpha = .55f)
@@ -72,7 +73,7 @@ internal fun CameraTopBar(state: VlmUiState, onEvent: (VlmIntent) -> Unit, modif
     var aspectMenu by remember { mutableStateOf(false) }
     val historyDescription = stringResource(R.string.vlm_history_open)
     val ratioLabels = CaptureAspectRatio.entries.map { aspectLabel(it) }
-    BoxWithConstraints(modifier.fillMaxWidth().height(48.dp).background(Color.Black.copy(alpha = .6f))
+    BoxWithConstraints(modifier.fillMaxWidth().height(CameraHeaderHeight).background(Color.Black.copy(alpha = .6f))
         .testTag("vlm_camera_top_bar")) {
         Row(Modifier.align(Alignment.CenterStart), verticalAlignment = Alignment.CenterVertically) {
             IconButton(onClick = { onEvent(VlmIntent.HistoryDrawerVisible(true)) },
@@ -104,24 +105,6 @@ internal fun CameraTopBar(state: VlmUiState, onEvent: (VlmIntent) -> Unit, modif
             }
         }
         Row(Modifier.align(Alignment.CenterEnd), verticalAlignment = Alignment.CenterVertically) {
-            IconButton(onClick = { onEvent(VlmIntent.SettingsVisible(true)) },
-                enabled = !state.historyLoading && !state.historySaving && state.stage !in listOf(VlmStage.SCANNING, VlmStage.SCAN_PROCESSING, VlmStage.VIEW_SELECTING),
-                modifier = Modifier.size(48.dp).testTag("vlm_model_settings")) {
-                Box(Modifier.testTag("vlm_model_settings_icon").cameraIconRotation()) {
-                    Icon(Icons.Default.Psychology, stringResource(R.string.vlm_model_settings_title), tint = Color.White)
-                    if (state.cameraMode == CameraMode.AR) {
-                        Icon(Icons.Default.ViewInAr, stringResource(R.string.vlm_ar_mode_label),
-                            tint = if (state.ar.tracking == ArTrackingState.PLACED) Color(0xFFB3E5AC) else Color.White,
-                            modifier = Modifier.align(Alignment.BottomEnd).offset(x = 6.dp, y = 6.dp)
-                                .size(12.dp).testTag("vlm_ar_indicator"))
-                    }
-                }
-            }
-            IconButton(onClick = { onEvent(VlmIntent.PhotoSettingsVisible(true)) }, enabled = !state.operationBusy,
-                modifier = Modifier.size(48.dp).testTag("vlm_photo_settings")) {
-                Icon(Icons.Default.Settings, stringResource(R.string.vlm_photo_settings_title), tint = Color.White,
-                    modifier = Modifier.size(24.dp).testTag("vlm_photo_settings_icon").cameraIconRotation())
-            }
             if (onExit != null) IconButton(onClick = {
                 if (state.instructionEditorVisible) onEvent(VlmIntent.InstructionEditorVisible(false)) else onExit()
             }, enabled = !state.saving, modifier = Modifier.size(48.dp).testTag("vlm_camera_exit")) {
@@ -133,13 +116,38 @@ internal fun CameraTopBar(state: VlmUiState, onEvent: (VlmIntent) -> Unit, modif
         Button(onClick = { aspectMenu = false; onEvent(VlmIntent.InstructionEditorVisible(!state.instructionEditorVisible)) },
             enabled = state.canEditInstruction, contentPadding = PaddingValues(horizontal = 8.dp),
             colors = ButtonDefaults.buttonColors(containerColor = CameraHighlightColor, contentColor = CameraAiActionForeground),
-            modifier = Modifier.align(Alignment.Center).offset(x = if (onExit != null) (-24).dp else 0.dp).height(36.dp)
-                .widthIn(max = (maxWidth - if (onExit != null) 240.dp else 192.dp).coerceAtLeast(48.dp)).testTag("vlm_ai_instruction_toggle")
+            modifier = Modifier.align(Alignment.Center).height(36.dp)
+                .widthIn(max = (maxWidth - 192.dp).coerceAtLeast(48.dp)).testTag("vlm_ai_instruction_toggle")
                 .semantics { selected = state.instructionEditorVisible }) {
             Icon(Icons.Default.AutoAwesome, contentDescription = null,
                 modifier = Modifier.size(18.dp).testTag("vlm_ai_instruction_icon").cameraIconRotation())
             Spacer(Modifier.width(4.dp))
             Text(stringResource(R.string.vlm_ai_instruction_entry), style = MaterialTheme.typography.labelMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
+    }
+}
+
+/** 设置直接覆盖抽屉，保留历史展开状态与原有图标、门控。 */
+@Composable
+internal fun CameraSettingsButtons(state: VlmUiState, onEvent: (VlmIntent) -> Unit) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        IconButton(onClick = { onEvent(VlmIntent.SettingsVisible(true)) },
+            enabled = !state.historyLoading && !state.historySaving && state.stage !in listOf(VlmStage.SCANNING, VlmStage.SCAN_PROCESSING, VlmStage.VIEW_SELECTING),
+            modifier = Modifier.size(48.dp).testTag("vlm_model_settings")) {
+            Box(Modifier.testTag("vlm_model_settings_icon").cameraIconRotation()) {
+                Icon(Icons.Default.Psychology, stringResource(R.string.vlm_model_settings_title), tint = Color.White)
+                if (state.cameraMode == CameraMode.AR) {
+                    Icon(Icons.Default.ViewInAr, stringResource(R.string.vlm_ar_mode_label),
+                        tint = if (state.ar.tracking == ArTrackingState.PLACED) Color(0xFFB3E5AC) else Color.White,
+                        modifier = Modifier.align(Alignment.BottomEnd).offset(x = 6.dp, y = 6.dp)
+                            .size(12.dp).testTag("vlm_ar_indicator"))
+                }
+            }
+        }
+        IconButton(onClick = { onEvent(VlmIntent.PhotoSettingsVisible(true)) }, enabled = !state.operationBusy,
+            modifier = Modifier.size(48.dp).testTag("vlm_photo_settings")) {
+            Icon(Icons.Default.Settings, stringResource(R.string.vlm_photo_settings_title), tint = Color.White,
+                modifier = Modifier.size(24.dp).testTag("vlm_photo_settings_icon").cameraIconRotation())
         }
     }
 }
@@ -480,7 +488,7 @@ internal fun PhotoSettingsDialog(state: VlmUiState, onEvent: (VlmIntent) -> Unit
             showDraftHint = !state.usesGeneratedReference) { onEvent(VlmIntent.PreferredEthnicity(it)) }
         if (!state.usesGeneratedReference) {
         SettingsSwitch(R.string.vlm_photo_show_face, state.faceVisible, !state.operationBusy, "vlm_face_setting") { onEvent(VlmIntent.FaceVisible(it)) }
-        SettingsSwitch(R.string.vlm_ar_mode_label, state.cameraMode == CameraMode.AR, state.framingUnlocked, "vlm_ar_setting") { onEvent(VlmIntent.CameraModeSelected(if (it) CameraMode.AR else CameraMode.NORMAL)) }
+        SettingsSwitch(R.string.vlm_ar_mode_label, state.cameraMode == CameraMode.AR, state.canChangeCameraMode, "vlm_ar_setting") { onEvent(VlmIntent.CameraModeSelected(if (it) CameraMode.AR else CameraMode.NORMAL)) }
         Text(stringResource(if (state.cameraMode == CameraMode.AR) R.string.vlm_ar_zoom_locked else R.string.vlm_normal_camera_hint), style = MaterialTheme.typography.bodySmall)
         if (state.cameraMode == CameraMode.AR) {
             Text(stringResource(when {

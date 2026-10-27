@@ -37,14 +37,20 @@ internal fun CameraHistoryDrawer(state: VlmUiState, onEvent: (VlmIntent) -> Unit
     LaunchedEffect(drawer) {
         snapshotFlow { drawer.currentValue }.drop(1).collect { latestEvent(VlmIntent.HistoryDrawerVisible(it == DrawerValue.Open)) }
     }
-    val width = minOf(360.dp, (LocalConfiguration.current.screenWidthDp * .86f).dp)
     ModalNavigationDrawer(drawerState = drawer,
         gesturesEnabled = state.historyDrawerVisible || drawer.currentValue == DrawerValue.Open,
         scrimColor = Color.Black.copy(alpha = .55f), drawerContent = {
-            ModalDrawerSheet(Modifier.width(width).fillMaxHeight().testTag("vlm_history_drawer"),
+            // Sheet 背景铺满窗口高度，系统栏安全区仅作用于内部内容。
+            ModalDrawerSheet(Modifier.fillMaxWidth(.75f).fillMaxHeight().testTag("vlm_history_drawer"),
                 drawerContainerColor = Color(0xFF171717), drawerContentColor = Color.White) {
-                Text(stringResource(R.string.vlm_history_title), style = MaterialTheme.typography.titleLarge,
-                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 20.dp))
+                // Sheet 已处理顶部系统安全区，与相机顶部栏一样紧接安全区放置 48dp 行。
+                Row(Modifier.fillMaxWidth().height(CameraHeaderHeight).padding(start = 16.dp)
+                    .testTag("vlm_history_header"), verticalAlignment = Alignment.CenterVertically) {
+                    Text(stringResource(R.string.vlm_history_title), style = MaterialTheme.typography.titleLarge,
+                        maxLines = 1, overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f).testTag("vlm_history_title"))
+                    CameraSettingsButtons(state, onEvent)
+                }
                 if (state.historySaving || state.historyLoading) LinearProgressIndicator(Modifier.fillMaxWidth(), color = Color.White)
                 if (state.historySaveFailed) TextButton(onClick = { onEvent(VlmIntent.RetryHistorySave) },
                     enabled = !state.historySwitchBlocked, modifier = Modifier.testTag("vlm_history_save_retry")) {

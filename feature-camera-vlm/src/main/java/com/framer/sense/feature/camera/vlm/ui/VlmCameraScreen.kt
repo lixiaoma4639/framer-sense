@@ -83,15 +83,20 @@ import android.graphics.Bitmap
  * @param modifier 页面布局修饰符。
  * @param viewModel MVI 状态机，由 Hilt 提供。
  * @param onExit App 提供的退出导航回调；保存照片期间不可退出。
+ * @param onHistoryDrawerVisibilityChanged 将历史抽屉状态交由 App 统一控制系统状态栏。
  */
 @Composable
 fun VlmCameraScreen(
     onCaptureActionChanged: (VlmCaptureAction?) -> Unit = {},
     modifier: Modifier = Modifier,
     viewModel: VlmCameraViewModel = hiltViewModel(),
-    onExit: (() -> Unit)? = null
+    onExit: (() -> Unit)? = null,
+    onHistoryDrawerVisibilityChanged: (Boolean) -> Unit = {}
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
+    val latestHistoryVisibilityChanged by rememberUpdatedState(onHistoryDrawerVisibilityChanged)
+    LaunchedEffect(state.historyDrawerVisible) { latestHistoryVisibilityChanged(state.historyDrawerVisible) }
+    DisposableEffect(Unit) { onDispose { latestHistoryVisibilityChanged(false) } }
     LaunchedEffect(state.stage,state.ar.source,state.cameraReady,state.ar.tracking,state.modelBusy) {
         Log.i("VlmCameraUi", "页面状态 stage=${state.stage} source=${state.ar.source} ready=${state.cameraReady} tracking=${state.ar.tracking} modelBusy=${state.modelBusy} background=${state.background.status}")
     }
@@ -200,25 +205,26 @@ fun VlmCameraScreen(
         if (!viewModel.state.value.saving) latestExit?.invoke()
     } }
     CameraBackHandler(state, onEvent, exitCamera)
-    val safeInsets = WindowInsets.displayCutout
-        .union(WindowInsets.mandatorySystemGestures).asPaddingValues()
+    val safeInsets = rememberCameraSafeInsets().asPaddingValues()
+    val footerInsets = WindowInsets.displayCutout.only(WindowInsetsSides.Horizontal + WindowInsetsSides.Bottom)
     CameraIconRotationScope(onOrientation = {
         controller.orientation(it)
         onEvent(VlmIntent.PhotoOrientationChanged(it))
     }) {
         CameraHistoryDrawer(state, onEvent) {
-            BoxWithConstraints(modifier.fillMaxSize().background(Color.Black).testTag("vlm_camera_screen").padding(safeInsets)) {
-                val controlsMaxHeight = (maxHeight - 48.dp).coerceAtLeast(0.dp)
-                CameraPane(state, controller, permission, { permissionLauncher.launch(Manifest.permission.CAMERA) },
-                    onEvent, Modifier.fillMaxSize().padding(top = 48.dp, bottom = 84.dp))
-                CameraBottomBar(state, onEvent, { latestCapture() }, permission,
-                    Modifier.align(Alignment.BottomCenter).heightIn(max = controlsMaxHeight))
-                CameraWorkflowFooter(state,
-                    safeInsets.calculateBottomPadding() - WindowInsets.displayCutout.asPaddingValues().calculateBottomPadding(),
-                    Modifier.align(Alignment.BottomCenter))
-                ArSupportControl(controller, state, permission, onEvent)
-                CameraTopBar(state, onEvent, Modifier.align(Alignment.TopCenter), onExit = exitCamera)
-                CompositionInstructionOverlay(state, onEvent, Modifier.fillMaxSize())
+            Box(modifier.fillMaxSize().background(Color.Black).testTag("vlm_camera_screen")) {
+                BoxWithConstraints(Modifier.fillMaxSize().padding(safeInsets).padding(bottom = CameraWorkflowFooterHeight)) {
+                    val controlsMaxHeight = (maxHeight - CameraHeaderHeight).coerceAtLeast(0.dp)
+                    CameraPane(state, controller, permission, { permissionLauncher.launch(Manifest.permission.CAMERA) },
+                        onEvent, Modifier.fillMaxSize().padding(top = CameraHeaderHeight, bottom = 84.dp))
+                    CameraBottomBar(state, onEvent, { latestCapture() }, permission,
+                        Modifier.align(Alignment.BottomCenter).heightIn(max = controlsMaxHeight))
+                    ArSupportControl(controller, state, permission, onEvent)
+                    CameraTopBar(state, onEvent, Modifier.align(Alignment.TopCenter), onExit = exitCamera)
+                    CompositionInstructionOverlay(state, onEvent, Modifier.fillMaxSize())
+                }
+                // 固定时间线位置及其 24dp 容器，不读取系统横条或手势留白。
+                CameraWorkflowFooter(state, Modifier.align(Alignment.BottomCenter).windowInsetsPadding(footerInsets))
             }
         }
         if (state.photoSettingsVisible) PhotoSettingsDialog(state, onEvent, { imageLauncher.launch("image/*") })
