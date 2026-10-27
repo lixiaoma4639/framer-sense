@@ -1,4 +1,21 @@
 <resources>
+    <string name="vlm_history_title">构图历史</string>
+    <string name="vlm_history_open">打开构图历史</string>
+    <string name="vlm_history_pinned">置顶</string>
+    <string name="vlm_history_recent">最近</string>
+    <string name="vlm_history_empty">还没有构图历史，成功生成后会保存在这里。</string>
+    <string name="vlm_history_pin">置顶</string>
+    <string name="vlm_history_unpin">取消置顶</string>
+    <string name="vlm_history_delete">删除</string>
+    <string name="vlm_history_cancel">取消</string>
+    <string name="vlm_history_delete_title">删除这次构图历史？</string>
+    <string name="vlm_history_delete_message">该流程的构图和参考图片会从本机删除，此操作无法撤销。</string>
+    <string name="vlm_history_busy">请等待当前任务完成后再切换或删除历史。</string>
+    <string name="vlm_history_save_failed">构图已生成，但本地历史未保存完成。可在历史抽屉中重试保存，不会重新生成。</string>
+    <string name="vlm_history_retry_save">重试保存历史</string>
+    <string name="vlm_history_load_failed">本地构图历史暂时无法读取，请稍后再试。</string>
+    <string name="vlm_history_restore_failed">这次历史的数据或图片不完整，暂时无法恢复。</string>
+    <string name="vlm_history_operation_failed">历史操作未完成，请重试。</string>
     <string name="vlm_reference_auto_hint">使用所选品牌；豆包云端不可用时使用离线 3D 人偶，其他品牌的生图暂不支持。</string>
     <string name="vlm_reference_auto_offline">本次使用离线 3D 人偶</string>
     <string name="vlm_seedream_flash">Seedream 5.0 Flash (快速)</string>

@@ -1,16 +1,18 @@
 package com.framer.sense.feature.camera.vlm.agent
 
 import com.framer.sense.feature.camera.vlm.model.GeneratedPortraitPreferences
+import com.framer.sense.feature.camera.vlm.model.GeneratedStyleChoice
 
 /** 千问独立提示词；不复用或修改 Seedream 的原生图层创作约束。 */
 object QwenImageReferencePrompt {
     const val VERSION = "B_RGBA_COMPACT_V3"
 
     // APP 只提供兜底风格；候选序号不构成模型的历史记忆或姿势去重指令。
-    fun build(instruction: String, variation: Int, preferences: GeneratedPortraitPreferences? = null, styleIndex: Int = variation): String {
+    fun build(instruction: String, variation: Int, preferences: GeneratedPortraitPreferences? = null, styleIndex: Int = variation,
+              styleChoice: GeneratedStyleChoice? = null): String {
         val requirement = instruction.trim().take(2000).ifBlank { "未提供特殊要求，请由 AI 自主创作。" }
         val preferenceText = preferences?.let(GeneratedPortraitPreferencePrompt::build).orEmpty()
-        val styleText = GeneratedPortraitStylePolicy.prompt(styleIndex)
+        val styleText = styleChoice?.let(GeneratedPortraitStylePolicy::prompt) ?: GeneratedPortraitStylePolicy.prompt(styleIndex)
         return """
             这是一张带有透明度的RGBA图像。
 

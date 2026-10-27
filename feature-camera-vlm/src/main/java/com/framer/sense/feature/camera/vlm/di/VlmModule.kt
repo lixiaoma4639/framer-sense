@@ -18,6 +18,9 @@ import javax.inject.Singleton
 @Module
 @InstallIn(SingletonComponent::class)
 object VlmModule {
+    @Provides @Singleton fun cameraHistory(@ApplicationContext context: Context,
+        repository: com.framer.sense.core.data.CameraHistoryRepository): CameraCompositionHistory =
+        LocalCameraCompositionHistory(context, repository)
     @Provides @Singleton fun referenceNetwork(@ApplicationContext context: Context): ReferenceNetworkState = AndroidReferenceNetworkState(context)
     @Provides @Singleton fun generatedReferences(@ApplicationContext context: Context): GeneratedReferenceGenerator = GeneratedReferenceRepository(context)
     /** 提供模型文件仓库。@param context 应用上下文，避免持有 Activity。 */

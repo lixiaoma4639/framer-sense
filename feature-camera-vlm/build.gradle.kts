@@ -85,6 +85,7 @@ dependencies {
     val composeBom = platform(libs.androidx.compose.bom)
 
     implementation(project(":core-ui"))
+    implementation(project(":core-data"))
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.androidx.hilt.lifecycle.viewmodel.compose)
     implementation(libs.androidx.lifecycle.runtime.compose)
@@ -115,6 +116,8 @@ dependencies {
     testImplementation(libs.kotlinx.coroutines.test)
     androidTestImplementation(libs.androidx.test.ext.junit)
     androidTestImplementation(libs.androidx.test.runner)
+    androidTestImplementation(project(":core-database"))
+    androidTestImplementation(libs.androidx.room.runtime)
     androidTestImplementation(composeBom)
     androidTestImplementation(libs.androidx.compose.ui.test.junit4)
     debugImplementation(libs.androidx.compose.ui.test.manifest)

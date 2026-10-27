@@ -1,13 +1,16 @@
 package com.framer.sense.feature.camera.vlm.agent
 
 import com.framer.sense.feature.camera.vlm.model.GeneratedPortraitPreferences
+import com.framer.sense.feature.camera.vlm.model.GeneratedStyleChoice
 
 /** 创作约束不代表模型已经满足要求；创作序号不构成历史记忆或严格去重。 */
 object GeneratedReferencePrompt {
-    fun build(instruction: String, variation: Int, preferences: GeneratedPortraitPreferences? = null, styleIndex: Int = variation): String {
+    const val VERSION = "SEED_REFERENCE_V1"
+    fun build(instruction: String, variation: Int, preferences: GeneratedPortraitPreferences? = null, styleIndex: Int = variation,
+              styleChoice: GeneratedStyleChoice? = null): String {
         val requirement = instruction.trim().take(2000).ifBlank { "未提供特殊要求，请由 AI 自主创作。" }
         val preferenceText = preferences?.let(GeneratedPortraitPreferencePrompt::build).orEmpty()
-        val styleText = GeneratedPortraitStylePolicy.prompt(styleIndex)
+        val styleText = styleChoice?.let(GeneratedPortraitStylePolicy::prompt) ?: GeneratedPortraitStylePolicy.prompt(styleIndex)
         return """
             请根据提供的参考照片，创作一张以人物为核心、具有鲜明艺术表现力的人像摄影参考构图，供用户在当前真实现场模仿拍摄。
 

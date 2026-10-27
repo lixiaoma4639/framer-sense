@@ -15,7 +15,10 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.foundation.Canvas
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
@@ -67,21 +70,23 @@ private val CameraCompositionCaptionForeground = Color.White
 @Composable
 internal fun CameraTopBar(state: VlmUiState, onEvent: (VlmIntent) -> Unit, modifier: Modifier = Modifier, onExit: (() -> Unit)? = null) {
     var aspectMenu by remember { mutableStateOf(false) }
+    val historyDescription = stringResource(R.string.vlm_history_open)
     val ratioLabels = CaptureAspectRatio.entries.map { aspectLabel(it) }
     BoxWithConstraints(modifier.fillMaxWidth().height(48.dp).background(Color.Black.copy(alpha = .6f))
         .testTag("vlm_camera_top_bar")) {
         Row(Modifier.align(Alignment.CenterStart), verticalAlignment = Alignment.CenterVertically) {
-            if (onExit != null) IconButton(onClick = {
-                if (state.instructionEditorVisible) onEvent(VlmIntent.InstructionEditorVisible(false)) else onExit()
-            }, enabled = !state.saving, modifier = Modifier.size(48.dp).testTag("vlm_camera_exit")) {
-                Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.vlm_exit_camera), tint = Color.White,
-                    modifier = Modifier.size(24.dp).testTag("vlm_camera_exit_icon"))
+            IconButton(onClick = { onEvent(VlmIntent.HistoryDrawerVisible(true)) },
+                modifier = Modifier.size(48.dp).testTag("vlm_history_open").semantics { contentDescription = historyDescription }) {
+                Canvas(Modifier.size(24.dp).cameraIconRotation()) {
+                    drawLine(Color.White, Offset(2.dp.toPx(), 8.dp.toPx()), Offset(22.dp.toPx(), 8.dp.toPx()), 2.dp.toPx(), StrokeCap.Round)
+                    drawLine(Color.White, Offset(2.dp.toPx(), 16.dp.toPx()), Offset(15.dp.toPx(), 16.dp.toPx()), 2.dp.toPx(), StrokeCap.Round)
+                }
             }
             Box {
-                TextButton(onClick = { aspectMenu = true }, enabled = state.framingUnlocked,
+                TextButton(onClick = { aspectMenu = true }, enabled = state.framingUnlocked && state.historyAspectRatio == null,
                     contentPadding = PaddingValues(0.dp),
                     modifier = Modifier.size(48.dp).testTag("vlm_aspect_ratio")) {
-                    Text(aspectLabel(state.photoPreferences.aspectRatio), color = Color.White,
+                    Text(aspectLabel(state.captureAspectRatio, state.historyLandscape), color = Color.White,
                         modifier = Modifier.testTag("vlm_aspect_ratio_label").cameraIconRotation())
                 }
                 if (aspectMenu) CameraAdaptiveDialog(onDismissRequest = { aspectMenu = false }) {
@@ -100,7 +105,7 @@ internal fun CameraTopBar(state: VlmUiState, onEvent: (VlmIntent) -> Unit, modif
         }
         Row(Modifier.align(Alignment.CenterEnd), verticalAlignment = Alignment.CenterVertically) {
             IconButton(onClick = { onEvent(VlmIntent.SettingsVisible(true)) },
-                enabled = state.stage !in listOf(VlmStage.SCANNING, VlmStage.SCAN_PROCESSING, VlmStage.VIEW_SELECTING),
+                enabled = !state.historyLoading && !state.historySaving && state.stage !in listOf(VlmStage.SCANNING, VlmStage.SCAN_PROCESSING, VlmStage.VIEW_SELECTING),
                 modifier = Modifier.size(48.dp).testTag("vlm_model_settings")) {
                 Box(Modifier.testTag("vlm_model_settings_icon").cameraIconRotation()) {
                     Icon(Icons.Default.Psychology, stringResource(R.string.vlm_model_settings_title), tint = Color.White)
@@ -117,25 +122,31 @@ internal fun CameraTopBar(state: VlmUiState, onEvent: (VlmIntent) -> Unit, modif
                 Icon(Icons.Default.Settings, stringResource(R.string.vlm_photo_settings_title), tint = Color.White,
                     modifier = Modifier.size(24.dp).testTag("vlm_photo_settings_icon").cameraIconRotation())
             }
+            if (onExit != null) IconButton(onClick = {
+                if (state.instructionEditorVisible) onEvent(VlmIntent.InstructionEditorVisible(false)) else onExit()
+            }, enabled = !state.saving, modifier = Modifier.size(48.dp).testTag("vlm_camera_exit")) {
+                Icon(Icons.Filled.Close, stringResource(R.string.vlm_exit_camera), tint = Color.White,
+                    modifier = Modifier.size(24.dp).testTag("vlm_camera_exit_icon"))
+            }
         }
         // 48dp 点击区内居中的 24dp 图标，与输入面板的 12dp 外边距对齐。
         Button(onClick = { aspectMenu = false; onEvent(VlmIntent.InstructionEditorVisible(!state.instructionEditorVisible)) },
             enabled = state.canEditInstruction, contentPadding = PaddingValues(horizontal = 8.dp),
             colors = ButtonDefaults.buttonColors(containerColor = CameraHighlightColor, contentColor = CameraAiActionForeground),
-            modifier = Modifier.align(Alignment.Center).height(36.dp)
-                .widthIn(max = (maxWidth - 192.dp).coerceAtLeast(48.dp)).testTag("vlm_ai_instruction_toggle")
+            modifier = Modifier.align(Alignment.Center).offset(x = if (onExit != null) (-24).dp else 0.dp).height(36.dp)
+                .widthIn(max = (maxWidth - if (onExit != null) 240.dp else 192.dp).coerceAtLeast(48.dp)).testTag("vlm_ai_instruction_toggle")
                 .semantics { selected = state.instructionEditorVisible }) {
             Icon(Icons.Default.AutoAwesome, contentDescription = null,
                 modifier = Modifier.size(18.dp).testTag("vlm_ai_instruction_icon").cameraIconRotation())
             Spacer(Modifier.width(4.dp))
-            Text(stringResource(R.string.vlm_ai_instruction_entry), style = MaterialTheme.typography.labelMedium, maxLines = 1)
+            Text(stringResource(R.string.vlm_ai_instruction_entry), style = MaterialTheme.typography.labelMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
     }
 }
 
 @Composable
-private fun aspectLabel(ratio: CaptureAspectRatio): String {
-    val landscape = LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
+private fun aspectLabel(ratio: CaptureAspectRatio, landscapeOverride: Boolean? = null): String {
+    val landscape = landscapeOverride ?: (LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE)
     return stringResource(if (ratio == CaptureAspectRatio.THREE_FOUR) {
         if (landscape) R.string.vlm_ratio_4_3 else R.string.vlm_ratio_3_4
     } else if (landscape) R.string.vlm_ratio_16_9 else R.string.vlm_ratio_9_16)

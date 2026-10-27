@@ -145,7 +145,8 @@ class GeneratedReferenceRepository(context: Context) : GeneratedReferenceGenerat
         trace.event("BEGIN", "provider=${settings.preferred} official=${settings.officialImageGeneration} keyConfigured=${settings.imageGenerationKey.isNotBlank()} gatewayTokenConfigured=${settings.gatewayToken.isNotBlank()}")
         trace.event("PORTRAIT_SETTINGS", "avatar=${candidate.portraitPreferences.avatar} ethnicity=${candidate.portraitPreferences.ethnicity} styleIndex=${candidate.styleIndex}")
         try {
-            if (!settings.supportsImageGeneration || candidate.model.provider != settings.preferred) throw GeneratedReferenceFailure("UNSUPPORTED")
+            if (!settings.supportsImageGeneration || candidate.model.provider != settings.preferred || candidate.model is HistoricalImageModel)
+                throw GeneratedReferenceFailure("UNSUPPORTED")
             val folder = File(root, candidate.id).apply { mkdirs() }
             val manifest = File(folder, "assets.json")
             if (manifest.isFile) {
@@ -168,7 +169,7 @@ class GeneratedReferenceRepository(context: Context) : GeneratedReferenceGenerat
             val result = if (candidate.model is QwenImageModel) {
                 generateQwen(candidate, settings, inputBytes, inputInfo, encoded, folder, trace)
             } else {
-                val prompt = GeneratedReferencePrompt.build(candidate.instruction, candidate.variation, candidate.portraitPreferences, candidate.styleIndex)
+                val prompt = GeneratedReferencePrompt.build(candidate.instruction, candidate.variation, candidate.portraitPreferences, candidate.styleIndex, candidate.styleChoice)
                 trace.event("PARAMETERS", "layer_decomposition=true size=1.5K output_format=png response_format=url promptChars=${prompt.length}")
                 val response = if (settings.seedAccess == SeedAccess.OFFICIAL) {
                     if (settings.seedApiKey.isBlank()) throw GeneratedReferenceFailure("KEY")
@@ -181,7 +182,9 @@ class GeneratedReferenceRepository(context: Context) : GeneratedReferenceGenerat
                 } else gateway(candidate, settings, encoded, prompt, trace)
                 trace.event("LAYERS_PARSED", "actualModel=${GeneratedReferenceDiagnostics.identifier(response.model)} layers=${response.layers.size} personLayers=${response.personLayers.size} outputs=${response.outputs}")
                 // 保留串行位图合成，避免后续调用方式调整时多份大画布同时占用内存。
-                renderMutex.withLock { render(response, candidate, settings, folder, trace) }
+                renderMutex.withLock { render(response, candidate, settings, folder, trace) }.copy(
+                    requestSnapshot = GeneratedRequestSnapshot(candidate.model.apiId, GeneratedReferencePrompt.VERSION, prompt,
+                        SeedreamImageProtocol.payload(candidate.model.apiId, "", prompt).filterKeys { it !in setOf("image", "prompt", "model") }.mapValues { it.value.toString() }))
             }
             val saved = result.copy(descriptions = result.descriptions.withEnvironmentFallback(candidate.sceneDescription))
             trace.event("PERSIST")
@@ -201,7 +204,7 @@ class GeneratedReferenceRepository(context: Context) : GeneratedReferenceGenerat
         if (input.size > 10 * 1024 * 1024 || info.outWidth !in 1..8000 || info.outHeight !in 1..8000)
             throw GeneratedReferenceFailure("INPUT")
         val model = candidate.model as QwenImageModel
-        val prompt = QwenImageReferencePrompt.build(candidate.instruction, candidate.variation, candidate.portraitPreferences, candidate.styleIndex)
+        val prompt = QwenImageReferencePrompt.build(candidate.instruction, candidate.variation, candidate.portraitPreferences, candidate.styleIndex, candidate.styleChoice)
         val payload = QwenImageProtocol.payload(model, "data:${info.outMimeType};base64,$encoded", prompt, info.outWidth, info.outHeight)
         val request = Request.Builder().url(QwenImageProtocol.endpoint(settings))
             .header("Authorization", "Bearer ${settings.qwenApiKey.trim()}")
@@ -212,6 +215,8 @@ class GeneratedReferenceRepository(context: Context) : GeneratedReferenceGenerat
         val url = QwenImageProtocol.response(status, bytes.toString(Charsets.UTF_8))
         val downloaded = download(url, settings, trace, "QWEN_FOREGROUND")
         val foreground = downloaded.bitmap
+        val requestSnapshot = GeneratedRequestSnapshot(model.apiId, QwenImageReferencePrompt.VERSION, prompt,
+            payload.filterKeys { it !in setOf("image", "prompt", "model") }.mapValues { it.value.toString() })
         try {
             return renderMutex.withLock {
                 val background = BitmapFactory.decodeByteArray(input, 0, input.size, BitmapFactory.Options().apply {
@@ -227,7 +232,7 @@ class GeneratedReferenceRepository(context: Context) : GeneratedReferenceGenerat
                     if (!transparent || !aspectMatches) {
                         fullFile.outputStream().use { check(foreground.compress(Bitmap.CompressFormat.PNG, 100, it)) }
                         GeneratedReferenceAssets(fullFile.path, "", foreground.width, foreground.height, model.apiId, 1,
-                            portraitIssue = if (!transparent) GeneratedPortraitIssue.NO_TRANSPARENCY else GeneratedPortraitIssue.ASPECT_MISMATCH)
+                            portraitIssue = if (!transparent) GeneratedPortraitIssue.NO_TRANSPARENCY else GeneratedPortraitIssue.ASPECT_MISMATCH, requestSnapshot = requestSnapshot)
                     } else {
                         val portrait = QwenReferenceCompositor.portrait(background, foreground)
                         try {
@@ -236,7 +241,7 @@ class GeneratedReferenceRepository(context: Context) : GeneratedReferenceGenerat
                                 fullFile.outputStream().use { check(complete.compress(Bitmap.CompressFormat.PNG, 100, it)) }
                                 val portraitFile = File(folder, "portrait.png")
                                 portraitFile.outputStream().use { check(portrait.compress(Bitmap.CompressFormat.PNG, 100, it)) }
-                                GeneratedReferenceAssets(fullFile.path, portraitFile.path, complete.width, complete.height, model.apiId, 1)
+                                GeneratedReferenceAssets(fullFile.path, portraitFile.path, complete.width, complete.height, model.apiId, 1, requestSnapshot = requestSnapshot)
                             } finally { complete.recycle() }
                         } finally { portrait.recycle() }
                     }

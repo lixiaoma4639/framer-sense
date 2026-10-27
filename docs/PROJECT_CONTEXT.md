@@ -1,5 +1,7 @@
 # Framer_Sense 项目开发上下文
 
+2026-10-26 相机本地历史：`feature-camera-vlm` 新增 `CameraCompositionHistory`，通过 `core-data/CameraHistoryRepository` 访问 `core-database/CameraHistoryDatabase`（独立 `camera-history.db`，不改 MyModel）。保存云端成功流程、提示词／版本／参数、方向／来源／扫描快照和稳定风格键，图片留私有文件并排除云备份。左侧 Material3 历史抽屉可置顶、删除、恢复到构图选择；右上白色 X 保留原退出行为。恢复后原流程续生使用当前模型和最新模板，临时锁原画幅，重新应用必须再次对齐；不自动恢复未完成的收费请求。详见 `docs/CAMERA_HISTORY.md`。
+
 2026-10-25 生图完整预览与人像应用解耦：`SeedreamLayerCompositor` 将底图与全部前景按层级、官方边界框合成；优先绝对坐标并处理底图降采样，归一化坐标作后备。人物筛选不再阻断完整图预览。资源清单的 `portraitPath` 可为空，`sourceLayerCount` 保存实际层数，`hasPortrait`／`canApply` 控制人像应用，无人像时仍可选择与放大完整图。仍为单次请求，不增加模型或重试；详见 `docs/CAMERA_GENERATED_REFERENCE_PLAN.md` 4.2。
 
 2026-10-25 最新生图排查要求：当前每次仅生成一张，创建一个候选并提交一次 Seedream 原生图层请求，客户端并发上限为 1；已有请求在途时生成、换一张、重试均不追加提交。此条覆盖下方历史双候选描述，保留已有构图与相机交互。确认框文案同步为一张；本次用于排查并发因素，尚未确认 HTTP 400 根因。已更新测试代码，未运行自动化测试。
@@ -52,7 +54,7 @@ Framer_Sense 是一个基于 Android 官方多模块架构模板演进而来的 
 | 模块 | 当前职责 |
 | --- | --- |
 | `core-ui` | Compose 主题、颜色、排版等 UI 基础设施。 |
-| `core-data` | Repository 层，封装 MyModel 数据访问并对上层暴露业务接口。 |
+| `core-data` | Repository 层，封装 MyModel 与相机构图历史的数据访问。 |
 | `core-database` | Room 数据库、实体、DAO 和数据库 DI。 |
 | `core-testing` | 共享测试基础设施，例如 Hilt 测试 Runner。 |
 | `core-common` | 公共能力预留模块，目前主要是模块占位与示例测试。 |
@@ -224,7 +226,7 @@ MyApplication
 - 2026-10-08：人像样片验证使用 Rain 动画电影风卡通角色，平静／闭嘴微笑／露齿笑由完整面部求值烘焙为 morph。写实样片被用户拒绝，保留历史资源并撤出目录；新 `draft.rain_natural_stand` 为 DRAFT，手动验收，不进入自动推荐。脸部节点按资源配置，卡通关闭旧颜色滤镜；资源／配置／节点／滤镜参与缓存。保持独立 MVI 令牌与关闭／后台取消。ARCore 与 Camera2 尚未接入。资源、源工程与验收见 `docs/CAMERA_AR_PHOTO_SAMPLE.md`。
 - 卡通外观目录版本 3：样片窗口和成年女性卡通动作可选白种人／亚洲人／黑人，使用 Rain 基础与两个派生 GLB；脸部造型和材质均有设计参数，保持站姿及三表情。用户选择保存在本地偏好与 App-only `AvatarPlacement.ethnicity`／`ResolvedPhotoAction.ethnicity`，不进入网关，不由模型或照片推断。切换当前方案以 revision／令牌事务刷新，动作资源及外观参与缓存；旧动作切换清除无对应资源的外观标记。按用户要求本次未编译、测试或渲染验证，三个外观仍待用户验收。
 - 保留主导航蓝色“拍摄”和横屏侧栏；冻结、生成、修改和资源管理期间禁止拍摄，不排队补拍。真实照片通过 MediaStore 保存，不合入虚拟人偶。
-- 横竖屏变化保留 ViewModel 会话；进程回收后回到实时相机并提示重新扫描。
+- 横竖屏变化保留 ViewModel 会话；进程回收后不自动恢复收费任务，用户可从本地历史主动恢复成功的云端构图；未保存流程需重新扫描。
 - App 不再启动预热 ONNX；旧相机模块和专题文档保留作为历史实现。
 
 卡通目录／资源缓存版本 4 修复两个派生 GLB 的动画名称 `.001` 后缀与目录不一致的问题，制作时先清除旧 Action 再创建动作；运行时仍精确校验，错误日志列出预期与实际动画名。仅修复资源 JSON，不改变 BIN 数据；回归代码补充三个外观的动画名称断言，未编译、测试或渲染验证。
@@ -284,6 +286,8 @@ feature-mymodel
   -> core-data
   -> core-database
 ```
+
+相机本地历史依赖链路：`feature-camera-vlm → core-data → core-database`。专用 DTO 和图片文件管理留在相机模块，Room 实体、DAO、事务、Schema 与初始化归 `core-database`。
 
 相机构图引导数据流：
 

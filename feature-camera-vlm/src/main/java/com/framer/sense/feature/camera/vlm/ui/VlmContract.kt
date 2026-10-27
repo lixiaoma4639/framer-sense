@@ -2,6 +2,7 @@ package com.framer.sense.feature.camera.vlm.ui
 
 import android.graphics.Bitmap
 import android.net.Uri
+import com.framer.sense.core.data.CameraHistoryEntry
 import com.framer.sense.feature.camera.vlm.agent.DirectorProgress
 import com.framer.sense.feature.camera.vlm.data.ModelDownloadState
 import com.framer.sense.feature.camera.vlm.data.CameraReferenceRouting
@@ -84,14 +85,27 @@ data class VlmUiState(
     val directorProgress: DirectorProgress? = null,
     val photoSample: PhotoSampleState? = null,
     val generated: GeneratedReferenceState = GeneratedReferenceState(),
-    val automaticReferenceSource: ReferenceSource = CameraReferenceRouting.source(settings, networkAvailable = true)
+    val automaticReferenceSource: ReferenceSource = CameraReferenceRouting.source(settings, networkAvailable = true),
+    val historyDrawerVisible: Boolean = false,
+    val historyEntries: List<CameraHistoryEntry> = emptyList(),
+    val historyLoading: Boolean = false,
+    val historySaving: Boolean = false,
+    val historySaveFailed: Boolean = false,
+    val historyDeleteId: String? = null,
+    val historyAspectRatio: CaptureAspectRatio? = null
 ) {
+    val captureAspectRatio: CaptureAspectRatio get() = historyAspectRatio ?: photoPreferences.aspectRatio
+    val historyLandscape: Boolean? get() = if (historyAspectRatio == null) null else scene?.let {
+        if (it.orientation.previewDegrees % 180 == 0) it.width > it.height else it.height > it.width
+    }
+    fun captureRatio(landscape: Boolean): Float = captureAspectRatio.ratio(historyLandscape ?: landscape)
+    val historySwitchBlocked: Boolean get() = operationBusy || generated.running
     val referenceSource: ReferenceSource get() = when (settings.mode) {
         ModelMode.OFFLINE -> ReferenceSource.LEGACY_GLB
         ModelMode.CLOUD -> ReferenceSource.GENERATED_IMAGE
         ModelMode.AUTO -> automaticReferenceSource
     }
-    val usesGeneratedReference: Boolean get() = referenceSource == ReferenceSource.GENERATED_IMAGE
+    val usesGeneratedReference: Boolean get() = historyAspectRatio != null || referenceSource == ReferenceSource.GENERATED_IMAGE
     val activeBackgroundTarget: BackgroundReferenceTarget?
         get() = generated.applied?.backgroundTarget() ?: referencePlan?.backgroundTarget()
     /** 收起构图编辑时显示当前参考的顶部提示，两组界面始终互斥。 */
@@ -102,12 +116,12 @@ data class VlmUiState(
         get() = showReferenceGuidanceOverlay && activeBackgroundTarget?.viewBinding != null
 
     val operationBusy: Boolean
-        get() = modelBusy || saving || photoSample != null || stage in listOf(VlmStage.FREEZING,
+        get() = historyLoading || historySaving || modelBusy || saving || photoSample != null || stage in listOf(VlmStage.FREEZING,
             VlmStage.GENERATING, VlmStage.MODIFYING, VlmStage.SCANNING, VlmStage.SCAN_PROCESSING, VlmStage.VIEW_SELECTING)
     val framingUnlocked: Boolean
-        get() = stage == VlmStage.LIVE && !modelBusy && !saving && photoSample == null && !instructionEditorVisible
+        get() = stage == VlmStage.LIVE && !operationBusy && !historyDrawerVisible && !instructionEditorVisible
     val canEditInstruction: Boolean
-        get() = !operationBusy && !settingsVisible && !photoSettingsVisible
+        get() = !operationBusy && !historyDrawerVisible && !settingsVisible && !photoSettingsVisible
     val canCapture: Boolean
         get() = framingUnlocked && cameraReady && !settingsVisible && !photoSettingsVisible
     val canOpenGallery: Boolean
@@ -121,13 +135,13 @@ data class VlmUiState(
             scene == null && scanSnapshot == null && result == null && compositionCache.isEmpty() && referencePlan == null && generated.candidates.isEmpty()
     /** 可取消本轮工作回到第一步，但不能打断模型管理、保存或样片资源操作。 */
     val canRestartFlow: Boolean
-        get() = !modelBusy && !saving && !settingsVisible && !photoSettingsVisible && !instructionEditorVisible && photoSample == null
+        get() = !historyLoading && !historySaving && !historyDrawerVisible && !modelBusy && !saving && !settingsVisible && !photoSettingsVisible && !instructionEditorVisible && photoSample == null
     val canRestartScan: Boolean
         get() = isFirstCaptureStep && stage == VlmStage.LIVE && canRestartFlow && cameraReady
     val canStartSingleComposition: Boolean
         get() = isFirstCaptureStep && stage in listOf(VlmStage.LIVE, VlmStage.FREEZING) && cameraReady && canRestartFlow
     val canGenerate: Boolean
-        get() = !modelBusy && !saving && !settingsVisible && !photoSettingsVisible && !instructionEditorVisible && photoSample == null && scene != null &&
+        get() = !historyLoading && !historySaving && !historyDrawerVisible && !modelBusy && !saving && !settingsVisible && !photoSettingsVisible && !instructionEditorVisible && photoSample == null && scene != null &&
             stage in listOf(VlmStage.FROZEN, VlmStage.READY, VlmStage.GENERATING, VlmStage.MODIFYING)
 
     /** 实时画面不因离线模型加载而降帧；冻结分析时才降低后台绘制频率。 */
@@ -141,6 +155,12 @@ data class VlmUiState(
 }
 
 sealed interface VlmIntent {
+    data class HistoryDrawerVisible(val visible: Boolean) : VlmIntent
+    data class RestoreHistory(val id: String) : VlmIntent
+    data class PinHistory(val id: String, val pinned: Boolean) : VlmIntent
+    data class DeleteHistoryRequested(val id: String?) : VlmIntent
+    data object ConfirmDeleteHistory : VlmIntent
+    data object RetryHistorySave : VlmIntent
     data class SelectGenerated(val id: String) : VlmIntent
     data class RetryGenerated(val id: String) : VlmIntent
     data object ReplaceGenerated : VlmIntent

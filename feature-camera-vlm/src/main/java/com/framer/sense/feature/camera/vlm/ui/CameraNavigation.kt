@@ -4,11 +4,12 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.runtime.Composable
 
 /** 弹窗使用自身返回处理；保存期间拦截退出，其他阶段保持原流程返回顺序。 */
-internal enum class CameraBackAction { NONE, BLOCKED, CLOSE_INSTRUCTION, COLLAPSE, CANCEL, RESUME, EXIT }
+internal enum class CameraBackAction { NONE, BLOCKED, CLOSE_HISTORY, CLOSE_INSTRUCTION, COLLAPSE, CANCEL, RESUME, EXIT }
 
 internal fun cameraBackAction(state: VlmUiState, hasExit: Boolean): CameraBackAction = when {
+    state.historyDrawerVisible -> CameraBackAction.CLOSE_HISTORY
     state.settingsVisible || state.photoSettingsVisible || state.photoSample != null -> CameraBackAction.NONE
-    state.saving -> CameraBackAction.BLOCKED
+    state.saving || state.historyLoading || state.historySaving -> CameraBackAction.BLOCKED
     state.instructionEditorVisible -> CameraBackAction.CLOSE_INSTRUCTION
     state.stage in listOf(VlmStage.GENERATING, VlmStage.MODIFYING, VlmStage.FREEZING,
         VlmStage.SCANNING, VlmStage.SCAN_PROCESSING, VlmStage.VIEW_SELECTING) -> CameraBackAction.CANCEL
@@ -23,6 +24,7 @@ internal fun CameraBackHandler(state: VlmUiState, onEvent: (VlmIntent) -> Unit, 
     val action = cameraBackAction(state, onExit != null)
     BackHandler(enabled = action != CameraBackAction.NONE) {
         when (action) {
+            CameraBackAction.CLOSE_HISTORY -> onEvent(VlmIntent.HistoryDrawerVisible(false))
             CameraBackAction.CLOSE_INSTRUCTION -> onEvent(VlmIntent.InstructionEditorVisible(false))
             CameraBackAction.COLLAPSE -> onEvent(VlmIntent.CompositionDetailsVisible(false))
             CameraBackAction.CANCEL -> onEvent(VlmIntent.Cancel)

@@ -22,6 +22,129 @@ import java.util.UUID
 
 /** 验证相机事件门控，不调用摄像头、网络、GPU 或原生模型。 */
 class VlmSessionTest {
+    @Test fun localHistoryFailureKeepsSuccessfulImageAndRetryDoesNotCallGeneratorAgain() = runBlocking {
+        withContext(Dispatchers.Main) {
+            val asset = File.createTempFile("history-local-retry", ".png", InstrumentationRegistry.getInstrumentation().targetContext.cacheDir)
+            val scene = SceneSnapshot("scene", 60, 80, 1f, asset.path, asset.path)
+            val old = GeneratedCandidate("old", "batch", scene, HistoricalImageModel(ProviderId.QWEN, "old-qwen"), "", 0, null,
+                status = GeneratedCandidateStatus.READY, assets = GeneratedReferenceAssets(asset.path, asset.path, 60, 80, "old-qwen", 1))
+            val stored = GeneratedReferenceState(candidates = listOf(old), selectedId = old.id, historyId = "retry-flow")
+            var saves = 0
+            var requests = 0
+            var deleted: String? = null
+            val history = object : CameraCompositionHistory {
+                override val entries = kotlinx.coroutines.flow.MutableStateFlow(emptyList<com.framer.sense.core.data.CameraHistoryEntry>())
+                override suspend fun load(id: String) = RestoredCameraHistory(stored, null, emptyList(), CaptureAspectRatio.THREE_FOUR, false, "")
+                override suspend fun save(capture: HistoryCapture, candidate: GeneratedCandidate, title: String, modelName: String) {
+                    assertEquals("retry-flow", capture.generated.historyId)
+                    if (++saves == 1) throw java.io.IOException("local disk fixture")
+                }
+                override suspend fun pin(id: String, pinned: Boolean) = Unit
+                override suspend fun select(id: String, candidateId: String) = Unit
+                override suspend fun styles(id: String, keys: Set<String>) = Unit
+                override suspend fun delete(id: String) { deleted = id }
+                override suspend fun flush() = Unit
+            }
+            val vm = viewModel(history = history, generated = GeneratedReferenceGenerator { _, _ -> requests++; old.assets!! })
+            try {
+                vm.onIntent(VlmIntent.SaveSettings(ModelSettings(mode = ModelMode.CLOUD, preferred = ProviderId.QWEN, qwenApiKey = "fixture-key")))
+                withTimeout(5000) { vm.state.first { it.settings.mode == ModelMode.CLOUD } }
+                vm.onIntent(VlmIntent.RestoreHistory("retry-flow"))
+                withTimeout(5000) { vm.state.first { !it.historyLoading && it.historyAspectRatio != null } }
+                vm.onIntent(VlmIntent.Generate)
+                val failed = withTimeout(5000) { vm.state.first { it.historySaveFailed && !it.generated.running } }
+                assertEquals(2, failed.generated.candidates.count { it.ready })
+                assertEquals(1, requests)
+                vm.onIntent(VlmIntent.HistoryDrawerVisible(true))
+                vm.onIntent(VlmIntent.RetryHistorySave)
+                withTimeout(5000) { vm.state.first { saves == 2 && !it.historySaving && !it.historySaveFailed } }
+                assertEquals(1, requests)
+                vm.onIntent(VlmIntent.DeleteHistoryRequested("retry-flow"))
+                vm.onIntent(VlmIntent.ConfirmDeleteHistory)
+                val removed = withTimeout(5000) { vm.state.first { deleted != null && !it.historyLoading } }
+                assertEquals("retry-flow", deleted)
+                assertEquals(VlmStage.LIVE, removed.stage)
+                assertTrue(removed.generated.candidates.isEmpty())
+                assertNull(removed.scene)
+                assertNull(removed.generated.applied)
+                assertNull(removed.historyAspectRatio)
+            } finally { vm.onLeave(); asset.delete() }
+        }
+    }
+
+    @Test fun restoredHistoryUsesCurrentModelKeepsOriginalRatioAndAppendsWithoutAutomaticRequests() = runBlocking {
+        withContext(Dispatchers.Main) {
+            val asset = File.createTempFile("history-reference", ".png", InstrumentationRegistry.getInstrumentation().targetContext.cacheDir)
+            val scene = SceneSnapshot("history-scene", 60, 80, 1f, asset.path, asset.path,
+                PhotoViewBinding("scan", "frame", 1))
+            val style = com.framer.sense.feature.camera.vlm.agent.GeneratedPortraitStylePolicy.choice(17)
+            val old = GeneratedCandidate("old-result", "old-batch", scene, HistoricalImageModel(ProviderId.SEED, "retired-seed"),
+                "last successful instruction", 0, scene.captureBinding, status = GeneratedCandidateStatus.READY,
+                assets = GeneratedReferenceAssets(asset.path, asset.path, 60, 80, "retired-seed", 1), styleChoice = style)
+            val stored = GeneratedReferenceState(candidates = listOf(old), selectedId = old.id, historyId = "stored-flow", usedStyleKeys = setOf(style.key))
+            val loaded = RestoredCameraHistory(stored, null, emptyList(), CaptureAspectRatio.THREE_FOUR, false, old.instruction)
+            var reads = 0
+            val writes = kotlinx.coroutines.channels.Channel<HistoryCapture>(2)
+            val history = object : CameraCompositionHistory {
+                override val entries = kotlinx.coroutines.flow.MutableStateFlow(emptyList<com.framer.sense.core.data.CameraHistoryEntry>())
+                override suspend fun load(id: String): RestoredCameraHistory { reads++; return loaded }
+                override suspend fun save(capture: HistoryCapture, candidate: GeneratedCandidate, title: String, modelName: String) { writes.send(capture) }
+                override suspend fun pin(id: String, pinned: Boolean) = Unit
+                override suspend fun select(id: String, candidateId: String) = Unit
+                override suspend fun styles(id: String, keys: Set<String>) = Unit
+                override suspend fun delete(id: String) = Unit
+                override suspend fun flush() = Unit
+            }
+            val entered = kotlinx.coroutines.channels.Channel<GeneratedCandidate>(2)
+            val finish = CompletableDeferred<Unit>()
+            val vm = viewModel(history = history, generated = GeneratedReferenceGenerator { candidate, _ ->
+                entered.send(candidate); finish.await(); old.assets!!
+            })
+            try {
+                vm.onIntent(VlmIntent.SaveSettings(ModelSettings(mode = ModelMode.CLOUD, preferred = ProviderId.QWEN, qwenApiKey = "fixture-key")))
+                withTimeout(5000) { vm.state.first { it.settings.mode == ModelMode.CLOUD } }
+                vm.onIntent(VlmIntent.CameraReady(CameraCapabilities(1f, 3f)))
+                vm.onIntent(VlmIntent.AspectRatioSelected(CaptureAspectRatio.NINE_SIXTEEN))
+                vm.onIntent(VlmIntent.AvatarSelected(AvatarId.ADULT_MALE))
+                vm.onIntent(VlmIntent.PreferredEthnicity(AvatarEthnicity.ASIAN))
+                vm.onIntent(VlmIntent.RestoreHistory("stored-flow"))
+                val restored = withTimeout(5000) { vm.state.first { !it.historyLoading && it.historyAspectRatio != null } }
+                assertEquals(VlmStage.READY, restored.stage)
+                assertEquals("stored-flow", restored.generated.historyId)
+                assertEquals(old.instruction, restored.instruction)
+                assertEquals(CaptureAspectRatio.NINE_SIXTEEN, restored.photoPreferences.aspectRatio)
+                assertEquals(CaptureAspectRatio.THREE_FOUR, restored.captureAspectRatio)
+                assertEquals(ProviderId.QWEN, restored.settings.preferred)
+                assertEquals(AvatarId.ADULT_MALE, restored.selectedAvatar)
+                assertNull(restored.generated.applied)
+                assertTrue(entered.tryReceive().isFailure)
+                vm.onIntent(VlmIntent.Apply)
+                assertEquals(BackgroundStatus.SEARCHING, vm.state.value.background.status)
+                vm.onIntent(VlmIntent.ConfirmBackground)
+                vm.onIntent(VlmIntent.Generate)
+                val next = withTimeout(5000) { entered.receive() }
+                assertEquals(ProviderId.QWEN, next.model.provider)
+                assertEquals(AvatarId.ADULT_MALE, next.portraitPreferences.avatar)
+                assertNotEquals(style.key, next.styleChoice!!.key)
+                vm.onIntent(VlmIntent.RestoreHistory("another-flow"))
+                assertEquals(1, reads)
+                finish.complete(Unit)
+                assertEquals("stored-flow", withTimeout(5000) { writes.receive() }.generated.historyId)
+                withTimeout(5000) { vm.state.first { !it.generated.running } }
+                assertEquals(2, vm.state.value.generated.candidates.size)
+                vm.onIntent(VlmIntent.SaveSettings(vm.state.value.settings.copy(mode = ModelMode.OFFLINE)))
+                withTimeout(5000) { vm.state.first { it.settings.mode == ModelMode.OFFLINE } }
+                assertTrue(vm.state.value.usesGeneratedReference)
+                vm.onIntent(VlmIntent.Generate)
+                assertTrue(entered.tryReceive().isFailure)
+                vm.onIntent(VlmIntent.RestartFlow)
+                assertNull(vm.state.value.historyAspectRatio)
+                assertEquals(CaptureAspectRatio.NINE_SIXTEEN, vm.state.value.captureAspectRatio)
+                assertFalse(vm.state.value.usesGeneratedReference)
+            } finally { finish.complete(Unit); vm.onLeave(); asset.delete() }
+        }
+    }
+
     @Test fun generatedReferenceSubmitsOneRequestAndBlocksRepeatedSubmission() = exerciseGeneratedReference(ModelMode.CLOUD)
 
     @Test fun automaticCloudReferenceSurvivesNetworkLossUntilRestart() = exerciseGeneratedReference(ModelMode.AUTO)
@@ -1140,7 +1263,8 @@ class VlmSessionTest {
             /** 禁止访问 GPU。plan 为方案，width/height 为尺寸，warmth/brightness 为光照；均不执行。 */
             override suspend fun render(plan: CompositionPlan, width: Int, height: Int, warmth: Float, brightness: Float): AvatarPreview = error("本测试不应渲染")
         },
-        networkAvailable: () -> Boolean = { true }
+        networkAvailable: () -> Boolean = { true },
+        history: CameraCompositionHistory? = null
     ): VlmCameraViewModel {
         val context = object : ContextWrapper(InstrumentationRegistry.getInstrumentation().targetContext) {
             private val name = "vlm-session-${UUID.randomUUID()}"
@@ -1151,7 +1275,7 @@ class VlmSessionTest {
         }
         val store = LocalModelStore(context)
         return VlmCameraViewModel(CompositionRepository(provider), SnapshotStore(context), PreviewStore(renderer), SettingsStore(context), store, MnnProvider(store), ModelDownloadRepository(context, store), saved, com.framer.sense.feature.camera.vlm.scan.PhotoSessionController(context), generatedRepository = generated,
-            referenceNetwork = ReferenceNetworkState(networkAvailable))
+            referenceNetwork = ReferenceNetworkState(networkAvailable), historyRepository = history)
     }
 
     /** 返回可通过基础和投影校验的三份方案。 */

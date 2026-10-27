@@ -142,8 +142,8 @@ fun VlmCameraScreen(
         else onEvent(VlmIntent.Capture)
     }
     val latestCapture by rememberUpdatedState(captureClick)
-    LaunchedEffect(state.stage, state.cameraReady, state.saving, state.modelBusy, state.settingsVisible, state.photoSettingsVisible, state.photoSample, permission) {
-        latestAction(VlmCaptureAction(permission && state.cameraReady && state.stage == VlmStage.LIVE && !state.saving && !state.modelBusy && !state.settingsVisible && !state.photoSettingsVisible && state.photoSample == null) { latestCapture() })
+    LaunchedEffect(state.stage, state.cameraReady, state.saving, state.modelBusy, state.settingsVisible, state.photoSettingsVisible, state.photoSample, state.historyDrawerVisible, state.historyLoading, state.historySaving, permission) {
+        latestAction(VlmCaptureAction(permission && !state.historyDrawerVisible && !state.historyLoading && !state.historySaving && state.cameraReady && state.stage == VlmStage.LIVE && !state.saving && !state.modelBusy && !state.settingsVisible && !state.photoSettingsVisible && state.photoSample == null) { latestCapture() })
     }
     DisposableEffect(viewModel, controller) {
         onDispose {
@@ -206,18 +206,20 @@ fun VlmCameraScreen(
         controller.orientation(it)
         onEvent(VlmIntent.PhotoOrientationChanged(it))
     }) {
-        BoxWithConstraints(modifier.fillMaxSize().background(Color.Black).testTag("vlm_camera_screen").padding(safeInsets)) {
-            val controlsMaxHeight = (maxHeight - 48.dp).coerceAtLeast(0.dp)
-            CameraPane(state, controller, permission, { permissionLauncher.launch(Manifest.permission.CAMERA) },
-                onEvent, Modifier.fillMaxSize().padding(top = 48.dp, bottom = 84.dp))
-            CameraBottomBar(state, onEvent, { latestCapture() }, permission,
-                Modifier.align(Alignment.BottomCenter).heightIn(max = controlsMaxHeight))
-            CameraWorkflowFooter(state,
-                safeInsets.calculateBottomPadding() - WindowInsets.displayCutout.asPaddingValues().calculateBottomPadding(),
-                Modifier.align(Alignment.BottomCenter))
-            ArSupportControl(controller, state, permission, onEvent)
-            CameraTopBar(state, onEvent, Modifier.align(Alignment.TopCenter), onExit = exitCamera)
-            CompositionInstructionOverlay(state, onEvent, Modifier.fillMaxSize())
+        CameraHistoryDrawer(state, onEvent) {
+            BoxWithConstraints(modifier.fillMaxSize().background(Color.Black).testTag("vlm_camera_screen").padding(safeInsets)) {
+                val controlsMaxHeight = (maxHeight - 48.dp).coerceAtLeast(0.dp)
+                CameraPane(state, controller, permission, { permissionLauncher.launch(Manifest.permission.CAMERA) },
+                    onEvent, Modifier.fillMaxSize().padding(top = 48.dp, bottom = 84.dp))
+                CameraBottomBar(state, onEvent, { latestCapture() }, permission,
+                    Modifier.align(Alignment.BottomCenter).heightIn(max = controlsMaxHeight))
+                CameraWorkflowFooter(state,
+                    safeInsets.calculateBottomPadding() - WindowInsets.displayCutout.asPaddingValues().calculateBottomPadding(),
+                    Modifier.align(Alignment.BottomCenter))
+                ArSupportControl(controller, state, permission, onEvent)
+                CameraTopBar(state, onEvent, Modifier.align(Alignment.TopCenter), onExit = exitCamera)
+                CompositionInstructionOverlay(state, onEvent, Modifier.fillMaxSize())
+            }
         }
         if (state.photoSettingsVisible) PhotoSettingsDialog(state, onEvent, { imageLauncher.launch("image/*") })
         if (state.settingsVisible) ModelSettingsDialog(state, onEvent, { modelLauncher.launch(arrayOf("application/zip", "application/octet-stream", "application/x-zip-compressed")) }, { directoryLauncher.launch(null) })
@@ -295,7 +297,7 @@ private fun CameraPane(state: VlmUiState, controller: VlmCameraController, permi
     val live = state.stage == VlmStage.LIVE || state.stage == VlmStage.FREEZING || state.stage == VlmStage.SCANNING
     val scene = state.displayScene
     val selected = state.result?.plans?.find { it.id == state.selectedId }
-    val ratio = state.photoPreferences.aspectRatio.ratio(LocalConfiguration.current.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE)
+    val ratio = state.captureRatio(LocalConfiguration.current.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE)
     val lastBounds = remember { arrayOfNulls<String>(1) }
     Box(modifier.background(Color.Black), contentAlignment = Alignment.TopCenter) {
         BoxWithConstraints(Modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {

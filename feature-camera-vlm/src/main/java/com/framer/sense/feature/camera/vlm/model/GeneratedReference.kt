@@ -7,6 +7,17 @@ sealed interface ImageGenerationModel {
     val apiId: String
     val provider: ProviderId
 }
+/** 旧模型即使已从菜单下架，历史仍可本地展示；新请求使用当前选择。 */
+data class HistoricalImageModel(override val provider: ProviderId, override val apiId: String) : ImageGenerationModel
+
+@Serializable
+data class GeneratedStyleChoice(val wardrobe: String, val art: String) {
+    val key: String get() = "${wardrobe.trim()}\u0000${art.trim()}"
+}
+
+@Serializable
+data class GeneratedRequestSnapshot(val modelId: String, val templateVersion: String, val prompt: String,
+    val parameters: Map<String, String> = emptyMap())
 
 @Serializable enum class QwenImageModel : ImageGenerationModel {
     V21_TURBO, V21_PRO, V30, V30_PRO;
@@ -63,7 +74,8 @@ data class GeneratedReferenceAssets(
     val outputImages: Int,
     val sourceLayerCount: Int = 0,
     val descriptions: GeneratedReferenceDescriptions = GeneratedReferenceDescriptions(),
-    val portraitIssue: GeneratedPortraitIssue? = null
+    val portraitIssue: GeneratedPortraitIssue? = null,
+    val requestSnapshot: GeneratedRequestSnapshot? = null
 ) {
     /** 无人像时保留完整构图；空路径不代表可用的透明人像。 */
     val hasPortrait: Boolean get() = portraitPath.isNotBlank()
@@ -94,7 +106,9 @@ data class GeneratedCandidate(
     val replacesId: String? = null,
     val portraitPreferences: GeneratedPortraitPreferences = GeneratedPortraitPreferences(),
     val sceneDescription: String = "",
-    val styleIndex: Int = variation
+    val styleIndex: Int = variation,
+    val styleChoice: GeneratedStyleChoice? = null,
+    val completedAt: Long? = null
 ) {
     val ready: Boolean get() = status == GeneratedCandidateStatus.READY && assets != null
     val canApply: Boolean get() = ready && assets?.hasPortrait == true
@@ -106,7 +120,9 @@ data class GeneratedReferenceState(
     val epoch: String = "initial",
     val candidates: List<GeneratedCandidate> = emptyList(),
     val selectedId: String? = null,
-    val applied: GeneratedCandidate? = null
+    val applied: GeneratedCandidate? = null,
+    val historyId: String = newVlmId(),
+    val usedStyleKeys: Set<String> = emptySet()
 ) {
     val selected: GeneratedCandidate? get() = candidates.firstOrNull { it.id == selectedId }
     val running: Boolean get() = candidates.any { it.status in listOf(GeneratedCandidateStatus.QUEUED, GeneratedCandidateStatus.RUNNING) }

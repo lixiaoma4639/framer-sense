@@ -24,12 +24,16 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flowOf
 import com.framer.sense.core.data.MyModelRepository
 import com.framer.sense.core.data.DefaultMyModelRepository
+import com.framer.sense.core.data.CameraHistoryRepository
+import com.framer.sense.core.data.LocalCameraHistoryRepository
 import javax.inject.Inject
 import javax.inject.Singleton
 
 @Module
 @InstallIn(SingletonComponent::class)
 interface DataModule {
+    @Binds @Singleton
+    fun bindCameraHistoryRepository(repository: LocalCameraHistoryRepository): CameraHistoryRepository
 
     @Singleton
     @Binds

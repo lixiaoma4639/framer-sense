@@ -22,6 +22,11 @@
    See https://developer.android.com/about/versions/12/backup-restore
 -->
 <full-backup-content>
+    <exclude domain="database" path="camera-history.db" />
+    <exclude domain="database" path="camera-history.db-wal" />
+    <exclude domain="database" path="camera-history.db-shm" />
+    <exclude domain="file" path="camera-history/" />
+    <exclude domain="file" path="generated-references/" />
     <!--
    <include domain="sharedpref" path="."/>
    <exclude domain="sharedpref" path="device.xml"/>

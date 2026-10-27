@@ -1,6 +1,7 @@
 package com.framer.sense.feature.camera.vlm.agent
 
 import kotlin.random.Random
+import com.framer.sense.feature.camera.vlm.model.GeneratedStyleChoice
 
 /** 现场判断不明确时的随机候选；由 APP 本流程历史去重，不依赖模型记忆。 */
 internal object GeneratedPortraitStylePolicy {
@@ -42,8 +43,16 @@ internal object GeneratedPortraitStylePolicy {
         return if (available.isEmpty()) null else available[random.nextInt(available.size)]
     }
 
-    fun prompt(index: Int): String {
-        val style = select(index)
+    fun choice(index: Int): GeneratedStyleChoice = select(index).let { GeneratedStyleChoice(it.wardrobe, it.art) }
+
+    fun nextUnusedKey(usedKeys: Set<String>, random: Random = Random.Default): Int? {
+        val available = (0 until combinationCount).filterNot { choice(it).key in usedKeys }
+        return if (available.isEmpty()) null else available[random.nextInt(available.size)]
+    }
+
+    fun prompt(index: Int): String = prompt(choice(index))
+
+    fun prompt(style: GeneratedStyleChoice): String {
         return "APP 本地兜底候选（仅在无法判断现场适合的风格时参考）：服饰为${style.wardrobe}，艺术表现为${style.art}。这不是本轮必选风格；两项可按现场与人物设置协调选用，不机械拼接不相容的元素。服装、发型与配饰适合所选性别、年龄和种族。艺术表现只作用于人物，保持合理人体结构与现场尺度，不重绘原环境或虚构光源。"
     }
 }

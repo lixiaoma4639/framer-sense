@@ -25,11 +25,19 @@ import dagger.hilt.android.qualifiers.ApplicationContext
 import dagger.hilt.components.SingletonComponent
 import com.framer.sense.core.database.AppDatabase
 import com.framer.sense.core.database.MyModelDao
+import com.framer.sense.core.database.CameraHistoryDatabase
+import com.framer.sense.core.database.CameraHistoryDao
 import javax.inject.Singleton
 
 @Module
 @InstallIn(SingletonComponent::class)
 class DatabaseModule {
+    @Provides @Singleton
+    fun provideCameraHistoryDatabase(@ApplicationContext context: Context): CameraHistoryDatabase =
+        Room.databaseBuilder(context, CameraHistoryDatabase::class.java, "camera-history.db").build()
+
+    @Provides
+    fun provideCameraHistoryDao(database: CameraHistoryDatabase): CameraHistoryDao = database.historyDao()
     @Provides
     fun provideMyModelDao(appDatabase: AppDatabase): MyModelDao {
         return appDatabase.myModelDao()
