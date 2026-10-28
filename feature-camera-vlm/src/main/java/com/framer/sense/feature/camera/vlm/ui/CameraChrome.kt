@@ -579,6 +579,7 @@ private fun CompositionActionButtons(state: VlmUiState, onEvent: (VlmIntent) -> 
 
 @Composable
 private fun CompositionDetailsContent(state: VlmUiState, onEvent: (VlmIntent) -> Unit) {
+        CompositionInstructionDescription(state.instruction)
         val plan = state.result?.plans?.find { it.id == state.selectedId }
         val background = plan?.viewBinding?.let { binding ->
             state.viewCandidates.firstOrNull { it.frameId == binding.frameId }

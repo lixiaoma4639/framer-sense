@@ -5,6 +5,7 @@ import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.layout.displayCutout
+import androidx.compose.foundation.layout.navigationBarsIgnoringVisibility
 import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.statusBarsIgnoringVisibility
 import androidx.compose.foundation.layout.union
@@ -17,7 +18,7 @@ import androidx.compose.ui.platform.LocalView
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 
-/** 顶部高度在进入当前布局时锁定，系统栏的显示、隐藏和动画均不改变它。 */
+/** 顶部保留原锁定位置，底部预留常显系统导航栏的高度，与抽屉开关无关。 */
 @Composable
 @OptIn(ExperimentalLayoutApi::class)
 @SuppressLint("DiscouragedApi", "InternalInsetResource")
@@ -38,5 +39,6 @@ internal fun rememberCameraSafeInsets(): WindowInsets {
     }
     // 不以 screenHeightDp 为 remember 键，避免部分系统在状态栏显隐时修改它。
     return WindowInsets.displayCutout.only(WindowInsetsSides.Horizontal + WindowInsetsSides.Bottom)
+        .union(WindowInsets.navigationBarsIgnoringVisibility.only(WindowInsetsSides.Bottom))
         .union(WindowInsets(top = fixedTop))
 }

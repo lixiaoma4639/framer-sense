@@ -136,7 +136,7 @@ internal fun CompositionInstructionBar(state: VlmUiState, onEvent: (VlmIntent) -
                                     end = if (hasModelChoice) 8.dp else 16.dp,
                                     bottom = if (hasModelChoice) 8.dp else 16.dp),
                                 label = { Text(stringResource(R.string.vlm_ai_instruction_label)) },
-                                placeholder = { Text(stringResource(R.string.vlm_ai_instruction_placeholder)) },
+                                placeholder = { Text(stringResource(R.string.vlm_ai_instruction_label)) },
                                 innerTextField = {
                                     // 模型选择与输入共用内容区，不追加占位行或增加输入框高度。
                                     Row(verticalAlignment = Alignment.Bottom) {

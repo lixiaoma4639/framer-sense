@@ -116,7 +116,7 @@ class GeneratedReferenceTest {
 
     @Test fun unspecifiedRequirementAllowsIndependentArtisticCreation() {
         val prompt = GeneratedReferencePrompt.build("  ", 0)
-        assertTrue(prompt.endsWith("用户要求：未提供特殊要求，请由 AI 自主创作。"))
+        assertTrue(prompt.endsWith("用户要求：无特殊要求"))
         assertTrue(prompt.contains("用户没有特殊说明时，先根据当前环境"))
         assertTrue(prompt.contains("不预设固定的动作、表情或情绪"))
         assertFalse(prompt.contains("自然克制"))

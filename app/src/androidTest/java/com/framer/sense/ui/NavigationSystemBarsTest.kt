@@ -29,7 +29,7 @@ import org.junit.Test
 class NavigationSystemBarsTest {
     @get:Rule val compose = createComposeRule()
 
-    @Test fun cameraHidesSystemBarsAndExitRestoresWhiteNormalPage() {
+    @Test fun cameraShowsSystemBarsAndExitRestoresWhiteNormalPage() {
         val state = mutableStateOf(MainNavigationUiState())
         var host: View? = null
         var background = Color.Unspecified
@@ -41,7 +41,7 @@ class NavigationSystemBarsTest {
                 SideEffect { host = view; background = colors.background; text = colors.onBackground }
                 MainNavigationContent(state.value, { state.value = state.value.copy(selectedTab = it) },
                     homeContent = { Text("首页") },
-                    cameraContent = { _, exit, _ -> Column {
+                    cameraContent = { _, exit -> Column {
                         Text("相机")
                         TextButton(exit, Modifier.testTag("test_exit")) { Text("返回") }
                     } },
@@ -49,7 +49,7 @@ class NavigationSystemBarsTest {
             }
         }
         compose.onNodeWithTag("bottom_tab_CAMERA").performClick()
-        waitForBars(visible = false) { host }
+        waitForBars(visible = true) { host }
         compose.onNodeWithTag("test_exit").performClick()
         waitForBars(visible = true) { host }
         compose.runOnIdle {
@@ -65,9 +65,8 @@ class NavigationSystemBarsTest {
         compose.runOnIdle { assertEquals(BottomNavTab.MY_MODEL, state.value.selectedTab) }
     }
 
-    @Test fun foregroundResumeRestoresImmersiveSystemBars() {
+    @Test fun foregroundResumeRestoresVisibleCameraSystemBars() {
         var host: View? = null
-        val historyVisible = mutableStateOf(false)
         val owner = object : androidx.lifecycle.LifecycleOwner {
             val registry = androidx.lifecycle.LifecycleRegistry(this)
             override val lifecycle: androidx.lifecycle.Lifecycle get() = registry
@@ -75,26 +74,24 @@ class NavigationSystemBarsTest {
         compose.setContent {
             host = LocalView.current
             androidx.compose.runtime.CompositionLocalProvider(androidx.lifecycle.compose.LocalLifecycleOwner provides owner) {
-                NavigationSystemBars(immersive = true, showCameraSystemBars = historyVisible.value)
+                NavigationSystemBars(immersive = true)
                 Text("相机窗口")
             }
         }
         compose.runOnIdle { owner.registry.currentState = androidx.lifecycle.Lifecycle.State.RESUMED }
-        waitForBars(visible = false) { host }
+        waitForBars(visible = true) { host }
         compose.runOnIdle {
             var context: android.content.Context = requireNotNull(host).context
             while (context is android.content.ContextWrapper && context !is android.app.Activity) context = context.baseContext
             val activity = context as android.app.Activity
             androidx.core.view.WindowCompat.getInsetsController(activity.window, requireNotNull(host))
-                .show(WindowInsetsCompat.Type.systemBars())
+                .hide(WindowInsetsCompat.Type.systemBars())
         }
         compose.runOnIdle {
             owner.registry.currentState = androidx.lifecycle.Lifecycle.State.STARTED
             owner.registry.currentState = androidx.lifecycle.Lifecycle.State.RESUMED
         }
-        waitForBars(visible = false) { host }
-        compose.runOnIdle { historyVisible.value = true }
-        waitForBars(true, navigationVisible = true) { host }
+        waitForBars(visible = true) { host }
         compose.runOnIdle {
             owner.registry.currentState = androidx.lifecycle.Lifecycle.State.STARTED
             owner.registry.currentState = androidx.lifecycle.Lifecycle.State.RESUMED
@@ -102,18 +99,20 @@ class NavigationSystemBarsTest {
         waitForBars(true, navigationVisible = true) { host }
     }
 
-    @Test fun cameraHistoryShowsBothSystemBarsWithoutMovingCameraBottomControls() {
+    @Test fun cameraHistoryNeverHidesSystemBarsOrMovesCameraControls() {
         val state = mutableStateOf(MainNavigationUiState())
+        val historyVisible = mutableStateOf(false)
         var host: View? = null
         compose.setContent {
             FramerAppTheme {
                 host = LocalView.current
                 MainNavigationContent(state.value, { state.value = state.value.copy(selectedTab = it) },
                     homeContent = { Text("首页") },
-                    cameraContent = { _, exit, historyVisible -> Box(Modifier.fillMaxSize()) {
+                    cameraContent = { _, exit -> Box(Modifier.fillMaxSize()) {
                         Column {
-                            TextButton({ historyVisible(true) }, Modifier.testTag("test_history_open")) { Text("打开历史") }
-                            TextButton({ historyVisible(false) }, Modifier.testTag("test_history_close")) { Text("关闭历史") }
+                            TextButton({ historyVisible.value = true }, Modifier.testTag("test_history_open")) { Text("打开历史") }
+                            TextButton({ historyVisible.value = false }, Modifier.testTag("test_history_close")) { Text("关闭历史") }
+                            if (historyVisible.value) Text("历史抽屉")
                             TextButton(exit, Modifier.testTag("test_exit")) { Text("返回") }
                         }
                         Text("底部控件", Modifier.align(Alignment.BottomCenter).testTag("test_camera_bottom"))
@@ -122,7 +121,7 @@ class NavigationSystemBarsTest {
             }
         }
         compose.onNodeWithTag("bottom_tab_CAMERA").performClick()
-        waitForBars(false) { host }
+        waitForBars(true) { host }
         val bottomBounds = compose.onNodeWithTag("test_camera_bottom").fetchSemanticsNode().boundsInRoot
         compose.onNodeWithTag("test_history_open").performClick()
         waitForBars(true, navigationVisible = true) { host }
@@ -140,14 +139,14 @@ class NavigationSystemBarsTest {
         }
         assertEquals(bottomBounds, compose.onNodeWithTag("test_camera_bottom").fetchSemanticsNode().boundsInRoot)
         compose.onNodeWithTag("test_history_close").performClick()
-        waitForBars(false) { host }
+        waitForBars(true) { host }
         assertEquals(bottomBounds, compose.onNodeWithTag("test_camera_bottom").fetchSemanticsNode().boundsInRoot)
         compose.onNodeWithTag("test_history_open").performClick()
         waitForBars(true, navigationVisible = true) { host }
         compose.onNodeWithTag("test_exit").performClick()
         waitForBars(true) { host }
         compose.onNodeWithTag("bottom_tab_CAMERA").performClick()
-        waitForBars(false) { host }
+        waitForBars(true) { host }
     }
 
     private fun waitForBars(visible: Boolean, navigationVisible: Boolean = visible, host: () -> View?) {

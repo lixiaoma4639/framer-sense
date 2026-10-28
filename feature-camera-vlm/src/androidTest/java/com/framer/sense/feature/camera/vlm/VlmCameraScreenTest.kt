@@ -381,6 +381,7 @@ class VlmCameraScreenTest {
         val state = mutableStateOf(VlmUiState(settings = ModelSettings(mode = ModelMode.CLOUD, preferred = ProviderId.QWEN),
             generated = GeneratedReferenceState(candidates = listOf(candidate), selectedId = candidate.id)))
         composeRule.setContent { MaterialTheme { GeneratedReferenceDetails(state.value) } }
+        composeRule.onNodeWithTag("vlm_description_instruction").assertTextContains("AI构图对话：不要冒充结果说明")
         composeRule.onNodeWithTag("vlm_generated_descriptions_empty").assertExists()
         composeRule.onNodeWithTag("vlm_generated_actual").assertDoesNotExist()
         composeRule.onNodeWithTag("vlm_generated_guidance").assertDoesNotExist()
@@ -388,6 +389,11 @@ class VlmCameraScreenTest {
             candidates = listOf(candidate.copy(sceneDescription = "该千问构图对应的现场描述")))) }
         composeRule.onNodeWithTag("vlm_generated_descriptions_empty").assertDoesNotExist()
         composeRule.onNodeWithTag("vlm_generated_environment").assertTextContains("该千问构图对应的现场描述")
+        composeRule.runOnIdle { state.value = state.value.copy(instruction = "下一张使用的新要求") }
+        composeRule.onNodeWithTag("vlm_description_instruction").assertTextContains("不要冒充结果说明")
+        composeRule.runOnIdle { state.value = state.value.copy(generated = state.value.generated.copy(
+            candidates = listOf(candidate.copy(instruction = "  ")))) }
+        composeRule.onNodeWithTag("vlm_description_instruction").assertTextEquals("AI构图对话：无")
         composeRule.onNodeWithText("不要冒充结果说明").assertDoesNotExist()
     }
 

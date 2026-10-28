@@ -1077,7 +1077,13 @@ class VlmSessionTest {
             try {
                 vm.onIntent(VlmIntent.CameraReady(CameraCapabilities(1f, 8f)))
                 val original = vm.state.value.instruction
+                assertEquals("", original)
                 val epoch = vm.state.value.cameraEpoch
+                vm.onIntent(VlmIntent.InstructionEditorVisible(true))
+                assertEquals("", vm.state.value.instructionDraft)
+                vm.onIntent(VlmIntent.SubmitInstruction)
+                assertEquals("", vm.state.value.instruction)
+                assertTrue(vm.state.value.instructionHistory.isEmpty())
                 vm.onIntent(VlmIntent.InstructionEditorVisible(true))
                 vm.onIntent(VlmIntent.InstructionDraftChanged("人物靠右，保留建筑"))
                 assertEquals(original, vm.state.value.instruction)

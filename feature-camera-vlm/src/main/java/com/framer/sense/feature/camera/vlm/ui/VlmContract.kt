@@ -108,6 +108,10 @@ data class VlmUiState(
     val usesGeneratedReference: Boolean get() = historyAspectRatio != null || referenceSource == ReferenceSource.GENERATED_IMAGE
     val activeBackgroundTarget: BackgroundReferenceTarget?
         get() = generated.applied?.backgroundTarget() ?: referencePlan?.backgroundTarget()
+    /** 云端 PNG 和离线 GLB 共用原图对齐采样，不能只检查离线 referencePlan。 */
+    val shouldSampleCameraAnalysis: Boolean
+        get() = cameraReady && (stage == VlmStage.SCANNING && scanSession != null && !scanProgress.paused ||
+            stage == VlmStage.LIVE && activeBackgroundTarget?.viewBinding != null)
     /** 收起构图编辑时显示当前参考的顶部提示，两组界面始终互斥。 */
     val showReferenceGuidanceOverlay: Boolean
         get() = stage == VlmStage.LIVE && activeBackgroundTarget != null && !compositionDetailsVisible

@@ -49,7 +49,7 @@ class VlmCameraViewModel @Inject constructor(
         photoPreferences = initialPhotoPreferences, selectedAvatar = initialPhotoPreferences.avatar,
         instructionHistory = settingsStore.readInstructionHistory(),
         faceVisible = initialPhotoPreferences.showFace,
-        instruction = initialPhotoPreferences.instruction.ifBlank { models.message(R.string.vlm_photo_default_requirement) },
+        instruction = initialPhotoPreferences.instruction,
         selectedEthnicity = initialPhotoPreferences.ethnicity, modelBusy = local.loadState.value.phase == LocalModelPhase.LOADING,
         notice = if (savedStateHandle.get<Boolean>("vlm_started") == true) models.message(R.string.vlm_scan_restore) else null))
     val state: StateFlow<VlmUiState> = _state.asStateFlow()
@@ -404,7 +404,11 @@ class VlmCameraViewModel @Inject constructor(
                 updatePhotoPreferences { it.copy(instruction = intent.text.take(2000), instructionFromRecommendation = false) }
             }
             is VlmIntent.InstructionEditorVisible -> if (!intent.visible || _state.value.canEditInstruction)
-                _state.update { it.copy(instructionEditorVisible = intent.visible, instructionDraft = it.instruction,
+                _state.update { it.copy(instructionEditorVisible = intent.visible,
+                    instructionDraft = it.instruction.takeUnless { text ->
+                        text.trim() == models.message(R.string.vlm_instruction_no_requirement) ||
+                            text.trim() == models.message(R.string.vlm_photo_default_requirement)
+                    }.orEmpty(),
                     instructionDraftFromRecommendation = it.photoPreferences.instructionFromRecommendation,
                     instructionDraftRevision = it.instructionDraftRevision + 1) }
             is VlmIntent.InstructionDraftChanged -> if (_state.value.instructionEditorVisible && _state.value.canEditInstruction && intent.text != _state.value.instructionDraft)
@@ -801,8 +805,8 @@ class VlmCameraViewModel @Inject constructor(
             try {
                 if (!s.usesGeneratedReference) awaitPreviousNative(token)
                 val selected = if (!s.usesGeneratedReference)
-                    OfflineScanViewAgent(scanLogger).select(scan, s.instruction, OfflineViewInference(local::compareViews))
-                else ScanViewAgent(logger = scanLogger).select(scan, s.settings, s.instruction, sessions.budget)
+                    OfflineScanViewAgent(scanLogger).select(scan, s.instruction.ifBlank { models.message(R.string.vlm_instruction_no_requirement) }, OfflineViewInference(local::compareViews))
+                else ScanViewAgent(logger = scanLogger).select(scan, s.settings, s.instruction.ifBlank { models.message(R.string.vlm_instruction_no_requirement) }, sessions.budget)
                 if (token != requestToken) {
                     Log.w("VlmScan", "丢弃迟到选景 scan=${scan.session.id.take(8)} token=${token.take(8)} currentToken=${requestToken.take(8)}")
                     return@launch
@@ -927,7 +931,7 @@ class VlmCameraViewModel @Inject constructor(
             ?: s.scanSnapshot?.frames?.firstOrNull { it.scene.id == scene.id }
         val actor = existing.firstOrNull()?.avatar?.avatarId ?: s.selectedAvatar
         val ethnicity = existing.firstOrNull()?.avatar?.ethnicity ?: s.selectedEthnicity
-        return DirectorInput(scene, s.camera, s.instruction, existing, selectedId, actor,
+        return DirectorInput(scene, s.camera, s.instruction.ifBlank { models.message(R.string.vlm_instruction_no_requirement) }, existing, selectedId, actor,
             frame?.let { PhotoViewBinding(it.scanId, it.id, it.config.version, it.config.arSessionId) } ?: scene.captureBinding,
             s.viewCandidates.firstOrNull { it.frameId == (frame?.id ?: scene.id) }?.backgroundRegions.orEmpty(),
             if (frame != null) sessions.budget else null,
@@ -1030,7 +1034,7 @@ class VlmCameraViewModel @Inject constructor(
                 sessions.resetReference(); guidanceEpoch++
                 if (_state.value.cameraMode != CameraMode.NORMAL) switchCameraMode(CameraMode.NORMAL)
                 val selected = requireNotNull(restored.generated.selected)
-                val instruction = restored.instruction.ifBlank { models.message(R.string.vlm_photo_default_requirement) }
+                val instruction = restored.instruction
                 _state.update { it.copy(generated = restored.generated, scene = selected.scene, scanSnapshot = restored.scan,
                     scanSession = null, viewCandidates = restored.views, selectedFrameId = selected.viewBinding?.frameId,
                     historyAspectRatio = restored.aspectRatio, fromImportedImage = restored.imported,

@@ -148,6 +148,9 @@
     <string name="vlm_composition_plan_number">方案 %1$d</string>
     <string name="vlm_environment_person_evidence">环境与人物依据：%1$s</string>
     <string name="vlm_description_actual">实际构图：</string>
+    <string name="vlm_description_instruction">AI构图对话：</string>
+    <string name="vlm_instruction_none">无</string>
+    <string name="vlm_instruction_no_requirement">无特殊要求</string>
     <string name="vlm_description_environment">环境场景：</string>
     <string name="vlm_description_reason">构图理由：</string>
     <string name="vlm_description_body">身体：</string>
@@ -423,7 +426,7 @@
     <string name="vlm_ai_instruction_label">告诉 AI 你想怎么拍</string>
     <string name="vlm_ai_instruction_placeholder">例如：人物靠右，保留远处建筑</string>
     <string name="vlm_ai_instruction_confirm">确定</string>
-    <string name="vlm_ai_instruction_hint">确定后用于下一次选景和构图</string>
+    <string name="vlm_ai_instruction_hint">确定后用于下一次选景或构图</string>
     <string name="vlm_ai_instruction_dismiss">收起 AI 构图输入框</string>
     <string name="vlm_ai_instruction_history">历史记录</string>
     <string name="vlm_ai_instruction_recommendations">推荐指导</string>

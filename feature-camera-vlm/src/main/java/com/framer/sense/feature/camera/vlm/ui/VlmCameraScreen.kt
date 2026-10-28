@@ -83,20 +83,15 @@ import android.graphics.Bitmap
  * @param modifier 页面布局修饰符。
  * @param viewModel MVI 状态机，由 Hilt 提供。
  * @param onExit App 提供的退出导航回调；保存照片期间不可退出。
- * @param onHistoryDrawerVisibilityChanged 将历史抽屉状态交由 App 统一控制系统状态栏。
  */
 @Composable
 fun VlmCameraScreen(
     onCaptureActionChanged: (VlmCaptureAction?) -> Unit = {},
     modifier: Modifier = Modifier,
     viewModel: VlmCameraViewModel = hiltViewModel(),
-    onExit: (() -> Unit)? = null,
-    onHistoryDrawerVisibilityChanged: (Boolean) -> Unit = {}
+    onExit: (() -> Unit)? = null
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
-    val latestHistoryVisibilityChanged by rememberUpdatedState(onHistoryDrawerVisibilityChanged)
-    LaunchedEffect(state.historyDrawerVisible) { latestHistoryVisibilityChanged(state.historyDrawerVisible) }
-    DisposableEffect(Unit) { onDispose { latestHistoryVisibilityChanged(false) } }
     LaunchedEffect(state.stage,state.ar.source,state.cameraReady,state.ar.tracking,state.modelBusy) {
         Log.i("VlmCameraUi", "页面状态 stage=${state.stage} source=${state.ar.source} ready=${state.cameraReady} tracking=${state.ar.tracking} modelBusy=${state.modelBusy} background=${state.background.status}")
     }
@@ -205,8 +200,9 @@ fun VlmCameraScreen(
         if (!viewModel.state.value.saving) latestExit?.invoke()
     } }
     CameraBackHandler(state, onEvent, exitCamera)
-    val safeInsets = rememberCameraSafeInsets().asPaddingValues()
-    val footerInsets = WindowInsets.displayCutout.only(WindowInsetsSides.Horizontal + WindowInsetsSides.Bottom)
+    val cameraInsets = rememberCameraSafeInsets()
+    val safeInsets = cameraInsets.asPaddingValues()
+    val footerInsets = cameraInsets.only(WindowInsetsSides.Horizontal + WindowInsetsSides.Bottom)
     CameraIconRotationScope(onOrientation = {
         controller.orientation(it)
         onEvent(VlmIntent.PhotoOrientationChanged(it))
@@ -223,7 +219,7 @@ fun VlmCameraScreen(
                     CameraTopBar(state, onEvent, Modifier.align(Alignment.TopCenter), onExit = exitCamera)
                     CompositionInstructionOverlay(state, onEvent, Modifier.fillMaxSize())
                 }
-                // 固定时间线位置及其 24dp 容器，不读取系统横条或手势留白。
+                // 时间线保持固定尺寸，和操作区共用底部系统导航区域的留位。
                 CameraWorkflowFooter(state, Modifier.align(Alignment.BottomCenter).windowInsetsPadding(footerInsets))
             }
         }
@@ -453,7 +449,7 @@ private fun CameraSurface(controller: VlmCameraController, state: VlmUiState, on
         var bindingActive by remember { mutableStateOf(true) }
         var previewView by remember { mutableStateOf<PreviewView?>(null) }
         fun emit(event: VlmIntent) { if (bindingActive) latestEvent(event) }
-        val latestSampling by rememberUpdatedState(state.cameraReady && (state.stage == VlmStage.SCANNING && state.scanSession != null && !state.scanProgress.paused || state.stage == VlmStage.LIVE && state.referencePlan?.viewBinding != null))
+        val latestSampling by rememberUpdatedState(state.shouldSampleCameraAnalysis)
         DisposableEffect(controller, owner) {
             onDispose { bindingActive = false; controller.unbind(); latestEvent(VlmIntent.CameraBindingStopped(epoch)) }
         }
@@ -529,6 +525,16 @@ internal fun CompositionDescriptions(result: CompositionResult, selectedId: Stri
             CompositionDescriptionText(listOf(stringResource(R.string.vlm_description_environment) to
                 SceneDescriptionFormatting.format(it)), modifier = Modifier.testTag("vlm_scene_description"))
         }
+    }
+}
+
+/** 用户输入独立于模型说明，空输入只在详情显示“无”，不回填编辑框。 */
+@Composable
+internal fun CompositionInstructionDescription(instruction: String) {
+    CompositionDescriptionCard {
+        CompositionDescriptionText(listOf(stringResource(R.string.vlm_description_instruction) to
+            instruction.trim().ifBlank { stringResource(R.string.vlm_instruction_none) }),
+            modifier = Modifier.testTag("vlm_description_instruction"))
     }
 }
 

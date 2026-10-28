@@ -5,18 +5,16 @@ import com.framer.sense.feature.camera.vlm.model.GeneratedStyleChoice
 
 /** 创作约束不代表模型已经满足要求；创作序号不构成历史记忆或严格去重。 */
 object GeneratedReferencePrompt {
-    const val VERSION = "SEED_REFERENCE_V1"
+    const val VERSION = "SEED_REFERENCE_V3"
     fun build(instruction: String, variation: Int, preferences: GeneratedPortraitPreferences? = null, styleIndex: Int = variation,
               styleChoice: GeneratedStyleChoice? = null): String {
-        val requirement = instruction.trim().take(2000).ifBlank { "未提供特殊要求，请由 AI 自主创作。" }
+        val requirement = instruction.trim().take(2000).ifBlank { "无特殊要求" }
         val preferenceText = preferences?.let(GeneratedPortraitPreferencePrompt::build).orEmpty()
         val styleText = styleChoice?.let(GeneratedPortraitStylePolicy::prompt) ?: GeneratedPortraitStylePolicy.prompt(styleIndex)
         return """
             请根据提供的参考照片，创作一张以人物为核心、具有鲜明艺术表现力的人像摄影参考构图，供用户在当前真实现场模仿拍摄。
 
             $preferenceText
-
-            $styleText
 
             一、人物与主角
             ${GeneratedPortraitStylePolicy.SCENE_PRIORITY}
@@ -25,7 +23,8 @@ object GeneratedReferencePrompt {
 
             二、艺术创作与摄影表现
             以优秀摄影作品或影视画面的艺术完成度进行创作。综合设计景别、人物位置、姿势、身体线条、手势、头部朝向、视线、表情和情绪，利用现场已有的光影、色彩、空间层次、线条、留白与视觉节奏，形成有主次、有审美取舍、有情绪或故事表达的画面。
-            用户没有特殊说明时，先根据当前环境自主设计适合现场的角色表现和构图，无法判断适合的风格时再参考 APP 本地候选，可以有摄影感、影视剧艺术性或其他艺术表达。不预设固定的动作、表情或情绪，不套固定姿势模板，不能只做调色、美化或简单贴入人物。
+            用户没有特殊说明时，先根据当前环境自主设计适合现场的角色表现和构图，形成摄影感、影视剧艺术性或其他有现场依据的艺术表达；APP 的服饰、画风及创作意图均为低优先级启发，不能代替环境判断。不预设固定的动作、表情或情绪，不套固定姿势模板，不能只做调色、美化或简单贴入人物。
+            从照片中最有表现力的真实空间、物体、线条或光线中确定人物正在经历的具体瞬间，让姿态、手势、视线和表情共同回应现场。互动不等于必须接触物体，不把正面直立看镜头作为所有场景的默认解法。具体动作由可确认的条件决定；随机意图不适配时舍弃，改为其他有现场依据的身体、视线和空间关系，不统一退回同一种站姿，不新增支撑或道具来执行意图。
 
             三、现场环境与可拍性
             以参考照片中的拍摄现场为依据，保持主要背景结构、物体位置、透视关系、天气、时段和光线方向，不重新设计、替换、拼接或扩展环境。保持原拍摄视角与画幅比例，允许在原图范围内适度裁切和调整人物位置。
@@ -36,7 +35,9 @@ object GeneratedReferencePrompt {
             不把人物缩成微型，也不将人物不合理放大，不改变环境物体尺寸来迁就人物。缺少可靠参照时结合整体空间与透视保守安排，不编造精确尺寸，不以固定的人物画面占比替代现实尺度判断；动漫或原创人物同样遵守现场尺度关系。
 
             五、用户要求与本轮创作
-            在上述人物硬性要求、现场环境、现实比例和图层输出约束下，满足用户明确提出的风格、姿势、表情、情绪与景别要求；未指定的风格先适配当前环境，无法判断时再参考 APP 本地候选。本轮创作序号为 ${variation + 1}，请独立构思本次画面，不因序号套用固定表现。
+            在上述人物硬性要求、现场环境、现实比例和图层输出约束下，满足用户明确提出的风格、姿势、表情、情绪与景别要求；未指定的内容优先依据现场自主创作，不能被以下随机候选覆盖。本轮创作序号为 ${variation + 1}，请独立构思本次画面，不因序号套用固定表现。
+
+            $styleText
 
             六、完整构图与原生图层
             输出一张完整的人像摄影参考构图，并使用 Seedream 原生图层输出配套内容。底图保留现场背景，主要人物相关内容包含头发、服饰、飘带和原有手持物；人物作为完整透明图层输出时命名为 reference_person，若拆为多个相关图层，使用 reference_person_1、reference_person_2 等名称，并在描述中明确其属于主要人物及实际内容。

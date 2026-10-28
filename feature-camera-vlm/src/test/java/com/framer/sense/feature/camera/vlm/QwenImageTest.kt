@@ -37,6 +37,7 @@ class QwenImageTest {
     }
 
     @Test fun requestUsesOneOutputAndExactCanvasWithoutSeedLayerOrUndocumentedTransparencyFlags() {
+        assertTrue(QwenImageReferencePrompt.build("  ", 0).contains("用户要求：无特殊要求。"))
         val prompt = QwenImageReferencePrompt.build("舞姿", 3)
         QwenImageModel.entries.forEach { model ->
             val payload = QwenImageProtocol.payload(model, "data:image/jpeg;base64,AA==", prompt, 960, 1280)

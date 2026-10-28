@@ -8,6 +8,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.platform.LocalDensity
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.graphics.Insets
@@ -90,19 +91,23 @@ class CameraWorkflowUiTest {
         assertEquals(listOf(VlmIntent.RestartFlow, VlmIntent.CompositionDetailsVisible(true)), events)
     }
 
-    @Test fun timelineKeepsFixedSizeWithoutLiftingControlsAcrossDrawerChangesAndRotation() {
+    @Test fun cameraReservesNavigationHeightAndKeepsControlsFixedAcrossDrawerChangesAndRotation() {
         val angle = mutableFloatStateOf(0f)
         val state = mutableStateOf(VlmUiState(cameraReady = true))
         var host: android.view.View? = null
+        var density = 1f
         var photos = 0
         compose.setContent { MaterialTheme {
             host = LocalView.current
+            density = LocalDensity.current.density
             CompositionLocalProvider(LocalCameraIconAngle provides angle.floatValue) {
                 Box(Modifier.size(320.dp, 640.dp).background(Color.Black).testTag("camera_bounds")) {
-                    Box(Modifier.fillMaxSize().padding(bottom = CameraWorkflowFooterHeight)) {
-                        CameraBottomBar(state.value, {}, { photos++ }, true, Modifier.align(Alignment.BottomCenter))
+                    Box(Modifier.fillMaxSize().windowInsetsPadding(rememberCameraSafeInsets())) {
+                        Box(Modifier.fillMaxSize().padding(bottom = CameraWorkflowFooterHeight)) {
+                            CameraBottomBar(state.value, {}, { photos++ }, true, Modifier.align(Alignment.BottomCenter))
+                        }
+                        CameraWorkflowFooter(state.value, Modifier.align(Alignment.BottomCenter))
                     }
-                    CameraWorkflowFooter(state.value, Modifier.align(Alignment.BottomCenter))
                 }
             }
         } }
@@ -112,15 +117,17 @@ class CameraWorkflowUiTest {
                 val changed = WindowInsetsCompat.Builder(originalInsets ?: WindowInsetsCompat.CONSUMED)
                     .setInsets(WindowInsetsCompat.Type.navigationBars() or WindowInsetsCompat.Type.mandatorySystemGestures(),
                         Insets.of(0, 0, 0, systemBarHeight))
+                    .setInsetsIgnoringVisibility(WindowInsetsCompat.Type.navigationBars(), Insets.of(0, 0, 0, systemBarHeight))
                     .setVisible(WindowInsetsCompat.Type.navigationBars(), systemBarHeight > 0).build()
                 ViewCompat.dispatchApplyWindowInsets(requireNotNull(host), changed)
             }
             val screen = compose.onNodeWithTag("camera_bounds").getUnclippedBoundsInRoot()
             val shutter = compose.onNodeWithTag("vlm_shutter").getUnclippedBoundsInRoot()
-            val footer = compose.onNodeWithTag("vlm_workflow_footer").getUnclippedBoundsInRoot()
             val timeline = compose.onNodeWithTag("vlm_workflow_timeline").getUnclippedBoundsInRoot()
-            assertEquals(screen.bottom.value, footer.bottom.value, 1f)
-            assertEquals(screen.bottom.value - 30f, shutter.bottom.value, 1f)
+            val cutoutBottom = originalInsets?.getInsetsIgnoringVisibility(WindowInsetsCompat.Type.displayCutout())?.bottom ?: 0
+            val reservedBottom = maxOf(cutoutBottom, systemBarHeight) / density
+            assertEquals(screen.bottom.value - reservedBottom - 2f, timeline.bottom.value, 1f)
+            assertEquals(screen.bottom.value - reservedBottom - 30f, shutter.bottom.value, 1f)
             assertTrue(timeline.top >= shutter.bottom)
             assertEquals(20f, timeline.bottom.value - timeline.top.value, 1f)
             listOf(0f, 90f, 180f, 270f).forEach { direction ->

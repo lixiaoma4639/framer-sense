@@ -122,9 +122,8 @@ internal fun MainNavigationContent(
     uiState: MainNavigationUiState,
     onTabSelected: (BottomNavTab) -> Unit,
     homeContent: @Composable () -> Unit = { HomeScreen() },
-    cameraContent: @Composable ((VlmCaptureAction?) -> Unit, () -> Unit, (Boolean) -> Unit) -> Unit = { onCaptureActionChanged, onExit, onHistoryVisibilityChanged ->
-        VlmCameraScreen(onCaptureActionChanged = onCaptureActionChanged, onExit = onExit,
-            onHistoryDrawerVisibilityChanged = onHistoryVisibilityChanged)
+    cameraContent: @Composable ((VlmCaptureAction?) -> Unit, () -> Unit) -> Unit = { onCaptureActionChanged, onExit ->
+        VlmCameraScreen(onCaptureActionChanged = onCaptureActionChanged, onExit = onExit)
     },
     myModelContent: @Composable (
         onSettingsClick: () -> Unit,
@@ -151,8 +150,7 @@ internal fun MainNavigationContent(
         LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
 ) {
     val immersive = uiState.selectedTab == BottomNavTab.CAMERA
-    var cameraHistoryVisible by remember { mutableStateOf(false) }
-    NavigationSystemBars(immersive, showCameraSystemBars = immersive && cameraHistoryVisible)
+    NavigationSystemBars(immersive)
     var cameraReturnTab by rememberSaveable { mutableStateOf(BottomNavTab.HOME) }
     val tabStateHolder = rememberSaveableStateHolder()
     val myModelBackStack = rememberNavBackStack(Main)
@@ -164,7 +162,6 @@ internal fun MainNavigationContent(
         if (uiState.selectedTab != BottomNavTab.CAMERA) {
             cameraReturnTab = uiState.selectedTab
             cameraCaptureAction = null
-            cameraHistoryVisible = false
         }
     }
 
@@ -215,7 +212,6 @@ internal fun MainNavigationContent(
                 cameraContent = cameraContent,
                 onCaptureActionChanged = ::onCameraCaptureActionChanged,
                 onCameraExit = { onTabSelected(cameraReturnTab.takeUnless { it == BottomNavTab.CAMERA } ?: BottomNavTab.HOME) },
-                onHistoryVisibilityChanged = { cameraHistoryVisible = it },
                 myModelContent = myModelContent,
                 onSettingsClick = { navigateToMyModelDestination(Settings) },
                 onMessagesClick = { navigateToMyModelDestination(Messages) },
@@ -346,10 +342,9 @@ private fun MainNavigationDestination(
     selectedTab: BottomNavTab,
     tabStateHolder: SaveableStateHolder,
     homeContent: @Composable () -> Unit,
-    cameraContent: @Composable ((VlmCaptureAction?) -> Unit, () -> Unit, (Boolean) -> Unit) -> Unit,
+    cameraContent: @Composable ((VlmCaptureAction?) -> Unit, () -> Unit) -> Unit,
     onCaptureActionChanged: (VlmCaptureAction?) -> Unit,
     onCameraExit: () -> Unit,
-    onHistoryVisibilityChanged: (Boolean) -> Unit,
     myModelContent: @Composable (
         onSettingsClick: () -> Unit,
         onMessagesClick: () -> Unit,
@@ -364,7 +359,7 @@ private fun MainNavigationDestination(
         tabStateHolder.SaveableStateProvider(selectedTab.name) {
             when (selectedTab) {
                 BottomNavTab.HOME -> homeContent()
-                BottomNavTab.CAMERA -> cameraContent(onCaptureActionChanged, onCameraExit, onHistoryVisibilityChanged)
+                BottomNavTab.CAMERA -> cameraContent(onCaptureActionChanged, onCameraExit)
                 BottomNavTab.MY_MODEL -> myModelContent(
                     onSettingsClick,
                     onMessagesClick,
@@ -415,7 +410,7 @@ private fun MainNavigationPreview() {
         uiState = MainNavigationUiState(),
         onTabSelected = {},
         homeContent = { Text("推荐") },
-        cameraContent = { _, _, _ -> Text("AI 构图引导") },
+        cameraContent = { _, _ -> Text("AI 构图引导") },
         myModelContent = { _, _, _ -> Text("用户名称") },
         settingsContent = { Text("设置") },
         messageListContent = { Text("消息") },

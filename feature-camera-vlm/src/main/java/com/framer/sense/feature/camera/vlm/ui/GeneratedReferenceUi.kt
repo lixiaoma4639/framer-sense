@@ -110,6 +110,7 @@ internal fun VlmUiState.generatedReferenceDescriptions(): GeneratedReferenceDesc
 @Composable
 internal fun GeneratedReferenceDetails(state: VlmUiState) {
     val candidate = state.generated.selected ?: return
+    CompositionInstructionDescription(candidate.instruction)
     if (candidate.ready && candidate.assets?.hasPortrait == false) {
         CompositionDescriptionCard {
             Text(stringResource(when (candidate.assets.portraitIssue) {
